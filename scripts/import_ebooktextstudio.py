@@ -44,6 +44,31 @@ def book_id_for(name: str, overrides: dict) -> str:
     return "b-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]  # stable per folder name, so re-imports replace the same book
 
 
+def ensure_wrangler_login(npx: str, wdir: Path) -> int:
+    """Make sure wrangler can talk to Cloudflare; if it is not logged in, run the browser login (once per PC)."""
+    if os.environ.get("CLOUDFLARE_API_TOKEN"):
+        return 0
+
+    def whoami() -> tuple[int, str]:
+        r = subprocess.run([npx, "wrangler", "whoami"], cwd=wdir, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+    rc, out = whoami()
+    if rc == 0 and "not authenticated" not in out.lower():
+        return 0
+    print("\nCloudflare にまだログインしていません。ブラウザが開くので、Cloudflare にログインして『Allow（許可）』を押してください。")
+    print("(wrangler is not logged in: running `npx wrangler login` — approve it in the browser window that opens)\n")
+    r = subprocess.run([npx, "wrangler", "login"], cwd=wdir)
+    if r.returncode:
+        print("wrangler login failed; run `npx wrangler login` in the worker folder and re-run this script.", file=sys.stderr)
+        return r.returncode
+    rc, out = whoami()
+    if rc != 0 or "not authenticated" in out.lower():
+        print("still not logged in to Cloudflare:\n" + out, file=sys.stderr)
+        return rc or 4
+    return 0
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):  # Windows consoles default to a legacy code page
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -135,9 +160,15 @@ def main() -> int:
     if not (wdir / "node_modules").exists():
         print("installing worker dependencies (npm ci)…")
         subprocess.run([shutil.which("npm") or "npm", "ci"], cwd=wdir, check=True)
+    if a.target == "remote":
+        rc = ensure_wrangler_login(npx, wdir)
+        if rc:
+            return rc
     for i, c in enumerate(cmds, 1):
         print(f"[{i}/{len(cmds)}] {Path(c[-1]).name}")
-        r = subprocess.run([npx, *c], cwd=wdir, env={**os.environ, "CI": "1"})
+        # No CI=1 here: that makes wrangler non-interactive, and it then refuses to use a browser login
+        # (it asks for CLOUDFLARE_API_TOKEN instead).  --yes already skips the confirmation prompt.
+        r = subprocess.run([npx, *c], cwd=wdir)
         if r.returncode:
             print(f"wrangler failed on {c[-1]} (exit {r.returncode}). Re-running the script is safe: it replaces these books.", file=sys.stderr)
             return r.returncode
