@@ -37,15 +37,16 @@ Cloudflare Worker ──────────────►  Anthropic Messa
 ## ディレクトリ
 
 ```
-ingest/      Markdown → 検証 → SQLite（Python 3.11+、標準ライブラリのみ）
+ingest/      Markdown → 検証 → SQLite（Python 3.11+、PyYAML のみ）
   parse.py, validate.py, build_db.py, tokenize.py, export_sql.py, cli.py
+  ocr_convert.py   EbookText Studio の自動 OCR（全文.md）→ 章形式への変換
 schema.sql   テーブルと FTS5 定義
 worker/      Cloudflare Worker（TypeScript）と Node 製テスト
   src/       handler / anthropic(ツールループ) / search / format / prompt(システムプロンプト) / db / tokenize
   test/      node:test（27件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
 web/         PWA（ビルド不要、外部ライブラリ無し）
 eval/        検索評価（run_eval.ts、smoke 22問、questions.template.jsonl）
-scripts/     prepare_pages.py（PDF → 頁 WebP）
+scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）
 tests/       Python テスト、合成フィクスチャ、ブラウザ確認 (e2e/ui_smoke.py)
 docs/        FORMAT.md（転写 Markdown の書式と、実章で見つかった注意点）
 ```
@@ -65,6 +66,27 @@ python3 -m ingest.export_sql library.sqlite d1/                           # D1 �
 `validate` は頁番号の欠落・逆行、未解決の脚注/引用番号、表の列数、画像の欠落、節と著者の不整合などを検出します（書式は `docs/FORMAT.md`）。
 別の本は別の `BOOK_ID`（英数字）で追加します。2冊目以降は同じ `library.sqlite` に `build` を重ねてから、再度 `export_sql` してください。
 
+#### 1b. EbookText Studio の自動 OCR 本を取り込む（`全文.md`）
+
+EbookText Studio の出力フォルダ（`<書名>/output/全文.md`）は、章ごとの転写 Markdown とは別の形式です（見出しは OCR の推定、頁は `<!-- p.N ここまで -->` と `<!-- 改ページ -->`）。
+`ingest.ocr_convert` が章形式に変換し、同じ検証・索引化を通します。**1コマンド版**（変換 → 検証 → SQL 化 → D1 へ送信。本ごとに差し替えるので他の本は消えません）:
+
+```bash
+pip install pyyaml
+cd worker && npm ci && npx wrangler login && cd ..          # 初回のみ（wrangler login でブラウザが開く）
+python scripts/import_ebooktextstudio.py "C:\Users\<you>\Documents\EbookTextStudio" --push
+python scripts/import_ebooktextstudio.py BASE --only "書名のフォルダ名" --push    # 1冊だけ追加・再取り込み
+```
+
+`--push` を付けない実行は変換と SQL 生成だけの予行演習です。変換結果と SQL は `work/` に出ます（著作物なので `.gitignore` 済み）。
+
+頁の決め方（誤った頁を出さないための保守的な規則）:
+- 頁の終わり（`p.N ここまで`・`改ページ`）を1件ずつ数え、他の番号と「番号 − 通し番号」が一致するものだけを信用します。OCR の読み違い（11, 1058, 19 など）は捨てます。
+- 信用した2つの番号の間は、件数が合えば1頁ずつ確定、1〜3 のずれなら幅つき（`p.10-11`）、それ以上は区間全体を幅で示します。
+- 見出しは作らず、約2万字ごとに機械的な節（S01, S02…）で区切ります。OCR の見出しは H2 以下に残ります。
+- 古い版の EbookText Studio の出力（`p.N ここまで` が無い・見出しも表も無い）は取り込まず、再出力を促します。
+- 全結果に「自動 OCR・照合未完」の警告が付きます。数値・用量・表は原本の画像で確認してください。
+
 ### 2. D1 を作って流し込む
 
 ```bash
@@ -73,7 +95,7 @@ npx wrangler d1 create medbook            # 出力された database_id を wran
 for f in ../d1/*.sql; do npx wrangler d1 execute medbook --remote --file "$f"; done
 ```
 
-`export_sql` は全テーブルを作り直す（DELETE → INSERT）ので、更新時も同じ手順です。
+`export_sql` は既定で全テーブルを作り直します（DELETE → INSERT）。`--books id1,id2` を付けるとその本だけを差し替え、他の本はそのままです（1b のスクリプトはこちらを使います）。
 もし D1 が `tokenize='trigram'` を受け付けない場合は `python3 -m ingest.export_sql library.sqlite d1/ --no-trigram` で
 bigram 索引だけの版を作れます（英字の部分一致の再現率は少し下がります）。Worker 側も trigram が使えないときは自動で bigram のみに落ちます。
 
@@ -125,14 +147,17 @@ npx wrangler dev --local
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 22 件・TypeScript 27 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。
+- Python 33 件・TypeScript 27 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。
 - `wrangler dev --local`（workerd + ローカル D1）で、FTS5 の trigram/unicode61 作成、データ投入、検索、認証、静的配信とセキュリティヘッダーが動くこと。
 
+- EbookText Studio の 4 冊（約 2,900 チャンク）の変換・検証・本ごと差し替え SQL の生成と、ローカル D1 への投入・横断検索。頁の割り当ては 4 冊中 3 冊で全区間が件数一致（残る 1 冊は 1 区間だけ ±1 の幅つき）。
+- Cloudflare への実デプロイ（Workers Builds、`/api/health`、秘密情報の設定後の認証応答）。
+
 **未確認（あなたの環境で最初に確かめてください）**
 - **実際の Anthropic API 呼び出し**（鍵が無いため一度も実行していません）。`search_result` の引用形式、`web_search` の挙動、ストリーミングのイベント形は、公式ドキュメントに基づく実装であって実測ではありません。最初の数問で、引用が付くか・頁が正しいかを必ず目視してください。
-- **本番 D1（リモート）での trigram トークナイザ**。ローカル（SQLite）では通っていますが、リモート D1 は未実施です（失敗時は上記 `--no-trigram`）。
+- ~~本番 D1 での trigram トークナイザ~~ → **確認済み**（2026-10-22、D1 コンソールで日本語3文字の一致検索が動作）。大きな SQL ファイル（数 MB）の `wrangler d1 execute --remote` 取り込みと、無料枠の書き込み行数上限（1日10万行）への収まり具合は未確認です。
 - 検索品質の実力。smoke 22 問は私が実章を見て作った**甘い**テストです（キーワード 12 問は上位 3 件に 100%、言い換え 5 問は上位 3 件に 5/5 だが 1 位は 4/5）。1 章分・自作問題の結果であり、臨床的な検索品質の指標ではありません。
 - iOS Safari 実機での表示（Chromium の iPhone 幅エミュレーションのみ）。ホーム画面追加後の挙動、サービスワーカー更新。
 - 複数冊・数万チャンク規模での速度と D1 の制限。

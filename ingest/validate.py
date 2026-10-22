@@ -111,8 +111,9 @@ def validate(ch: Chapter, images_root: str | Path | None = None) -> list[Issue]:
         out.append(Issue("error", "E_SECTION_MISSING", f"sections declared in frontmatter but not found in body: {sorted(fm_letters - found)}"))
     if found - fm_letters:
         out.append(Issue("warn", "W_SECTION_UNDECLARED", f"sections found in body but not in frontmatter: {sorted(found - fm_letters)}"))
+    auto_ocr = str(ch.meta.get("source_format", "")) == "auto-ocr"  # synthetic sections have no author trailers
     for k, v in ch.sections.items():
-        if k in found and not v.author:
+        if k in found and not v.author and not auto_ocr:
             out.append(Issue("warn", "W_NO_AUTHOR", f"section {k} has no author trailer", None, v.title))
     if len(ch.h1_styles) > 1:
         out.append(Issue("info", "I_H1_STYLE_MIXED", f"H1 spelling differs between sections ({ch.h1_styles}); parser handles both, but fix the source pipeline"))

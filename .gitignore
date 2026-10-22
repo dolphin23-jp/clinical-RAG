@@ -11,3 +11,4 @@ __pycache__/
 # transcribed book text and page images are copyrighted: keep them out of the repository
 library/
 books/
+work/

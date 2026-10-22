@@ -64,3 +64,11 @@ notes: ...
 
 `body`（本文）/ `key_points`（要点）/ `references`（参考文献、既定で検索外）/ `figure`（キャプション）/ `figure_aid`（転写者の図説明）/ `table`。
 本文チャンクは 700 字前後（最大 950 字）で、見出し・頁をまたがないように分割します。親（返却単位）は 3500 字以内で最も大きい見出し祖先です。
+
+## 6. 自動 OCR（EbookText Studio `全文.md`）
+
+章ファイルではなく本1冊ぶんの OCR 出力は `ingest.ocr_convert`（または `scripts/import_ebooktextstudio.py`）で章形式に変換してから取り込みます。
+フロントマターに `source_format: auto-ocr` が付き、`text_reliability` に「照合は未実施」が入るので、全結果に警告が出ます。
+頁の決め方・節の作り方・古い出力の扱いは README の「1b」と `ingest/ocr_convert.py` の冒頭コメントを参照してください。
+実測した出力の癖: 頁終わりマーカーの 0.7〜6%（4冊で 2/287・8/142・9/157・1/58 件）が読み違い（11・1058・19 等）、表は Markdown 表（`tables/` に原画像）、図の中の文字は `<details>` で入る、
+見出し（`##`）は OCR の推定で本文の断片が混じる、古い版の出力には頁マーカーも見出しも表も無い。
