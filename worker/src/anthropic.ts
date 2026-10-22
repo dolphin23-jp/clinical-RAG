@@ -70,7 +70,7 @@ export function buildRequestBody(deps: AskDeps, input: AskInput, messages: any[]
     tools.push({
       type: "web_search_20250305",
       name: "web_search",
-      max_uses: 3,
+      max_uses: 5,
       ...(domains.length ? { allowed_domains: domains } : {}),
     });
   }

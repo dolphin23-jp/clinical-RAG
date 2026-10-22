@@ -11,7 +11,7 @@ export const CITE_CLOSE = "";
 
 const SENT_RE = /(\d+)/;
 const TRAIL_SENT_RE = /((?:\d+)+)\s*$/;
-const INLINE_SRC = /(\d+)|(\*\*[^*\n]+?\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\((https?:\/\/[^\s)]+)\))/;
+const INLINE_SRC = /(\d+)|(\*\*[^*\n]+?\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\((https?:\/\/[^\s)]+)\))|(【出典未確認[^】\n]*】)/;
 const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const LIST_RE = /^(\s*)([-*+•]|\d+[.)])\s+(.*)$/;
 const PAGE_MARK_RE = /^［(p\.[\d\-]+)］$/;
@@ -49,6 +49,8 @@ export function inline(text, opts, parent) {
       a.rel = "noopener noreferrer";
       a.target = "_blank";
       parent.append(a);
+    } else if (m[6]) {
+      parent.append(el("mark", "unverified", m[6])); // 【出典未確認・要確認】: a number the model could not source
     }
     last = m.index + m[0].length;
   }

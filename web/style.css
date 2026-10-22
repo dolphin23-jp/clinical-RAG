@@ -137,6 +137,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .cite::after { content: ""; position: absolute; inset: -14px -6px; }
 .cite.web { color: var(--warn-ink); background: var(--warn-bg); }
 
+mark.unverified { background: var(--warn-bg); color: var(--warn-ink); font-weight: 700; padding: 0 5px; border-radius: 6px; border: 1px solid currentColor; font-size: .92em; white-space: nowrap; }
 .notice { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 14px; line-height: 1.65; }
 .notice.err { background: var(--danger-bg); color: var(--danger); }
 .notice button { margin-top: 6px; }

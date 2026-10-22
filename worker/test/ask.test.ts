@@ -100,6 +100,8 @@ test("happy path: search -> search_result blocks -> cited answer", async () => {
   assert.deepEqual(r1.tools.map((t: any) => t.name), ["search_books"]);
   assert.equal(r1.system[0].cache_control.type, "ephemeral");
   assert.match(r1.system[0].text, /2026-10-22/);
+  assert.match(r1.system[0].text, /【出典未確認・要確認】/); // policy for numbers the books/web could not confirm
+  assert.match(r1.system[0].text, /search_books/);
   assert.equal(api.calls[0].headers["x-api-key"], "sk-test-secret");
 
   // --- request 2: tool_use echoed back with parsed input, results are citable search_result blocks
@@ -221,7 +223,7 @@ test("web option adds the web_search server tool with a domain allow-list", asyn
   assert.deepEqual(tools.map((t: any) => t.name), ["search_books", "web_search"]);
   assert.equal(tools[1].type, "web_search_20250305");
   assert.deepEqual(tools[1].allowed_domains, ["kdigo.org"]);
-  assert.equal(tools[1].max_uses, 3);
+  assert.equal(tools[1].max_uses, 5);
 });
 
 test("history is sent as plain text and roles are normalised to alternate", async () => {
