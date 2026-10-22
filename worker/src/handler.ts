@@ -1,0 +1,192 @@
+import { runAsk, type StreamEvent } from "./anthropic.ts";
+import type { Db } from "./db.ts";
+import { splitBlocks, headerText, pageLabel } from "./format.ts";
+import { getParent, searchParents } from "./search.ts";
+
+export interface PageStore {
+  get(key: string): Promise<{ body: ReadableStream | ArrayBuffer | null; contentType?: string } | null>;
+}
+
+export interface AppDeps {
+  db: Db;
+  apiKey: string;
+  appToken: string;
+  model: string;
+  allowedModels?: string[];
+  webDomains?: string[];
+  pages?: PageStore;
+  assets?: (req: Request) => Promise<Response>;
+  fetchImpl?: typeof fetch;
+  apiBase?: string;
+}
+
+const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
+
+const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const ea = new TextEncoder().encode(a);
+  const eb = new TextEncoder().encode(b);
+  let diff = ea.length ^ eb.length;
+  for (let i = 0; i < Math.max(ea.length, eb.length); i++) diff |= (ea[i] ?? 0) ^ (eb[i] ?? 0);
+  return diff === 0;
+}
+
+function authorized(req: Request, token: string): boolean {
+  const h = req.headers.get("authorization") ?? "";
+  const m = /^Bearer\s+(.+)$/i.exec(h);
+  return !!m && timingSafeEqual(m[1].trim(), token);
+}
+
+export async function handle(req: Request, deps: AppDeps): Promise<Response> {
+  const url = new URL(req.url);
+  const path = url.pathname;
+  if (!path.startsWith("/api/")) {
+    return deps.assets ? deps.assets(req) : new Response("not found", { status: 404 });
+  }
+  if (path === "/api/health") return json({ ok: true });
+  if (!deps.appToken || deps.appToken.length < 16) return json({ error: "server misconfigured: APP_TOKEN must be set (>= 16 chars)" }, 500);
+  if (!authorized(req, deps.appToken)) return json({ error: "unauthorized" }, 401);
+
+  try {
+    if (path === "/api/books" && req.method === "GET") {
+      const rows = await deps.db.all(
+        `SELECT b.book_id, b.title, b.edition, b.publisher, b.pub_year,
+                COUNT(DISTINCT ch.chapter_id) AS chapters,
+                (SELECT COUNT(*) FROM chunks c WHERE c.book_id = b.book_id) AS chunks,
+                (SELECT COUNT(*) FROM issues i JOIN chapters c2 ON c2.chapter_id = i.chapter_id
+                  WHERE c2.book_id = b.book_id AND i.level IN ('error','warn')) AS open_issues
+           FROM books b LEFT JOIN chapters ch ON ch.book_id = b.book_id
+          GROUP BY b.book_id ORDER BY b.title`,
+      );
+      return json({ books: rows });
+    }
+
+    const pm = /^\/api\/parent\/(.+)$/.exec(path);
+    if (pm && req.method === "GET") {
+      const p = await getParent(deps.db, decodeURIComponent(pm[1]));
+      if (!p) return json({ error: "not found" }, 404);
+      const { text: head, flags } = headerText(p);
+      return json({
+        parent_id: p.parent_id,
+        book_id: p.book_id,
+        book_title: p.book_title,
+        path: p.path,
+        page_label: pageLabel(p),
+        header: head,
+        flags,
+        text: p.text,
+        blocks: splitBlocks(p.text).blocks,
+        refs: p.refs,
+        notes: p.notes,
+        text_reliability: p.text_reliability,
+      });
+    }
+
+    const pg = /^\/api\/page\/([A-Za-z0-9._-]{1,40})\/(\d{1,5})$/.exec(path);
+    if (pg && req.method === "GET") {
+      if (!deps.pages) return json({ error: "page images are not configured" }, 404);
+      const obj = await deps.pages.get(`pages/${pg[1]}/${pg[2]}.webp`);
+      if (!obj || !obj.body) return json({ error: "page image not found" }, 404);
+      return new Response(obj.body as BodyInit, {
+        headers: { "content-type": obj.contentType ?? "image/webp", "cache-control": "private, max-age=86400", "x-content-type-options": "nosniff" },
+      });
+    }
+
+    // Retrieval only (no LLM call, no cost): for debugging recall and for evaluating the deployed index.
+    if (path === "/api/search" && req.method === "POST") {
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid JSON" }, 400);
+      }
+      const queries = (Array.isArray(body?.queries) ? body.queries : typeof body?.query === "string" ? [body.query] : [])
+        .filter((x: unknown): x is string => typeof x === "string")
+        .map((x: string) => x.trim().slice(0, 200))
+        .filter(Boolean)
+        .slice(0, 5);
+      if (!queries.length) return json({ error: "queries must contain 1-5 non-empty strings" }, 400);
+      const bookIds = Array.isArray(body.book_ids) ? body.book_ids.map(String).slice(0, 20) : undefined;
+      const parents = await searchParents(deps.db, queries, { bookIds, includeReferences: !!body.include_references, parents: Math.min(Number(body.parents) || 5, 10) });
+      return json({
+        queries,
+        results: parents.map((p) => ({
+          parent_id: p.parent_id,
+          book_id: p.book_id,
+          book_title: p.book_title,
+          path: p.path,
+          page_label: pageLabel(p),
+          score: Number(p.score.toFixed(5)),
+          flags: headerText(p).flags,
+          matched_chunks: p.matched.length,
+          snippet: p.text.slice(0, 240),
+        })),
+      });
+    }
+
+    if (path === "/api/ask" && req.method === "POST") {
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid JSON" }, 400);
+      }
+      const question = typeof body?.question === "string" ? body.question.trim() : "";
+      if (!question || question.length > 4000) return json({ error: "question must be 1-4000 characters" }, 400);
+      const history = Array.isArray(body.history)
+        ? body.history
+            .slice(-16)
+            .filter((h: any) => (h?.role === "user" || h?.role === "assistant") && typeof h.text === "string")
+            .map((h: any) => ({ role: h.role, text: String(h.text).slice(0, 8000) }))
+        : [];
+      const allowed = deps.allowedModels?.length ? deps.allowedModels : [deps.model];
+      const model = typeof body.model === "string" && allowed.includes(body.model) ? body.model : deps.model;
+      const bookIds = Array.isArray(body.book_ids) ? body.book_ids.map(String).slice(0, 20) : undefined;
+      return sse(req, async (emit) => {
+        await runAsk(
+          { db: deps.db, apiKey: deps.apiKey, model, webDomains: deps.webDomains, fetchImpl: deps.fetchImpl, apiBase: deps.apiBase, signal: req.signal },
+          { question, history, web: !!body.web, bookIds, model },
+          emit,
+        );
+      });
+    }
+    return json({ error: "not found" }, 404);
+  } catch (e) {
+    return json({ error: (e as Error).message }, 500);
+  }
+}
+
+function sse(req: Request, run: (emit: (e: StreamEvent) => void) => Promise<void>): Response {
+  const enc = new TextEncoder();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (s: string) => {
+        if (!closed) controller.enqueue(enc.encode(s));
+      };
+      // keep intermediaries/phone radios from idling out during long upstream waits
+      timer = setInterval(() => send(": keepalive\n\n"), 15000);
+      try {
+        await run((e) => send(`data: ${JSON.stringify(e)}\n\n`));
+      } catch (e) {
+        send(`data: ${JSON.stringify({ t: "error", message: (e as Error).message })}\n\n`);
+      } finally {
+        clearInterval(timer);
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          /* client went away */
+        }
+      }
+    },
+    cancel() {
+      if (timer) clearInterval(timer);
+    },
+  });
+  return new Response(stream, {
+    headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", "x-accel-buffering": "no", "x-content-type-options": "nosniff" },
+  });
+}

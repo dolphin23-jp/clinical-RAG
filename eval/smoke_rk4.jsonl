@@ -1,0 +1,25 @@
+# SMOKE TEST for the sample chapter (rk4:ch01) only.  Gold = "a parent that contains this term", chosen by
+# looking at the chapter's headings.  This checks plumbing and lexical ranking sanity -- it is NOT a
+# measure of clinical retrieval quality.  Write a real set from your own questions (eval/questions.template.jsonl).
+{"id":"k01","group":"keyword","queries":["VINDICATE-P"],"expect":{"text_contains":["VINDICATE"]}}
+{"id":"k02","group":"keyword","queries":["尤度比"],"expect":{"text_contains":["尤度比"]}}
+{"id":"k03","group":"keyword","queries":["交絡因子 対処"],"expect":{"text_contains":["交絡"]}}
+{"id":"k04","group":"keyword","queries":["GRADE エビデンスの質"],"expect":{"text_contains":["GRADE"]}}
+{"id":"k05","group":"keyword","queries":["コンサルテーション 十戒"],"expect":{"text_contains":["十戒"]}}
+{"id":"k06","group":"keyword","queries":["target trial emulation"],"expect":{"text_contains":["target trial emulation"]}}
+{"id":"k07","group":"keyword","queries":["増分費用効果比 ICER"],"expect":{"text_contains":["増分費用効果比"]}}
+{"id":"k08","group":"keyword","queries":["家系図 遺伝カウンセリング"],"expect":{"text_contains":["家系図"]}}
+{"id":"k09","group":"keyword","queries":["指定難病"],"expect":{"text_contains":["指定難病"]}}
+{"id":"k10","group":"keyword","queries":["治療閾値 検査閾値"],"expect":{"text_contains":["治療閾値"]}}
+{"id":"k11","group":"keyword","queries":["検索式 PubMed"],"expect":{"text_contains":["PubMed"]}}
+{"id":"k12","group":"keyword","queries":["ダルベポエチン AI"],"expect":{"text_contains":["ダルベポエチン"]}}
+{"id":"s01","group":"short-term","queries":["腎炎"],"expect":{"text_contains":["腎炎"]}}
+{"id":"s02","group":"short-term","queries":["感度"],"expect":{"text_contains":["感度"]}}
+{"id":"s03","group":"short-term","queries":["eGFR"],"expect":{"text_contains":["eGFR"]}}
+{"id":"s04","group":"short-term","queries":["Cr"],"expect":{"text_contains":["Cr"]}}
+{"id":"s05","group":"short-term","queries":["GFR"],"expect":{"text_contains":["GFR"]}}
+{"id":"p01","group":"paraphrase","queries":["検査結果で診断の確率をどう更新するか"],"expect":{"text_contains":["事前確率"]}}
+{"id":"p02","group":"paraphrase","queries":["研究結果が偏る原因"],"expect":{"text_contains":["バイアス"]}}
+{"id":"p03","group":"paraphrase","queries":["専門医へ相談するときの注意点"],"expect":{"text_contains":["コンサルテーション"]}}
+{"id":"p04","group":"paraphrase","queries":["治療を決めるときに患者の価値観をどう扱うか"],"expect":{"text_contains":["意思決定"]}}
+{"id":"p05","group":"paraphrase","queries":["医療費の費用対効果の考え方"],"expect":{"text_contains":["費用対効果"]}}

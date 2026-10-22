@@ -1,0 +1,14 @@
+# Your own evaluation set. One JSON object per line; lines starting with # are ignored.
+# Write 30-50 questions you would really ask, in the words you would really use (include paraphrases and
+# abbreviations).  For each, open the book and note which page(s) answer it -- that is the gold label.
+#   id        unique name
+#   group     free label for the per-group table (e.g. keyword / paraphrase / numeric / figure / cross-book)
+#   queries   what the model would send to search_books: 1-3 short keyword strings (or a full sentence to test the fallback)
+#   expect    a returned section counts as correct when ALL given conditions hold:
+#               text_contains  every string appears in the section text
+#               pages          the section's page range includes one of these printed pages
+#               book_id        the section comes from this book
+# Run:  node --no-warnings eval/run_eval.ts library.sqlite eval/questions.jsonl --verbose
+{"id":"ex1","group":"keyword","queries":["尤度比 likelihood ratio"],"expect":{"book_id":"BOOK_ID","pages":[11,12],"text_contains":["尤度比"]},"note":"replace BOOK_ID and pages with real values"}
+{"id":"ex2","group":"paraphrase","queries":["検査結果で診断の確率をどう更新するか"],"expect":{"book_id":"BOOK_ID","pages":[11,12,13]},"note":"a sentence-like query; checks the content-word fallback"}
+{"id":"ex3","group":"numeric","queries":["造影剤 腎症 eGFR 閾値"],"expect":{"text_contains":["eGFR"]},"note":"numbers: also verify the cited page by eye"}

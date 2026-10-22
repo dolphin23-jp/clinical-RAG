@@ -1,0 +1,13 @@
+node_modules/
+.wrangler/
+.dev.vars
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+d1/
+pages_out/
+__pycache__/
+*.pyc
+# transcribed book text and page images are copyrighted: keep them out of the repository
+library/
+books/

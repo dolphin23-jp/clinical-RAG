@@ -1,0 +1,17 @@
+{
+  // Deploy:  cd worker && npx wrangler d1 create medbook && (paste the database_id below)
+  //          npx wrangler secret put ANTHROPIC_API_KEY ; npx wrangler secret put APP_TOKEN
+  //          npx wrangler deploy
+  "name": "medbook-rag",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-10-01",
+  "assets": { "directory": "../web", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "medbook", "database_id": "REPLACE_WITH_D1_DATABASE_ID" }],
+  // Optional: page images for "view the original page" (create with `wrangler r2 bucket create medbook-pages`)
+  // "r2_buckets": [{ "binding": "PAGES", "bucket_name": "medbook-pages" }],
+  "vars": {
+    "MODEL": "claude-sonnet-5-5",
+    "ALLOWED_MODELS": "claude-sonnet-5-5,claude-opus-5-5"
+    // "WEB_ALLOWED_DOMAINS": "kdigo.org,jsn.or.jp,..."   // defaults live in src/prompt.ts
+  }
+}
