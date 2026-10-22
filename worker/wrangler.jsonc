@@ -6,7 +6,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-10-01",
   "assets": { "directory": "../web", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
-  "d1_databases": [{ "binding": "DB", "database_name": "medbook", "database_id": "REPLACE_WITH_D1_DATABASE_ID" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "medbook", "database_id": "5a4086a4-3194-4671-a34e-3034c2d77226" }],
   // Optional: page images for "view the original page" (create with `wrangler r2 bucket create medbook-pages`)
   // "r2_buckets": [{ "binding": "PAGES", "bucket_name": "medbook-pages" }],
   "vars": {
