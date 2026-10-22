@@ -1,6 +1,9 @@
 // Streaming tool-use loop against the Anthropic Messages API.
-//   question -> (forced) search_books -> search_result blocks -> answer with citations
+//   question -> search_books -> search_result blocks -> answer with citations
 // The client tool `search_books` runs on our own index; `web_search` (server tool) is optional.
+// Claude 5.5 models reject forced tool use (tool_choice any/tool -> HTTP 400), so "always search the library
+// first" is enforced here instead: text produced before the first book search is held back, and an answer that
+// skips the search is discarded and re-requested once with an explicit instruction.
 import type { Db } from "./db.ts";
 import { resolveCitation, toSearchResult, type SourceMeta, type UiCitation } from "./format.ts";
 import { DEFAULT_WEB_DOMAINS, SEARCH_TOOL, SYSTEM_PROMPT } from "./prompt.ts";
@@ -29,7 +32,8 @@ export type StreamEvent =
   | { t: "status"; text: string }
   | { t: "sources"; items: SourceCard[] }
   | { t: "delta"; text: string }
-  | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string }
+  | { t: "reset" } // drop the answer text streamed so far (it was commentary before a tool call)
+  | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string; searched_books: boolean }
   | { t: "error"; message: string };
 
 export interface AskDeps {
@@ -56,7 +60,10 @@ export interface AskInput {
 
 const API_VERSION = "2023-06-01";
 
-export function buildRequestBody(deps: AskDeps, input: AskInput, messages: any[], turn: number): any {
+/** Appended to the question when the model tried to answer without searching the library. */
+export const SEARCH_NUDGE = "【システムからの指示】回答を書く前に、必ず search_books を呼んで手元の書籍を検索してください。記憶だけで回答を始めないでください。";
+
+export function buildRequestBody(deps: AskDeps, input: AskInput, messages: any[], _turn: number, nudge = false): any {
   const tools: any[] = [SEARCH_TOOL];
   if (input.web) {
     const domains = deps.webDomains ?? DEFAULT_WEB_DOMAINS;
@@ -68,17 +75,20 @@ export function buildRequestBody(deps: AskDeps, input: AskInput, messages: any[]
     });
   }
   const today = (deps.now ?? new Date()).toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" });
-  const body: any = {
+  let msgs = messages;
+  if (nudge && messages.length && messages.at(-1).role === "user" && typeof messages.at(-1).content === "string") {
+    msgs = [...messages.slice(0, -1), { role: "user", content: [{ type: "text", text: messages.at(-1).content }, { type: "text", text: SEARCH_NUDGE }] }];
+  }
+  // No tool_choice (= auto): forced tool use is rejected by Claude 5.5.  No temperature/top_p/top_k/prefill/thinking
+  // overrides either: those are rejected or fixed on 5.5.  Thinking tokens count against max_tokens, hence the headroom.
+  return {
     model: input.model ?? deps.model,
-    max_tokens: deps.maxTokens ?? 8000,
+    max_tokens: deps.maxTokens ?? 16000,
     stream: true,
     system: [{ type: "text", text: `${SYSTEM_PROMPT}\n\n今日の日付: ${today}（日本時間）`, cache_control: { type: "ephemeral" } }],
     tools,
-    messages,
+    messages: msgs,
   };
-  // First turn: force a search so the answer is always grounded in the library, never memory alone.
-  if (turn === 1) body.tool_choice = { type: "tool", name: SEARCH_TOOL.name };
-  return body;
 }
 
 async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: any }> {
@@ -107,9 +117,25 @@ async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<{ ev
 interface TurnResult {
   content: any[];
   stop_reason: string;
+  /** text deltas that were held back (see `hold` in streamTurn) */
+  held: StreamEvent[];
+  /** true when text deltas were already sent to the client */
+  streamed: boolean;
 }
 
-async function streamTurn(deps: AskDeps, body: any, emit: (e: StreamEvent) => void, usage: Usage): Promise<TurnResult> {
+async function streamTurn(deps: AskDeps, body: any, emit0: (e: StreamEvent) => void, usage: Usage, hold = false): Promise<TurnResult> {
+  const held: StreamEvent[] = [];
+  let streamed = false;
+  const emit = (e: StreamEvent) => {
+    if (e.t === "delta") {
+      if (hold) {
+        held.push(e);
+        return;
+      }
+      streamed = true;
+    }
+    emit0(e);
+  };
   const f = deps.fetchImpl ?? fetch;
   const res = await f(`${deps.apiBase ?? "https://api.anthropic.com"}/v1/messages`, {
     method: "POST",
@@ -140,9 +166,8 @@ async function streamTurn(deps: AskDeps, body: any, emit: (e: StreamEvent) => vo
       }
       case "content_block_start": {
         const b = structuredClone(data.content_block);
-        if (b.type === "text") {
-          b.text ??= "";
-        }
+        if (b.type === "text") b.text ??= "";
+        if (b.type === "thinking") b.thinking ??= ""; // 5.5 may omit the text but still needs the field (and the signature) on replay
         if (b.type === "tool_use" || b.type === "server_tool_use") b.__json = "";
         if (b.type === "server_tool_use" && b.name === "web_search") emit({ t: "status", text: "Webで確認しています…" });
         blocks[data.index] = b;
@@ -180,7 +205,12 @@ async function streamTurn(deps: AskDeps, body: any, emit: (e: StreamEvent) => vo
         throw new Error(`Anthropic stream error: ${data.error?.type ?? ""} ${data.error?.message ?? ""}`.trim());
     }
   }
-  return { content: blocks.filter(Boolean), stop_reason };
+  return { content: blocks.filter(Boolean), stop_reason, held, streamed };
+}
+
+/** Blocks that may be sent back as the assistant turn: the API rejects empty text blocks. Thinking blocks stay untouched. */
+function echoable(content: any[]): any[] {
+  return content.filter((b) => !(b.type === "text" && !String(b.text ?? "").trim()));
 }
 
 function cleanQueries(raw: unknown): string[] {
@@ -222,12 +252,16 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
   try {
     let last: TurnResult | null = null;
     let turns = 0;
+    let nudged = false;
     for (turns = 1; turns <= maxTurns; turns++) {
-      emit({ t: "status", text: turns === 1 ? "書籍を検索します…" : "検索結果を読んでいます…" });
-      const body = buildRequestBody(deps, input, messages, turns);
-      last = await streamTurn(deps, body, emit, usage);
-      const assistantContent = last.content;
+      const searched = usage.book_searches > 0;
+      emit({ t: "status", text: !searched ? "書籍を検索します…" : "検索結果を読んでいます…" });
+      // Until the library has been searched, hold the text back: an answer written from memory must never reach the screen.
+      const body = buildRequestBody(deps, input, messages, turns, nudged && !searched);
+      last = await streamTurn(deps, body, emit, usage, !searched);
+      const assistantContent = echoable(last.content);
       if (last.stop_reason === "tool_use") {
+        if (last.streamed) emit({ t: "reset" }); // text before a tool call was commentary, not the answer
         messages.push({ role: "assistant", content: assistantContent });
         const results: any[] = [];
         for (const b of assistantContent) {
@@ -288,6 +322,13 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
         messages.push({ role: "assistant", content: assistantContent });
         continue;
       }
+      if (!searched && last.stop_reason === "end_turn" && !nudged) {
+        // The model answered without calling search_books.  Discard that answer and ask once more, explicitly.
+        nudged = true;
+        emit({ t: "status", text: "書籍を検索せずに回答しようとしたため、検索からやり直します…" });
+        continue;
+      }
+      for (const e of last.held) emit(e); // still no search after the nudge: show it (the UI flags the missing citations)
       break;
     }
     if (!last) throw new Error("no response");
@@ -305,7 +346,7 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
       emit({ t: "error", message: "モデルが回答を拒否しました（stop_reason=refusal）。質問を言い換えてください。" });
       return;
     }
-    emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason });
+    emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0 });
   } catch (e) {
     emit({ t: "error", message: (e as Error).message });
   }

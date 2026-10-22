@@ -381,6 +381,8 @@ function finish(turn, ev) {
 
   const cites = [...turn.cites.values()];
   const bookCites = cites.filter((c) => c.kind === "book");
+  if (ev.searched_books === false) notice(turn, "書籍の検索が行われないまま回答が作成されました。手元の書籍に基づく回答ではありません。もう一度質問し直すか、書籍名を指定してください。", "err");
+  if (ev.stop_reason === "max_tokens") notice(turn, "出力の上限に達したため、回答が途中で終わっている可能性があります。「続きを」と送るか、質問を絞ってください。");
   if (!bookCites.length) notice(turn, "この回答には書籍からの引用がありません。書籍に記載が見つからなかったか、一般知識に基づく部分です。内容は必ず原典で確認してください。");
   if (bookCites.some((c) => c.flags.includes("数値注意"))) notice(turn, "引用元に用量・閾値などの数値が含まれる可能性があります。投与前に原本の頁で必ず確認してください。");
   if (bookCites.some((c) => c.flags.includes("転写者補助含む"))) notice(turn, "引用元の節には、転写者による図の補助説明が含まれます。図の構造説明は原本の記述ではありません。");
@@ -487,6 +489,10 @@ async function ask(question) {
           break;
         case "sources":
           for (const s of ev.items) if (!turn.sources.has(s.source)) turn.sources.set(s.source, s);
+          break;
+        case "reset":
+          turn.raw = "";
+          turn.body.replaceChildren();
           break;
         case "delta":
           turn.raw += ev.text;

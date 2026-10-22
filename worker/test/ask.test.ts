@@ -78,7 +78,7 @@ async function collect(deps: Parameters<typeof runAsk>[0], input: Parameters<typ
   return evs;
 }
 
-test("happy path: forced search -> search_result blocks -> cited answer", async () => {
+test("happy path: search -> search_result blocks -> cited answer", async () => {
   let source = "";
   const api = mockApi([
     () => toolUseTurn(["ゼルニア値 基準"]),
@@ -90,9 +90,11 @@ test("happy path: forced search -> search_result blocks -> cited answer", async 
   ]);
   const evs = await collect({ db, apiKey: "sk-test-secret", model: "m-test", fetchImpl: api.fetchImpl, now: new Date("2026-10-22T00:00:00Z") }, { question: "架空症候群の定義は？" });
 
-  // --- request 1: forced tool, cached system prompt, our tool only
+  // --- request 1: NO forced tool_choice (Claude 5.5 rejects it), cached system prompt, our tool only
   const r1 = api.calls[0].body;
-  assert.deepEqual(r1.tool_choice, { type: "tool", name: "search_books" });
+  assert.equal(r1.tool_choice, undefined);
+  for (const k of ["temperature", "top_p", "top_k", "thinking"]) assert.equal(r1[k], undefined, k);
+  assert.ok(r1.max_tokens >= 16000, "headroom for thinking tokens");
   assert.equal(r1.model, "m-test");
   assert.equal(r1.stream, true);
   assert.deepEqual(r1.tools.map((t: any) => t.name), ["search_books"]);
@@ -128,7 +130,88 @@ test("happy path: forced search -> search_result blocks -> cited answer", async 
   assert.equal(final.usage.input_tokens, 1000);
   assert.equal(final.usage.output_tokens, 60);
   assert.equal(final.usage.book_searches, 1);
+  assert.equal(final.searched_books, true);
   assert.ok(!JSON.stringify(evs).includes("sk-test-secret"));
+});
+
+const memoryAnswerTurn = (text = "記憶だけの回答"): Ev[] => [
+  ["message_start", { type: "message_start", message: { usage: { input_tokens: 10 } } }],
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }],
+  ["content_block_stop", { type: "content_block_stop", index: 0 }],
+  ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } }],
+  ["message_stop", { type: "message_stop" }],
+];
+
+test("a first answer written without searching is never shown; the model is asked again to search", async () => {
+  const api = mockApi([() => memoryAnswerTurn(), () => toolUseTurn(["ゼルニア値"]), (b) => answerTurn(b.messages.at(-1).content[0].content[0].source)]);
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: "定義は？" });
+  assert.equal(api.calls.length, 3);
+  // retry #1 carries the explicit instruction, and the memory answer is not part of the conversation
+  const r2 = api.calls[1].body;
+  assert.equal(r2.messages.length, 1);
+  assert.equal(r2.messages[0].content[0].text, "定義は？");
+  assert.match(r2.messages[0].content[1].text, /search_books を呼んで/);
+  assert.ok(!JSON.stringify(r2).includes("記憶だけの回答"));
+  // the user never saw the memory answer
+  assert.ok(!JSON.stringify(evs).includes("記憶だけの回答"));
+  const final = evs.at(-1) as Extract<StreamEvent, { t: "final" }>;
+  assert.equal(final.t, "final");
+  assert.equal(final.searched_books, true);
+  assert.equal(final.blocks[0].citations[0].kind, "book");
+});
+
+test("if the model still refuses to search after the nudge, the answer is shown but flagged searched_books=false", async () => {
+  const api = mockApi([() => memoryAnswerTurn("一回目"), () => memoryAnswerTurn("二回目")]);
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: "こんにちは" });
+  assert.equal(api.calls.length, 2);
+  const final = evs.at(-1) as Extract<StreamEvent, { t: "final" }>;
+  assert.equal(final.searched_books, false);
+  assert.equal(final.blocks[0].text, "二回目");
+  assert.ok(!JSON.stringify(evs).includes("一回目"));
+});
+
+test("thinking blocks (empty text + signature) are echoed back unchanged in the tool loop; empty text blocks are dropped", async () => {
+  const think: Ev[] = [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 10 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "SIG-" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "ABC" } }],
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    ["content_block_start", { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }],
+    ["content_block_stop", { type: "content_block_stop", index: 1 }],
+    ...toolUseTurn(["ゼルニア値"]).slice(1, 5).map(([e, d]): Ev => [e, { ...d, index: 2 }]),
+    ["message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 20 } }],
+    ["message_stop", { type: "message_stop" }],
+  ];
+  const api = mockApi([() => think, (b) => answerTurn(b.messages.at(-1).content[0].content[0].source)]);
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: "q" });
+  const asst = api.calls[1].body.messages.at(-2).content;
+  assert.deepEqual(asst.map((b: any) => b.type), ["thinking", "tool_use"]);
+  assert.equal(asst[0].signature, "SIG-ABC");
+  assert.equal(asst[0].thinking, "");
+  assert.equal(evs.at(-1)?.t, "final");
+});
+
+test("commentary streamed before a later tool call is reset so it does not run into the answer", async () => {
+  const chatty: Ev[] = [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 10 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "追加で調べます。" } }],
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    ...toolUseTurn(["架空薬X"], "tu_2").slice(1, 5).map(([e, d]): Ev => [e, { ...d, index: 1 }]),
+    ["message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 20 } }],
+    ["message_stop", { type: "message_stop" }],
+  ];
+  const api = mockApi([() => toolUseTurn(["ゼルニア値"]), () => chatty, (b) => answerTurn(b.messages.at(-1).content[0].content?.[0]?.source ?? "medbook://none")]);
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: "q" });
+  const types = evs.map((e) => e.t);
+  const iReset = types.indexOf("reset");
+  assert.ok(iReset > 0, types.join());
+  const before = evs.slice(0, iReset).filter((e) => e.t === "delta").map((e: any) => e.text).join("");
+  assert.equal(before, "追加で調べます。");
+  const after = evs.slice(iReset).filter((e) => e.t === "delta").map((e: any) => e.text).join("");
+  assert.ok(!after.includes("追加で調べます。"));
 });
 
 test("web option adds the web_search server tool with a domain allow-list", async () => {
