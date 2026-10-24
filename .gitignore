@@ -12,3 +12,5 @@ __pycache__/
 library/
 books/
 work/
+# evaluation questions written from real clinical questions stay local (keep only the template in git)
+eval/*.local.jsonl
