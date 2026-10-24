@@ -1,5 +1,6 @@
 import { buildAnswerMarkdown } from "./answer-marks.js";
 import { initCase } from "./case.js";
+import { initNotes } from "./note-ui.js";
 import { MODES, caseKey, caseRows, caseTexts, cleanCase } from "./case-model.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
@@ -517,24 +518,28 @@ function finish(turn, ev) {
   const copy = el("button", null, "回答をコピー");
   copy.type = "button";
   copy.addEventListener("click", async () => {
-    const text = (turn.case ? DRAFT_COPY_HEAD : "") + stripCiteMarks(turn.answer);
-    try {
-      await navigator.clipboard.writeText(text);
-      copy.textContent = "コピーしました";
-    } catch {
-      const ta = el("textarea");
-      ta.value = text;
-      document.body.append(ta);
-      ta.select();
-      document.execCommand?.("copy");
-      ta.remove();
-      copy.textContent = "コピーしました";
-    }
+    await copyText((turn.case ? DRAFT_COPY_HEAD : "") + stripCiteMarks(turn.answer));
+    copy.textContent = "コピーしました";
     setTimeout(() => (copy.textContent = "回答をコピー"), 1800);
   });
   turn.foot.append(copy, el("span", null, usageText(ev)), turn.saveNote);
+  notes.decorate(turn); // an assessment/plan draft gets a tick on each item the doctor may adopt into a chart note
   S.history.push({ q: turn.question, a: turn.answer, ack: turn.ack });
   conv.saveTurn(turn, { kind: "final", blocks: ev.blocks, sources: [...turn.sources.values()], numbers: ev.numbers || [], usage: ev.usage, stop_reason: ev.stop_reason, searched_books: ev.searched_books, turns: ev.turns, ...casePayload(turn) });
+}
+
+/** Puts text on the clipboard (with a fallback for a browser that refuses the async API). */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = el("textarea");
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    document.execCommand?.("copy");
+    ta.remove();
+  }
 }
 
 const NUM_STATUS = {
@@ -866,6 +871,8 @@ async function showPage(bookId, n, host) {
 initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, books: () => S.books });
 const conv = initConversations({ api, el, $, openDialog, S, openConversation, scrollToTurn });
 const caseCtl = initCase({ el, $, openDialog, runMode });
+const notes = initNotes({ el, $, openDialog, copyText });
+$("#casebar-note").addEventListener("click", () => notes.open({ kase: caseCtl.pinned(), label: "固定中の症例だけ", items: () => [] }));
 updateChips();
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

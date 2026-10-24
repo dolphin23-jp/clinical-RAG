@@ -313,3 +313,13 @@ details.sec > summary { min-height: 44px; display: flex; align-items: center; fo
 .src-tag[data-tag="標準・出典未確認"] { background: var(--warn-bg); color: var(--warn-ink); }
 .src-tag[data-tag="施設依存"] { background: var(--aid-bg); color: var(--aid-ink); }
 #case-warn { position: sticky; top: 0; z-index: 1; margin-top: 0; }
+
+/* ---- chart-note draft (web/note-ui.js; docs/enhancement-plan.md 7.3) ---- */
+.adopt { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 0 10px; min-height: 34px; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; white-space: nowrap; vertical-align: middle; }
+.adopt input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.adopted { background: var(--accent-soft); border-radius: 6px; box-shadow: -4px 0 0 var(--accent-soft); }
+td.adopt-cell { white-space: nowrap; }
+.casebar-note { flex: none; min-height: 36px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: none; color: var(--accent); font-size: 13px; font-weight: 600; }
+.note-open { color: var(--accent) !important; border-color: var(--accent) !important; font-weight: 600; }
+.note-text { margin: 12px 0 0; padding: 12px; max-height: 48dvh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font); font-size: 14px; line-height: 1.75; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
+
