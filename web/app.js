@@ -1,5 +1,7 @@
+import { buildAnswerMarkdown } from "./answer-marks.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
+import { initConversations } from "./conv.js";
 import { initTools } from "./tools.js";
 
 // ---------------------------------------------------------------- config
@@ -59,7 +61,8 @@ const S = {
     }
   })(),
   books: [],
-  history: [], // [{q, a, ack}] plain text only; never persisted
+  history: [], // [{q, a, ack}] plain text sent back to the model as context
+  convId: null, // id of the conversation being saved to the server (set at the first saved turn)
   busy: false,
   ctrl: null,
 };
@@ -279,6 +282,7 @@ guard.addEventListener("close", () => {
 $("#btn-new").addEventListener("click", () => {
   if (S.busy) S.ctrl?.abort();
   S.history = [];
+  S.convId = null; // the conversation so far stays saved on the server; the next question starts a new one
   for (const t of document.querySelectorAll(".turn")) t.remove();
   empty.hidden = false;
 });
@@ -314,13 +318,16 @@ function makeTurn(question) {
   status.append(el("span", "dot"), el("span", "txt", "送信しています…"));
   const notices = el("div", "notices");
   const body = el("div", "body");
+  const numbers = el("div", "numbers");
+  numbers.hidden = true;
   const refs = el("div", "refs");
   const hits = el("details", "hits");
   hits.hidden = true;
   const foot = el("div", "foot");
-  a.append(status, body, notices, refs, hits, foot);
+  const saveNote = el("span", "save-note");
+  a.append(status, body, notices, numbers, refs, hits, foot);
   root.append(q, a);
-  const turn = { root, status, statusTxt: status.querySelector(".txt"), notices, body, refs, hits, foot, raw: "", sources: new Map(), cites: new Map(), question, queued: false, last: 0 };
+  const turn = { root, status, statusTxt: status.querySelector(".txt"), notices, numbers, saveNote, body, refs, hits, foot, raw: "", sources: new Map(), cites: new Map(), question, queued: false, last: 0 };
   root.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-cite]");
     if (btn) openCite(turn.cites.get(btn.dataset.cite));
@@ -386,21 +393,22 @@ function badges(flags) {
 function finish(turn, ev) {
   turn.done = true;
   turn.status.hidden = true;
-  const groups = [];
-  let md = "";
-  let plain = "";
-  for (const b of ev.blocks) {
-    const keys = [];
-    for (const c of b.citations || []) {
-      const k = registerCite(turn, c);
-      if (!keys.includes(k)) keys.push(k);
-    }
-    plain += b.text;
-    if (keys.length) {
-      groups.push(keys);
-      md += b.text.replace(/(\s*)$/, `${CITE_OPEN}${groups.length - 1}${CITE_CLOSE}$1`);
-    } else md += b.text;
-  }
+  // text no book backs is shown lighter, but only when the answer cites a book at all (otherwise the notice below says so)
+  const citesBook = ev.blocks.some((b) => (b.citations || []).some((c) => c.kind === "book"));
+  const built = buildAnswerMarkdown(
+    ev.blocks,
+    (b) => {
+      const keys = [];
+      for (const c of b.citations || []) {
+        const k = registerCite(turn, c);
+        if (!keys.includes(k)) keys.push(k);
+      }
+      return keys;
+    },
+    { citeOpen: CITE_OPEN, citeClose: CITE_CLOSE, mark: citesBook },
+  );
+  const { groups } = built;
+  let { md, plain } = built;
   if (!ev.blocks.length) {
     md = plain = turn.raw;
   }
@@ -436,6 +444,8 @@ function finish(turn, ev) {
     }
   }
 
+  if (citesBook && /uncited/.test(turn.body.innerHTML)) notice(turn, "薄い文字は、書籍の引用が付いていない文です（推論・一般知識）。書籍の記載として読まないでください。");
+  renderNumbers(turn, ev.numbers);
   renderHits(turn, new Set(bookCites.map((c) => c.parent_id)));
 
   const copy = el("button", null, "回答をコピー");
@@ -456,8 +466,32 @@ function finish(turn, ev) {
     }
     setTimeout(() => (copy.textContent = "回答をコピー"), 1800);
   });
-  turn.foot.append(copy, el("span", null, usageText(ev)));
+  turn.foot.append(copy, el("span", null, usageText(ev)), turn.saveNote);
   S.history.push({ q: turn.question, a: turn.answer, ack: turn.ack });
+  conv.saveTurn(turn, { kind: "final", blocks: ev.blocks, sources: [...turn.sources.values()], numbers: ev.numbers || [], usage: ev.usage, stop_reason: ev.stop_reason, searched_books: ev.searched_books, turns: ev.turns });
+}
+
+const NUM_STATUS = {
+  not_found: "検索結果のどこにもありません",
+  retrieved: "検索結果の節にありますが、引用された文の外です",
+  cited: "引用された文にあります",
+};
+
+/** The machine's cross-check of every number with a unit (worker/src/numcheck.ts): a hint, never a verdict. */
+function renderNumbers(turn, numbers) {
+  if (!numbers?.length) return;
+  turn.numbers.hidden = false;
+  turn.numbers.replaceChildren(el("h3", null, "数値の突き合わせ（機械による確認。判定ではありません）"));
+  const order = { not_found: 0, retrieved: 1, cited: 2 };
+  const ul = el("ul");
+  for (const n of [...numbers].sort((a, b) => order[a.status] - order[b.status])) {
+    const li = el("li", `num ${n.status}`);
+    li.append(el("strong", null, n.text), document.createTextNode(`　${n.via === "web" ? "Web の引用にあります" : NUM_STATUS[n.status]}${n.page ? `（${n.page}）` : ""}`));
+    ul.append(li);
+  }
+  turn.numbers.append(ul);
+  turn.numbers.append(el("p", "help", "一致しても、単位・対象・条件が合っているとは限りません。書籍の転写の誤りも、ここでは分かりません。用量は必ず原本の頁（または添付文書）で確認してください。"));
+  if (numbers.some((n) => n.status === "not_found")) turn.numbers.classList.add("has-missing");
 }
 
 function renderHits(turn, used, open = false) {
@@ -485,7 +519,43 @@ function degrade(turn, ev) {
   notice(turn, "回答の生成に失敗したため、書籍の検索で見つかった節を示します（モデルの回答ではありません）。");
   for (const s of ev.items) if (!turn.sources.has(s.source)) turn.sources.set(s.source, s);
   renderHits(turn, new Set(), true);
+  turn.foot.append(turn.saveNote);
   if (turn.raw) S.history.push({ q: turn.question, a: turn.raw, ack: turn.ack });
+  conv.saveTurn(turn, { kind: "degraded", message: ev.message, items: ev.items, raw: turn.raw });
+}
+
+/** Rebuilds a saved conversation on screen (docs/clinical-use.md 1d); its turns are not saved again. */
+function openConversation(data) {
+  if (S.busy) S.ctrl?.abort();
+  S.history = [];
+  for (const t of document.querySelectorAll(".turn")) t.remove();
+  S.convId = data.id;
+  empty.hidden = true;
+  for (const t of data.turns) {
+    const turn = makeTurn(t.question);
+    turn.restored = true;
+    turn.ack = false;
+    $("#thread").append(turn.root);
+    const p = t.payload || {};
+    for (const s of p.sources || []) if (!turn.sources.has(s.source)) turn.sources.set(s.source, s);
+    if (p.kind === "degraded") {
+      turn.raw = p.raw || "";
+      degrade(turn, { message: p.message || "", items: p.items || [] });
+    } else {
+      finish(turn, { blocks: p.blocks || [{ text: t.answer, citations: [] }], usage: p.usage || zeroUsage(), numbers: p.numbers || [], stop_reason: p.stop_reason, searched_books: p.searched_books !== false });
+    }
+    turn.saveNote.textContent = "保存済み";
+  }
+  const last = $("#thread").lastElementChild;
+  if (last) last.scrollIntoView({ block: "end" });
+}
+
+const zeroUsage = () => ({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0, book_searches: 0 });
+
+function scrollToTurn(t) {
+  t.scrollIntoView({ block: "start", behavior: "smooth" });
+  t.classList.add("flash");
+  setTimeout(() => t.classList.remove("flash"), 1600);
 }
 
 /** Titles sent to the model end with ［flag］ tags; the UI shows them as badges instead. */
@@ -721,6 +791,7 @@ async function showPage(bookId, n, host) {
 
 // ---------------------------------------------------------------- boot
 initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, books: () => S.books });
+const conv = initConversations({ api, el, $, openDialog, S, openConversation, scrollToTurn });
 updateChips();
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

@@ -2,6 +2,7 @@ import { dbBackend, evalRetrieval, parseQuestions } from "../../eval/lib.ts";
 import { runAsk, type StreamEvent } from "./anthropic.ts";
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
+import { ConvInputError, convStore } from "./convstore.ts";
 import { EvalInputError, evalStore, ID_RE, type D1Rw } from "./evalstore.ts";
 import { scanAll } from "./idguard.ts";
 import { numericWorksheet } from "./numsample.ts";
@@ -28,8 +29,10 @@ export interface AppDeps {
   dailyAskLimit?: number;
   counter?: AskCounter;
   now?: () => Date;
-  /** D1 for the evaluation questions (evalstore.ts); unset = the /api/eval/* endpoints answer 501 */
+  /** D1 for the evaluation questions and the conversations (evalstore.ts, convstore.ts); unset = those endpoints answer 501 */
   rw?: D1Rw;
+  /** conversations expire this many days after their last turn (0 = never) */
+  conversationRetentionDays?: number;
 }
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
@@ -196,6 +199,9 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       return json(sheet);
     }
 
+    // Conversations in D1 (doctor's decision 2026-10-24, docs/clinical-use.md 1d)
+    if (path === "/api/conversations" || path.startsWith("/api/conversations/")) return await convRoutes(req, url, deps);
+
     // Evaluation questions in D1 and a one-question retrieval run (T1-8 on an iPad; doctor's decision 2026-10-24).
     if (path.startsWith("/api/eval/")) return await evalRoutes(req, url, deps);
 
@@ -233,6 +239,43 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
     return json({ error: "not found" }, 404);
   } catch (e) {
     return json({ error: (e as Error).message }, 500);
+  }
+}
+
+async function convRoutes(req: Request, url: URL, deps: AppDeps): Promise<Response> {
+  if (!deps.rw) return json({ error: "conversation storage is not configured" }, 501);
+  const store = convStore(deps.rw, { retentionDays: deps.conversationRetentionDays });
+  const now = (deps.now?.() ?? new Date()).toISOString();
+  try {
+    if (url.pathname === "/api/conversations") {
+      if (req.method === "GET") return json({ conversations: await store.list(now), retention_days: store.retentionDays });
+      if (req.method === "DELETE") {
+        await store.removeAll();
+        return json({ deleted: "all" });
+      }
+    }
+    const m = /^\/api\/conversations\/([^/]+)(\/turns)?$/.exec(url.pathname);
+    if (m) {
+      const id = decodeURIComponent(m[1]);
+      if (!m[2] && req.method === "GET") {
+        const c = await store.get(id);
+        return c ? json(c) : json({ error: "not found" }, 404);
+      }
+      if (!m[2] && req.method === "DELETE") return json({ deleted: await store.remove(id) });
+      if (m[2] && req.method === "POST") {
+        let b: any;
+        try {
+          b = await req.json();
+        } catch {
+          return json({ error: "invalid JSON" }, 400);
+        }
+        return json({ seq: await store.append(id, { question: b?.question, answer: b?.answer, payload: b?.payload }, now) });
+      }
+    }
+    return json({ error: "not found" }, 404);
+  } catch (e) {
+    if (e instanceof ConvInputError) return json({ error: e.message, code: e.code }, 400);
+    throw e;
   }
 }
 
