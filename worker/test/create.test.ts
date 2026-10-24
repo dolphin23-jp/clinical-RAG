@@ -291,7 +291,7 @@ test("into case mode: the fields come from the seven lines only; a choice that i
   const ok = C.toCase(C.parseCreated(CREATED));
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.notes, []);
-  assert.deepEqual(ok.kase, { age: "70代", sex: "男性", setting: "救急", complaint: "3日前から発熱と咳。\n昨日から尿量が減った。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧。アムロジピン内服。", own: "" });
+  assert.deepEqual(ok.kase, { age: "70代", sex: "男性", setting: "救急", complaint: "3日前から発熱と咳。\n昨日から尿量が減った。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧。アムロジピン内服。", own: "", structured: "", intake: null });
   assert.ok(!JSON.stringify(ok.kase).includes("腎前性AKI")); // the assessment (and every other section) stays out
   const odd = C.toCase(C.parseCreated(CREATED.replace("- 年代: 70代", "- 年代: 70歳代").replace("- 性別: 男性", "- 性別: 不明")));
   assert.equal(odd.kase.age, "");

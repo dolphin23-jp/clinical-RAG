@@ -2,7 +2,7 @@ import { buildAnswerMarkdown } from "./answer-marks.js";
 import { initCase } from "./case.js";
 import { initCreate } from "./create-ui.js";
 import { initNotes } from "./note-ui.js";
-import { CREATE_LABEL, MODES, caseKey, caseRows, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
+import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
 import { initConversations } from "./conv.js";
@@ -706,7 +706,7 @@ async function ask(question, ack = false, mode = null, create = null) {
   for (const h of recent) history.push({ role: "user", text: h.q }, { role: "assistant", text: h.a.slice(0, 6000) });
   // an earlier question the doctor confirmed is re-sent as history, so the confirmation travels with it
   const acked = ack || recent.some((h) => h.ack);
-  const payload = { question, history, ...(kase ? { mode, case: kase } : create ? { mode: "create", create } : {}), web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
+  const payload = { question, history, ...(kase ? { mode, case: caseForServer(kase) } : create ? { mode: "create", create } : {}), web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
 
   let finished = false;
   try {

@@ -36,7 +36,7 @@ test("types: the seven offered types are imported with their fields in order; on
 });
 
 test("fill map: every field it names exists in the imported type, and each draft role is written once per type", () => {
-  const sources = new Set(["ctx", "complaint", "vitals", "findings", "history", "own", ...Object.keys(A.ROLES).map((r) => `d:${r}`)]);
+  const sources = new Set(["ctx", "complaint", "vitals", "findings", "structured", "history", "own", ...Object.keys(A.ROLES).map((r) => `d:${r}`)]);
   for (const [id, fields] of Object.entries<any>(A.FILL)) {
     const keys = new Set(T.NOTE_TYPES[id].sections.map((s: any) => s.key));
     const seen = new Map<string, string>();

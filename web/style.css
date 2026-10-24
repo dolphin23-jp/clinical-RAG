@@ -314,6 +314,31 @@ details.sec > summary { min-height: 44px; display: flex; align-items: center; fo
 .src-tag[data-tag="施設依存"] { background: var(--aid-bg); color: var(--aid-ink); }
 #case-warn { position: sticky; top: 0; z-index: 1; margin-top: 0; }
 
+/* ---- scene x symptom questions in the case dialog (web/intake-ui.js; docs/enhancement-plan.md 8) ---- */
+details.intake { margin: 14px 0 0; padding: 0 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+details.intake > summary { min-height: 48px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+details.intake select { margin-top: 8px; }
+.intake-progress { margin: 10px 0 4px; font-size: 13.5px; font-weight: 600; color: var(--accent); }
+.intake-missing { margin: 4px 0 8px; font-size: 13px; }
+.intake-missing > summary { min-height: 40px; display: flex; align-items: center; color: var(--muted); cursor: pointer; }
+.intake-missing-list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.intake-jump { min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: 12.5px; color: var(--ink); }
+details.intake-phase { border-top: 1px solid var(--line); }
+details.intake-phase > summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; cursor: pointer; }
+.intake-phase-count { font-size: 12px; font-weight: 400; color: var(--muted); }
+details.intake-more > summary { min-height: 40px; display: flex; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+.intake-q { padding: 8px 0 4px; }
+.intake-q[hidden] { display: none; }
+.intake-q.flash { background: var(--accent-soft); border-radius: 8px; }
+.intake-label { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13.5px; font-weight: 600; }
+.intake-core { padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); }
+.intake-num { display: flex; align-items: center; gap: 8px; }
+.intake-num input[type="number"].n-input { width: 110px; }
+.intake-unit { font-size: 13px; color: var(--muted); }
+input.intake-time { width: 140px; min-height: 44px; padding: 0 8px; font-size: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+textarea.intake-text { min-height: 48px; }
+.intake-legacy { margin-top: 8px; }
+
 /* ---- chart-note draft (web/note-ui.js; docs/enhancement-plan.md 7.3) ---- */
 .adopt { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 0 10px; min-height: 34px; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; white-space: nowrap; vertical-align: middle; }
 .adopt input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
