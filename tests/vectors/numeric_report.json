@@ -1,0 +1,26 @@
+{
+  "_comment": "Shared contract for the worksheet summary: summarize() in scripts/sample_numeric.py and summarizeNumeric() in web/eval-tools.js. Neutral row form: verdict ok|err|skip|'' (unjudged), shift true/false.",
+  "rows": [
+    { "no": "N001", "book": "bka", "flag": "dose_unit", "chunk": "c1", "verdict": "ok", "kind": "", "shift": false },
+    { "no": "N002", "book": "bka", "flag": "dose_unit", "chunk": "c1", "verdict": "err", "kind": "桁", "shift": true },
+    { "no": "N003", "book": "bka", "flag": "lab_threshold", "chunk": "c2", "verdict": "err", "kind": "単位", "shift": false },
+    { "no": "N004", "book": "bkb", "flag": "lab_threshold", "chunk": "c3", "verdict": "ok", "kind": "", "shift": false },
+    { "no": "N005", "book": "bkb", "flag": "lab_threshold", "chunk": "c3", "verdict": "skip", "kind": "", "shift": false },
+    { "no": "N006", "book": "bkb", "flag": "dose_unit", "chunk": "c4", "verdict": "", "kind": "", "shift": false },
+    { "no": "N007", "book": "bkb", "flag": "dose_unit", "chunk": "c4", "verdict": "ok", "kind": "", "shift": true }
+  ],
+  "expect": {
+    "rows": 7, "ok": 3, "err": 2, "skip": 1, "unjudged": 1,
+    "by_book": { "bka": [2, 3], "bkb": [0, 2] },
+    "by_flag": { "dose_unit": [1, 3], "lab_threshold": [1, 2] },
+    "chunks": [2, 4],
+    "kinds": { "桁": 1, "単位": 1 },
+    "page_shift": [2, 5]
+  },
+  "wilson": [
+    { "k": 0, "n": 10, "lo": 0.0, "hi": 0.2775 },
+    { "k": 5, "n": 10, "lo": 0.2366, "hi": 0.7634 },
+    { "k": 0, "n": 100, "lo": 0.0, "hi": 0.0370 },
+    { "k": 3, "n": 104, "lo": 0.0099, "hi": 0.0814 }
+  ]
+}

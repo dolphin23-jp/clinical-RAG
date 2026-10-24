@@ -180,7 +180,7 @@ Modules が訓練のままなので、RAG を実臨床の参考にすること�
 
 ### T1-7 数値の誤り率の測定（B3 に進むかを決める材料）
 
-状態: **道具は実装済み**（2026-10-24。`scripts/sample_numeric.py`、`tests/test_sample_numeric.py`）。手順は `docs/evaluation.md` の 2。本番の D1 からも抜ける（`--d1 medbook`。取り込みの `work/library.sqlite` はその回の本だけのため）。**測定そのものは、医師の目視が要る**
+状態: **道具は実装済み**（2026-10-24。`scripts/sample_numeric.py`、`tests/test_sample_numeric.py`）。手順は `docs/evaluation.md` の 2。本番の D1 からも抜ける（`--d1 medbook`。取り込みの `work/library.sqlite` はその回の本だけのため）。**iPad だけでもできる**（アプリの「測定・評価」。`worker/src/numsample.ts`・`/api/numeric/sample`・`web/tools.js`。判定は端末の中だけ。`docs/evaluation.md` の 5）。**測定そのものは、医師の目視が要る**
 
 - `scripts/sample_numeric.py`（新規）: `library.sqlite` から `numeric_critical` のチャンクを、書籍と旗（`dose_unit`／`threshold`／`lab_threshold`）で層別に数十件抜き、`work/numeric_sample.csv`（`work/` は `.gitignore` 済み）に出す。列: チャンクID・書籍・頁・本文・（空欄）頁画像と一致したか・誤った桁・メモ
 - 手順: 先生が頁画像（R2 または PDF）と本文を目視で突き合わせて空欄を埋める
@@ -189,7 +189,7 @@ Modules が訓練のままなので、RAG を実臨床の参考にすること�
 
 ### T1-8 臨床版の評価セット（A1）
 
-状態: **道具は実装済み**（2026-10-24。`eval/lib.ts`・`eval/run_eval.ts`（`--api`・`--compare-dict` を追加）・`eval/run_ask_eval.ts`（`--yes` のときだけ実行）・`eval/clinical.template.jsonl`、`worker/test/eval.test.ts`）。`/api/search` に評価用の `expand`（辞書の切り替え）と `max_per_book` を足した（省略時の振る舞いは変わらない）。手順は `docs/evaluation.md` の 3。**質問と正解は医師が書く**
+状態: **道具は実装済み**（2026-10-24。`eval/lib.ts`・`eval/run_eval.ts`（`--api`・`--compare-dict` を追加）・`eval/run_ask_eval.ts`（`--yes` のときだけ実行）・`eval/clinical.template.jsonl`、`worker/test/eval.test.ts`）。`/api/search` に評価用の `expand`（辞書の切り替え）と `max_per_book` を足した（省略時の振る舞いは変わらない）。手順は `docs/evaluation.md` の 3。**iPad だけでもできる**（アプリの「測定・評価」。質問は D1 の `eval_questions`、`worker/src/evalstore.ts`・`/api/eval/*`。医師の決定 `docs/clinical-use.md` の 1c。手順は `docs/evaluation.md` の 5）。**質問と正解は医師が書く**
 
 - `eval/clinical.template.jsonl`（雛形）と、`eval/run_eval.ts` の拡張: `severity`（`high`／`normal`）を質問に持たせ、`high` の外れを先頭に出す
 - 回答まで見る `eval/run_ask_eval.ts`（F3 の一部。後続でもよい）: デプロイ済みの `/api/ask` を呼び、引用の有無・数値の状態・必須語（`must_mention`）・棄権を記録する。費用は 1問 5〜15円の概算（README。未実測）

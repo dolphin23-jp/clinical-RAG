@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { handle } from "../src/handler.ts";
-import { openDb, REPO } from "./nodeDb.ts";
+import { openDb, openRw, REPO } from "./nodeDb.ts";
 
 const dbPath = process.argv[2];
 const port = Number(process.argv[3] ?? 8787);
@@ -13,6 +13,7 @@ const withPages = !process.argv.includes("--no-pages");
 if (!dbPath) throw new Error("usage: devserver.ts <db.sqlite> [port]");
 export const TOKEN = "test-token-0123456789abcdef";
 const db = openDb(dbPath);
+const rw = openRw(); // evaluation questions (in memory: gone when the dev server stops)
 const WEB = join(REPO, "web");
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -130,6 +131,7 @@ createServer(async (req, res) => {
         model: "claude-sonnet-5-5",
         allowedModels: ["claude-sonnet-5-5", "claude-opus-5-5"],
         fetchImpl: fakeAnthropic,
+        rw,
         pages: withPages ? { get: async (key) => (/^pages\/[^/]+\/[34]\.webp$/.test(key) ? { body: png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer, contentType: "image/png" } : null) } : undefined,
       });
       res.writeHead(r.status, Object.fromEntries(r.headers));
