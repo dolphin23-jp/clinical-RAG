@@ -528,3 +528,16 @@ test("system prompt keeps the clinical-reference rules and the specialty", () =>
   assert.doesNotMatch(SYSTEM_PROMPT, /投与速度（mL\/hr）/); // the old instruction asked the model to convert to mL/hr
   for (const d of ["kdigo.org", "pmda.go.jp", "jaam.jp", "naika.or.jp"]) assert.ok(DEFAULT_WEB_DOMAINS.includes(d), d);
 });
+
+test("HTTP: /api/search can switch the dictionary off and lift the per-book cap (evaluation only; defaults unchanged)", async () => {
+  const on: any = await (await handle(post("/api/search", { queries: ["高K血症"] }), app())).json();
+  assert.ok(on.expanded.synonyms.length > 0);
+  const off: any = await (await handle(post("/api/search", { queries: ["高K血症"], expand: false }), app())).json();
+  assert.deepEqual(off.expanded, { synonyms: [], related: [] });
+  // the fixture is one book with 5 sections (2 of them reference lists), so only include_references reaches 5
+  const q = { queries: ["架空"], parents: 5, include_references: true };
+  const capped: any = await (await handle(post("/api/search", q), app())).json();
+  const lifted: any = await (await handle(post("/api/search", { ...q, max_per_book: 5 }), app())).json();
+  assert.equal(capped.results.length, 3); // default diversity cap: 3 per book
+  assert.equal(lifted.results.length, 5);
+});

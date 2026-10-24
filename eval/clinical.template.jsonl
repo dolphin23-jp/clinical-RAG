@@ -1,0 +1,29 @@
+# 臨床版の評価セットの雛形（docs/evaluation.md）。このファイルは雛形で、例の行はそのままでは動かない（BOOK_ID と「（先生が書く…）」を検査で止める）。
+# 使い方: このファイルを eval/clinical.local.jsonl にコピーし（*.local.jsonl は .gitignore 済み）、例の行を消して、自分の質問を 30〜50 問書く。
+# 1行に1問（JSON）。# で始まる行と空行は読み飛ばす。
+#
+# 入力の約束（docs/clinical-use.md）: 実際の診療で考えた問いから作るときも、年代・主要所見・検査値の数値までに抽象化する。
+#   氏名・ID・生年月日・住所・施設名は書かない。識別情報らしき文字があると、評価の道具が止まる。
+#
+# 欄:
+#   id            一意の名前
+#   group         表で集計する組。おすすめ: keyword / paraphrase / abbreviation / ja-en / concept（概念語。病名で聞いて、治療・適応の節に当たるか）
+#                 / numeric / figure-table / cross-book / negative
+#   severity      "high"（外すと判断が変わりうる問い。先に表示する）か "normal"
+#   queries       検索評価で使う語（search_books に渡る形。短いキーワードを 1〜3 本）
+#   question      回答評価で送る質問（先生がふだん打つ形の文）。省略すると queries をつないで送る
+#   expect        検索で「正解」とする節の条件（すべて満たすとき正解）
+#                   pages          印刷頁（本に印刷された頁番号）のどれかが、節の頁の範囲に入る
+#                   book_id        その本の節（/api/books の book_id。台帳の「RAG book_id」と同じ値）
+#                   text_contains  節の本文に、この文字がすべて含まれる
+#   must_mention  回答評価: 回答に出てほしい語（先生が書く。臨床の正解を作成者は書かない）
+#   negative      true なら「手元の書籍にない問い」。回答が「見つからなかった」と言えるかを見る（expect は空でよい）
+#   note          メモ
+#
+# 走らせ方（PowerShell なら  $env:MEDBOOK_TOKEN="..."  、mac/Linux なら  export MEDBOOK_TOKEN=... ）:
+#   node --no-warnings eval/run_eval.ts --api https://<worker> eval/clinical.local.jsonl --compare-dict     （検索だけ。無料）
+#   node --no-warnings eval/run_ask_eval.ts --api https://<worker> eval/clinical.local.jsonl --max 5         （回答。費用がかかる。--yes で実行）
+{"id":"ex-keyword","group":"keyword","severity":"normal","queries":["尤度比 likelihood ratio"],"question":"尤度比の使い方を教えて","expect":{"book_id":"BOOK_ID","pages":[0]},"note":"例: BOOK_ID と pages を実際の値に"}
+{"id":"ex-concept","group":"concept","severity":"high","queries":["高K血症 治療"],"question":"高K血症で心電図変化があるときの初期対応の考え方","expect":{"book_id":"BOOK_ID","pages":[0]},"must_mention":["（先生が書く: 回答に必ず出てほしい語）"],"note":"概念語の取りこぼしの例（病名で聞いて、透析の適応・カリウム吸着薬の節に当たるか）"}
+{"id":"ex-abbr","group":"abbreviation","severity":"normal","queries":["AKI 病期分類"],"question":"AKIの病期分類","expect":{"book_id":"BOOK_ID","text_contains":["（先生が書く: その節に必ずある語）"]},"note":"略語で聞いて、正式名で書かれた節に当たるか（辞書の効果は --compare-dict で見る）"}
+{"id":"ex-negative","group":"negative","severity":"normal","negative":true,"queries":["（先生が書く: 手元の書籍にない話題の語）"],"question":"（先生が書く: 手元の書籍にない話題の質問）","expect":{},"note":"書籍にないことを「見つからなかった」と言えるか"}
