@@ -13,7 +13,7 @@
 ## 絶対に入れない（リポジトリに）
 
 - 書籍・頁画像の本文（著作物）。`library/` `books/` `work/` `d1/` `pages_out/` は `.gitignore` 済み
-- 質問を出すログ、書き込みの一覧にない保存（`docs/clinical-use.md` の 2.4）。書き込みを足すときは、先に医師に確認する。いまある書き込みは4つだけで、`worker/test/conversations.test.ts` が固定している: 利用上限の日付と回数（`usage_daily`。T1-2）、評価の質問（`eval_questions`。医師の決定 1c。保存の前に `eval/lib.ts` の `parseQuestions` の検査を通す。評価の結果は保存しない）、**会話（`conversations`・`conv_turns`。医師の決定 1d。識別情報の確認を通した質問は保存しない。サーバーも質問の識別情報らしき文字を断る。`CONVERSATION_RETENTION_DAYS` で自動的に消える。画面から消せる）**
+- 質問を出すログ、書き込みの一覧にない保存（`docs/clinical-use.md` の 2.4）。書き込みを足すときは、先に医師に確認する。いまある書き込みは4つだけで、`worker/test/conversations.test.ts` が固定している: 利用上限の日付と回数（`usage_daily`。T1-2）、評価の質問（`eval_questions`。医師の決定 1c。保存の前に `eval/lib.ts` の `parseQuestions` の検査を通す。評価の結果は保存しない）、**会話（`conversations`・`conv_turns`。医師の決定 1d。識別情報の確認を通した質問は保存しない。サーバーも質問と、症例モードで付けた症例（`payload.case`）の識別情報らしき文字を断る。`CONVERSATION_RETENTION_DAYS` で自動的に消える。画面から消せる）**
 - API キー・トークン・実際の質問ファイル（評価用の質問は `eval/*.local.jsonl`。`.gitignore` 済み）。数値の作業表と回答の記録も `work/` にだけ置く（`docs/evaluation.md` の 4）
 - 施設の内部プロトコル
 
@@ -24,8 +24,9 @@
 - 利用上限（`worker/src/usage.ts`）の書き込みは、日付と回数だけ。DB の部品（`db.ts`）は読み取りのまま
 - 辞書（`worker/src/synonyms.ts`）は、医師の確認なしで語を足してよい（医師の決定）。数値・用量・閾値・商品名は入れない（テストが数値を検査する）
 - 回答の生成が失敗したときは、見つかった節を出し、途中までの回答は残す（医師の決定）
-- 数値の突き合わせ（`worker/src/numcheck.ts`。`final.numbers`）と、引用のない文の薄い表示（`web/answer-marks.js`。書籍の引用が1つもない回答では付けない）は、判定ではなく注意として出す。数値の抽出は `numsample.ts` と共通。医師が入力した数値（質問・履歴）は突き合わせの対象にしない
+- 数値の突き合わせ（`worker/src/numcheck.ts`。`final.numbers`）と、引用のない文の薄い表示（`web/answer-marks.js`。書籍の引用が1つもない回答では付けない）は、判定ではなく注意として出す。数値の抽出は `numsample.ts` と共通。医師が入力した数値（質問・症例・履歴）は突き合わせの対象にしない
 - 会話の画面（`web/conv.js`）: 保存・復元・一覧・削除。復元した往復は保存し直さない。`tests/e2e/ui_conv.py`
+- 症例モード（`worker/src/casemode.ts`・`web/case-model.js`・`web/case.js`。医師の決定 1d の②。`docs/enhancement-plan.md` の 7.2）: 症例は**医師が入力した事実だけ**で、未入力の欄は「（未入力）」のまま渡す（陰性にしない）。識別情報のガードは、質問だけでなく症例の**自由記述のすべての欄**に、画面（入力中の警告と送信前の確認）とサーバー（`/api/ask` の入口。保存の入口 `convstore.ts` も `payload.case` を見る）の両方でかける。症例は、タブのメモリと、会話の往復に付けた保存（`payload.case`）にだけ置く（ブラウザの保存領域には置かない。テストが検査する）。「新しい会話」は固定した症例を外す。モードごとの指示と固定の見出しは `worker/src/prompt.ts` の1か所（`CASE_RULES`・`MODE_HEADINGS`）。症例は最後の質問にだけ付け、履歴には入れない。出力は草案で、画面に「草案・最終判断は医師」を出し、引用のない文には `[推論]` `[標準・出典未確認]` `[施設依存]` の印を付けさせる。**「先生の案との差」は、医師が自分のアセスメントを入力したときだけ**求め、違いを並べるだけで、正誤・点数・評価は付けない。選択肢・上限・モードの名前は `casemode.ts` と `web/case-model.js` が双子（`worker/test/casemode.test.ts` が等しいことを検査）。`tests/e2e/ui_case.py`
 - 「測定・評価」の画面（`web/tools.js`）: 数値の作業表の判定は端末の中だけ（`mb.numeric.v1`）。数値の抽出は `scripts/sample_numeric.py` と `worker/src/numsample.ts` が双子（`tests/vectors/numeric_expr.json`）、集計は Python と `web/eval-tools.js` が双子（`tests/vectors/numeric_report.json`）。`tests/e2e/ui_tools.py`
 
 ## 数値と出典
@@ -42,6 +43,6 @@
 
 ## 変更の流れ
 
-- 手元で通す: `cd worker && node --test test/*.test.ts` と `npx tsc --noEmit`、`python3 -m unittest discover -s tests -p 'test_*.py'`。画面を変えたときは `tests/e2e/ui_clinical.py`・`ui_tools.py`・`ui_conv.py`（合成の書籍で動く。README の 5）
+- 手元で通す: `cd worker && node --test test/*.test.ts` と `npx tsc --noEmit`、`python3 -m unittest discover -s tests -p 'test_*.py'`。画面を変えたときは `tests/e2e/ui_clinical.py`・`ui_tools.py`・`ui_conv.py`・`ui_case.py`（合成の書籍で動く。README の 5）
 - CI と Cloudflare のビルドの通知は見ない・対応しない（clinical-modules と同じ運用。2026-10-17 の医師の判断）。代わりに、上のテストを手元で通してからPRにする
 - 振る舞いを変える変更は、同じ変更の中にテストを足す。入力のガード、書き込みの一覧、プロンプトの必須の指示は、テストで固定する

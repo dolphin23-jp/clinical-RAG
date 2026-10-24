@@ -13,7 +13,7 @@ export const UNCITED = "\uE002";
 
 const SENT_RE = /(\d+)/;
 const TRAIL_SENT_RE = /((?:\d+)+)\s*$/;
-const INLINE_SRC = /(\d+)|(\*\*[^*\n]+?\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\((https?:\/\/[^\s)]+)\))|(【出典未確認[^】\n]*】)/;
+const INLINE_SRC = /(\d+)|(\*\*[^*\n]+?\*\*)|(`[^`\n]+`)|(\[[^\]\n]+\]\((https?:\/\/[^\s)]+)\))|(【出典未確認[^】\n]*】)|(\[(?:推論|標準・出典未確認|施設依存)\])/;
 const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const LIST_RE = /^(\s*)([-*+•]|\d+[.)])\s+(.*)$/;
 const PAGE_MARK_RE = /^［(p\.[\d\-]+)］$/;
@@ -63,6 +63,10 @@ export function inline(text, opts, parent) {
       parent.append(a);
     } else if (m[6]) {
       parent.append(el("mark", "unverified", m[6])); // 【出典未確認・要確認】: a number the model could not source
+    } else if (m[7]) {
+      const t = el("span", "src-tag", m[7].slice(1, -1)); // [推論] [標準・出典未確認] [施設依存]: where an uncited statement comes from (case mode)
+      t.dataset.tag = m[7].slice(1, -1);
+      parent.append(t);
     }
     last = m.index + m[0].length;
   }

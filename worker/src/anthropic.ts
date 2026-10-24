@@ -61,6 +61,12 @@ export interface AskInput {
   web?: boolean;
   bookIds?: string[];
   model?: string;
+  /** case mode (casemode.ts): the rendered case, put before the request in the final user message only (never in the history) */
+  caseBlock?: string;
+  /** case mode: the mode's rules and headings (prompt.ts caseSystem), sent as a second system block after the cached base prompt */
+  modeSystem?: string;
+  /** case mode: words to search when the answer fails before any search (the request itself is only a button label) */
+  hint?: string;
 }
 
 const API_VERSION = "2023-06-01";
@@ -90,7 +96,10 @@ export function buildRequestBody(deps: AskDeps, input: AskInput, messages: any[]
     model: input.model ?? deps.model,
     max_tokens: deps.maxTokens ?? 16000,
     stream: true,
-    system: [{ type: "text", text: `${SYSTEM_PROMPT}\n\n今日の日付: ${today}（日本時間）`, cache_control: { type: "ephemeral" } }],
+    system: [
+      { type: "text", text: `${SYSTEM_PROMPT}\n\n今日の日付: ${today}（日本時間）`, cache_control: { type: "ephemeral" } },
+      ...(input.modeSystem ? [{ type: "text", text: input.modeSystem }] : []),
+    ],
     tools,
     messages: msgs,
   };
@@ -254,8 +263,8 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
     }
     let items = [...cards.values()];
     if (!items.length) {
-      const terms = contentTerms(input.question);
-      const queries = [terms.length ? terms.join(" ") : input.question.slice(0, 200)];
+      const terms = contentTerms(input.hint ?? input.question).slice(0, input.hint ? 8 : undefined);
+      const queries = [terms.length ? terms.join(" ") : (input.hint ?? input.question).slice(0, 200)];
       try {
         const parents = await searchParents(deps.db, queries, { bookIds: input.bookIds });
         items = parents.map((p) => {
@@ -273,7 +282,7 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
   for (const h of (input.history ?? []).slice(-8)) {
     if (h.text?.trim()) messages.push({ role: h.role, content: h.text });
   }
-  messages.push({ role: "user", content: input.question });
+  messages.push({ role: "user", content: input.caseBlock ? `${input.caseBlock}\n\n【依頼】${input.question}` : input.question });
   // Anthropic requires alternating roles starting with user; collapse accidental repeats from the client.
   for (let i = messages.length - 2; i >= 0; i--) {
     if (messages[i].role === messages[i + 1].role) {
@@ -384,7 +393,7 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
       answer: blocks.map((b) => b.text).join("\n"),
       cited: blocks.flatMap((b) => b.citations.map((c) => ({ cited_text: c.cited_text, page: c.page, kind: c.kind }))),
       retrieved: [...retrieved.values()],
-      inputs: [input.question, ...(input.history ?? []).filter((h) => h.role === "user").map((h) => h.text)],
+      inputs: [input.question, ...(input.caseBlock ? [input.caseBlock] : []), ...(input.history ?? []).filter((h) => h.role === "user").map((h) => h.text)],
     });
     emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0, numbers });
   } catch (e) {
