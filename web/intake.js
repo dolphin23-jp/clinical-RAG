@@ -178,9 +178,17 @@ export function cleanAnswers(flow, raw) {
   return { answers, dropped };
 }
 
+/** One answer as a line in the flow's own wording (`line`, with {value}), or "label：value".  A date in a text answer is made relative. */
+export function lineText(q, value, { now = new Date() } = {}) {
+  let v = valueText(q, value);
+  if (q.type === "text") v = relativizeDates(v, { now }).text;
+  return q.line?.includes("{value}") ? q.line.replace("{value}", v) : `${plainLabel(q.label)}：${v}`;
+}
+
+/** The label of a question without its ★n marker and its bracketed explanation, cut for a list. */
+export const shortLabel = (label, n = 22) => clip((plainLabel(label).split(/[（(]/)[0].trim() || plainLabel(label)).trim(), n);
+
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
-/** The label without its bracketed explanation ("血糖の評価（医師の判断）" -> "血糖の評価"), cut to a length for a list. */
-const shortLabel = (s) => clip((s.split(/[（(]/)[0].trim() || s).trim(), 22);
 
 /**
  * The structured answers as text for the model and the note: the flow, then the answered visible questions by phase in the flow's own
@@ -194,9 +202,7 @@ export function renderStructured(flow, answers, kase, { now = new Date() } = {})
     const mine = [];
     for (const q of questions) {
       if (!isVisible(flow, q, ctx) || !isAnswered(answers[q.id])) continue;
-      let v = valueText(q, answers[q.id]);
-      if (q.type === "text") v = relativizeDates(v, { now }).text;
-      mine.push(q.line?.includes("{value}") ? q.line.replace("{value}", v) : `${plainLabel(q.label)}：${v}`);
+      mine.push(lineText(q, answers[q.id], { now }));
     }
     if (mine.length) lines.push(`［${phase.short ?? phase.name}］`, ...mine);
   }

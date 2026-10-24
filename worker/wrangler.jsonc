@@ -15,7 +15,9 @@
     // /api/ask calls per day (Japan time). Provisional value; "0" turns the cap off. Counts live in D1 table usage_daily.
     "DAILY_ASK_LIMIT": "100",
     // conversations (saved in D1) are deleted this many days after their last turn; "0" keeps them until deleted. Provisional value
-    "CONVERSATION_RETENTION_DAYS": "30"
+    "CONVERSATION_RETENTION_DAYS": "30",
+    // case records (saved in D1) are deleted this many days after their last update; "0" keeps them until the doctor ends the case. Provisional value
+    "CASE_RECORD_RETENTION_DAYS": "60"
     // "WEB_ALLOWED_DOMAINS": "kdigo.org,jsn.or.jp,..."   // defaults live in src/prompt.ts
   }
 }

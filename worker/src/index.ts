@@ -15,6 +15,8 @@ export interface Env {
   DAILY_ASK_LIMIT?: string;
   /** conversations expire this many days after their last turn ("0" = keep until deleted; default 30) */
   CONVERSATION_RETENTION_DAYS?: string;
+  /** case records expire this many days after their last update ("0" = keep until deleted; default 60) */
+  CASE_RECORD_RETENTION_DAYS?: string;
 }
 
 const list = (s?: string): string[] | undefined => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : undefined);
@@ -32,6 +34,7 @@ export default {
       counter: d1Counter(env.DB),
       rw: env.DB,
       conversationRetentionDays: Number.isFinite(Number(env.CONVERSATION_RETENTION_DAYS ?? 30)) ? Number(env.CONVERSATION_RETENTION_DAYS ?? 30) : 30,
+      caseRecordRetentionDays: Number.isFinite(Number(env.CASE_RECORD_RETENTION_DAYS ?? 60)) ? Number(env.CASE_RECORD_RETENTION_DAYS ?? 60) : 60,
       pages: env.PAGES
         ? {
             async get(key) {

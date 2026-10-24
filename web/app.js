@@ -2,6 +2,7 @@ import { buildAnswerMarkdown } from "./answer-marks.js";
 import { initCase } from "./case.js";
 import { initCreate } from "./create-ui.js";
 import { initNotes } from "./note-ui.js";
+import { initRecords } from "./record-ui.js";
 import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
@@ -906,7 +907,10 @@ async function showPage(bookId, n, host) {
 initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, books: () => S.books });
 const conv = initConversations({ api, el, $, openDialog, S, openConversation, scrollToTurn });
 const caseCtl = initCase({ el, $, openDialog, runMode });
-const notes = initNotes({ el, $, openDialog, copyText });
+const records = initRecords({ api, el, $, openDialog, copyText, caseCtl });
+caseCtl.onPinned((k) => records.onCasePinned(k));
+caseCtl.onCleared(() => records.onCaseCleared());
+const notes = initNotes({ el, $, openDialog, copyText, toRecord: (kase, items) => records.addAdopted(kase, items) });
 const creator = initCreate({ el, $, openDialog, copyText, runCreate: (params) => submitCreate(params, false), pinCase: (c) => caseCtl.set(c) });
 $("#case-create").addEventListener("click", () => {
   $("#case").close();

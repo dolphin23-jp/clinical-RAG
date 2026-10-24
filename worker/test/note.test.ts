@@ -36,7 +36,7 @@ test("types: the seven offered types are imported with their fields in order; on
 });
 
 test("fill map: every field it names exists in the imported type, and each draft role is written once per type", () => {
-  const sources = new Set(["ctx", "complaint", "vitals", "findings", "structured", "history", "own", ...Object.keys(A.ROLES).map((r) => `d:${r}`)]);
+  const sources = new Set(["ctx", "complaint", "vitals", "findings", "structured", "history", "own", ...Object.keys(A.ROLES).map((r) => `d:${r}`), ...["route", "summary", "baseline", "general", "outlook", "list", "ap"].map((b) => `b:${b}`)]);
   for (const [id, fields] of Object.entries<any>(A.FILL)) {
     const keys = new Set(T.NOTE_TYPES[id].sections.map((s: any) => s.key));
     const seen = new Map<string, string>();
@@ -196,6 +196,10 @@ test("pins: the Worker has no endpoint for notes (the note is made in the browse
   const handler = readFileSync(join(REPO, "worker", "src", "handler.ts"), "utf-8");
   assert.doesNotMatch(handler, /\/api\/note/);
   const app = readFileSync(web("app.js"), "utf-8");
-  // the app wires the notes only to a clipboard helper
-  assert.match(app, /initNotes\(\{ el, \$, openDialog, copyText \}\)/);
+  // the app wires the notes to a clipboard helper and, for the doctor's own "症例の記録へ" button, to the record's entry (docs/clinical-use.md 1e):
+  // that is the only thing the note screen can hand on, and it goes through the record store, not through a note endpoint
+  assert.match(app, /initNotes\(\{ el, \$, openDialog, copyText, toRecord: \(kase, items\) => records\.addAdopted\(kase, items\) \}\)/);
+  // the note screen itself reaches no server
+  const ui = readFileSync(web("note-ui.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
+  assert.doesNotMatch(ui, /\bfetch\(|\bapi\(|XMLHttpRequest|localStorage|sessionStorage/);
 });
