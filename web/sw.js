@@ -1,6 +1,6 @@
 // App-shell cache only. /api/* is never touched (answers and book text must not be cached here).
-const V = "medbook-shell-v1";
-const SHELL = ["./", "index.html", "style.css", "app.js", "md.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
+const V = "medbook-shell-v2";
+const SHELL = ["./", "index.html", "style.css", "app.js", "md.js", "id-guard.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

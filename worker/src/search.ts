@@ -1,4 +1,5 @@
 import { placeholders, type Db } from "./db.ts";
+import { DICTIONARY, expandQueries, type TermGroup } from "./synonyms.ts";
 import { bigramTokens, contentTerms, norm, queryTerms } from "./tokenize.ts";
 
 export interface SearchOpts {
@@ -12,6 +13,8 @@ export interface SearchOpts {
   includeReferences?: boolean;
   /** rankings (best first) from other retrievers, e.g. vector search; fused by RRF */
   extraRankings?: string[][];
+  /** query expansion dictionary (default: synonyms.ts); [] turns expansion off */
+  dictionary?: TermGroup[];
 }
 
 export interface Note {
@@ -60,6 +63,24 @@ export function biMatch(query: string): string | null {
 export function triMatch(query: string): string | null {
   const phrases = queryTerms(query)
     .map((t) => norm(t))
+    .filter((t) => [...t].length >= 3)
+    .map(q);
+  return phrases.length ? phrases.join(" OR ") : null;
+}
+
+/** Like biMatch, but each listed term is one phrase even if it contains spaces ("acute kidney injury"). */
+export function biMatchTerms(terms: string[]): string | null {
+  const phrases = terms
+    .map((t) => bigramTokens(t))
+    .filter((t) => t.length > 0)
+    .map((t) => q(t.join(" ")));
+  return phrases.length ? phrases.join(" OR ") : null;
+}
+
+/** Like triMatch, but each listed term is one substring phrase. */
+export function triMatchTerms(terms: string[]): string | null {
+  const phrases = terms
+    .map((t) => norm(t).trim())
     .filter((t) => [...t].length >= 3)
     .map(q);
   return phrases.length ? phrases.join(" OR ") : null;
@@ -117,13 +138,18 @@ export function rrf(rankings: string[][], weights?: number[]): Map<string, numbe
 /** A literal query that matches fewer chunks than this triggers the relaxed (content-word) retry. */
 const MIN_STRICT_HITS = 3;
 const RELAXED_WEIGHT = 0.5;
+/** Dictionary expansions (synonyms.ts). Initial values: tune them with the evaluation set (enhancement plan A1). */
+export const SYNONYM_WEIGHT = 0.5;
+export const RELATED_WEIGHT = 0.3;
 
 let triWarned = false;
 
 async function lexicalLists(db: Db, query: string, k: number, opts: SearchOpts): Promise<string[][]> {
+  return listsFor(db, biMatch(query), triMatch(query), k, opts);
+}
+
+async function listsFor(db: Db, bm: string | null, tm: string | null, k: number, opts: SearchOpts): Promise<string[][]> {
   const lists: string[][] = [];
-  const bm = biMatch(query);
-  const tm = triMatch(query);
   if (bm) lists.push(await ftsRank(db, "chunks_bi", bm, k, opts));
   if (tm) {
     // The trigram index only adds Latin/CJK substring recall. If this D1 build lacks the trigram tokenizer (or the
@@ -153,9 +179,15 @@ export async function searchChunkIds(db: Db, queries: string[], opts: SearchOpts
   };
   for (const query of queries) for (const l of await lexicalLists(db, query, k, opts)) add(l);
   for (const r of opts.extraRankings ?? []) add(r);
+  // decided before the dictionary is applied: expansion hits must not suppress the content-word retry of a sentence
+  const strictHits = rrf(lists, weights).size;
+  // dictionary expansion: other spellings, then concept words; one OR query per index for each kind (fixed D1 cost)
+  const exp = expandQueries(queries, opts.dictionary ?? DICTIONARY);
+  if (exp.synonyms.length) for (const l of await listsFor(db, biMatchTerms(exp.synonyms), triMatchTerms(exp.synonyms), k, opts)) add(l, SYNONYM_WEIGHT);
+  if (exp.related.length) for (const l of await listsFor(db, biMatchTerms(exp.related), triMatchTerms(exp.related), k, opts)) add(l, RELATED_WEIGHT);
   let fused = rrf(lists, weights);
 
-  if (fused.size < MIN_STRICT_HITS) {
+  if (strictHits < MIN_STRICT_HITS) {
     // A sentence-like query ("感度と特異度の違いを教えて") is one exact-phrase term and finds nothing.
     // Retry with its content words (split at hiragana/punctuation), at lower weight.
     for (const query of queries) {

@@ -1,7 +1,10 @@
 import { runAsk, type StreamEvent } from "./anthropic.ts";
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
+import { scanAll } from "./idguard.ts";
 import { getParent, searchParents } from "./search.ts";
+import { expandQueries } from "./synonyms.ts";
+import { jstDay, type AskCounter } from "./usage.ts";
 
 export interface PageStore {
   get(key: string): Promise<{ body: ReadableStream | ArrayBuffer | null; contentType?: string } | null>;
@@ -18,6 +21,10 @@ export interface AppDeps {
   assets?: (req: Request) => Promise<Response>;
   fetchImpl?: typeof fetch;
   apiBase?: string;
+  /** /api/ask calls allowed per day (Japan time). 0 or unset = no cap. */
+  dailyAskLimit?: number;
+  counter?: AskCounter;
+  now?: () => Date;
 }
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
@@ -36,6 +43,40 @@ function authorized(req: Request, token: string): boolean {
   const h = req.headers.get("authorization") ?? "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
   return !!m && timingSafeEqual(m[1].trim(), token);
+}
+
+/**
+ * Identifier guard at the API boundary (docs/clinical-use.md 2.3). The screen checks first and lets the user confirm;
+ * a request that still carries a hit without `ack_identifier: true` is refused before anything reaches the model.
+ * Only the kinds of match are returned, never the matched text.
+ */
+function identifierRefusal(texts: unknown[], ack: unknown): Response | null {
+  const hits = scanAll(texts);
+  if (!hits.length || ack === true) return null;
+  const labels = hits.map((h) => h.label);
+  return json(
+    {
+      error: `患者を特定できる情報の可能性があります（${labels.join("、")}）。氏名・ID などを除いてから送ってください。`,
+      code: "possible_identifier",
+      labels,
+    },
+    400,
+  );
+}
+
+/** Daily cap on /api/ask. A counter failure never blocks the doctor (the cap protects the bill, not the patient). */
+async function overDailyLimit(deps: AppDeps): Promise<Response | null> {
+  const limit = deps.dailyAskLimit ?? 0;
+  if (!(limit > 0) || !deps.counter) return null;
+  let n: number;
+  try {
+    n = await deps.counter.increment(jstDay(deps.now?.() ?? new Date()));
+  } catch (e) {
+    console.warn(`daily ask counter unavailable, continuing without the cap: ${(e as Error).message}`);
+    return null;
+  }
+  if (n <= limit) return null;
+  return json({ error: `1日の利用上限（${limit}回）に達しました。日本時間の0時に戻ります。`, code: "daily_limit", limit }, 429);
 }
 
 export async function handle(req: Request, deps: AppDeps): Promise<Response> {
@@ -107,10 +148,14 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
         .filter(Boolean)
         .slice(0, 5);
       if (!queries.length) return json({ error: "queries must contain 1-5 non-empty strings" }, 400);
+      const refused = identifierRefusal(queries, body.ack_identifier);
+      if (refused) return refused;
       const bookIds = Array.isArray(body.book_ids) ? body.book_ids.map(String).slice(0, 20) : undefined;
       const parents = await searchParents(deps.db, queries, { bookIds, includeReferences: !!body.include_references, parents: Math.min(Number(body.parents) || 5, 10) });
       return json({
         queries,
+        // dictionary terms that were added to this search (synonyms.ts), so a reader can see why a section came up
+        expanded: expandQueries(queries),
         results: parents.map((p) => ({
           parent_id: p.parent_id,
           book_id: p.book_id,
@@ -140,6 +185,11 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
             .filter((h: any) => (h?.role === "user" || h?.role === "assistant") && typeof h.text === "string")
             .map((h: any) => ({ role: h.role, text: String(h.text).slice(0, 8000) }))
         : [];
+      // assistant turns are the model's own text (they may quote PMIDs etc.); only what the user typed is checked
+      const refused = identifierRefusal([question, ...history.filter((h: any) => h.role === "user").map((h: any) => h.text)], body.ack_identifier);
+      if (refused) return refused;
+      const capped = await overDailyLimit(deps);
+      if (capped) return capped;
       const allowed = deps.allowedModels?.length ? deps.allowedModels : [deps.model];
       const model = typeof body.model === "string" && allowed.includes(body.model) ? body.model : deps.model;
       const bookIds = Array.isArray(body.book_ids) ? body.book_ids.map(String).slice(0, 20) : undefined;

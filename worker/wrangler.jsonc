@@ -11,7 +11,9 @@
   // "r2_buckets": [{ "binding": "PAGES", "bucket_name": "medbook-pages" }],
   "vars": {
     "MODEL": "claude-sonnet-5-5",
-    "ALLOWED_MODELS": "claude-sonnet-5-5,claude-opus-5-5"
+    "ALLOWED_MODELS": "claude-sonnet-5-5,claude-opus-5-5",
+    // /api/ask calls per day (Japan time). Provisional value; "0" turns the cap off. Counts live in D1 table usage_daily.
+    "DAILY_ASK_LIMIT": "100"
     // "WEB_ALLOWED_DOMAINS": "kdigo.org,jsn.or.jp,..."   // defaults live in src/prompt.ts
   }
 }
