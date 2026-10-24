@@ -34,6 +34,9 @@ Cloudflare Worker ──────────────►  Anthropic Messa
 | 引用 | Anthropic の `search_result` ブロック + `citations`。引用文は API が返す `cited_text` | モデルが頁を捏造できない（頁は検索結果のメタ情報から引く） |
 | 検索の強制 | `tool_choice` は使わない（Claude 5.5 は強制指定を 400 で拒否する）。最初の書籍検索より前の本文は画面に出さず保留し、検索せずに答えた場合は破棄して「先に search_books を呼べ」と指示して1回だけ再依頼。それでも検索しなければ警告つきで表示 | 記憶だけの回答を根拠付きの回答に見せないため |
 | 閲覧環境 | 自前 PWA | Claude アプリのコネクタ経由だと、iOS で頁画像やストリーミング表示を制御できない（未検証部分が多い） |
+| 検索語の拡張 | 辞書（`worker/src/synonyms.ts`）で、同義語・略語・表記ゆれと関連語を低い重みで足す。各1本の OR 検索にまとめる | 語の一致では「高K血症」で「hyperkalemia」や「透析」の節に当たらないため。D1 の問い合わせの数を増やしすぎないため |
+| 入力のガード | 画面と Worker の両方で、識別情報らしき入力（8桁以上の数字・電話番号・ID/MRN・メール・識別の語）を検査し、確認なしには送らない。氏名と日付は検出しない | 実臨床の参考利用で、氏名・ID を入れない約束を道具の側でも守るため（`docs/clinical-use.md`） |
+| 失敗時の振る舞い | 回答の生成が失敗しても、見つかった節（なければ質問の内容語で検索し直した節）を出す。途中までの回答は残す | 回答が出ないときも、書籍を引ける状態を保つため |
 
 ## ディレクトリ
 
@@ -108,6 +111,8 @@ npx wrangler secret put APP_TOKEN          # 16文字以上の長いランダム
 npx wrangler deploy
 ```
 
+`/api/ask` の1日の上限は `wrangler.jsonc` の `DAILY_ASK_LIMIT`（日本時間で数える。仮の値 100、`"0"` で上限なし）。回数は D1 の `usage_daily`（日付と回数だけ）に Worker が自分で作って数えます。
+
 表示された URL を iPhone / iPad の Safari で開き、共有 → 「ホーム画面に追加」。初回に設定画面でアクセストークンを入力します
 （この端末のブラウザにだけ保存。会話内容は保存しません）。URL は推測されにくいものにし、可能なら Cloudflare Access を前段に置いてください。
 
@@ -124,12 +129,13 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト
+cd worker && node --test test/*.test.ts            # TS テスト（56件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
 node --no-warnings worker/test/devserver.ts library.sqlite 8787 &
-python3 tests/e2e/ui_smoke.py http://localhost:8787 /tmp/ui     # 要 playwright + Chromium
+python3 tests/e2e/ui_smoke.py http://localhost:8787 /tmp/ui     # 要 playwright + Chromium（5 は rk4 の章が前提）
+python3 tests/e2e/ui_clinical.py http://localhost:8787 /tmp/uc  # 帯・入力ガード・縮退（合成の書籍で動く）
 # 実 D1 相当（workerd）
 cd worker && printf 'ANTHROPIC_API_KEY=x\nAPP_TOKEN=local-dev-token-0123456789\n' > .dev.vars
 npx wrangler d1 execute medbook --local --file ../d1/001_data.sql   # 000 → 001 → 999 の順
@@ -148,7 +154,8 @@ npx wrangler dev --local
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 33 件・TypeScript 27 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。
+- Python 33 件・TypeScript 56 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
+- 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。
 - `wrangler dev --local`（workerd + ローカル D1）で、FTS5 の trigram/unicode61 作成、データ投入、検索、認証、静的配信とセキュリティヘッダーが動くこと。
@@ -173,7 +180,7 @@ Sonnet 5.5（入力 $2 / 出力 $10 per MTok）で 1 質問あたり概ね 5〜1
 
 ## 既知の限界と次の一手
 
-- **語彙一致が中心**。同義語・言い換えに弱い箇所があります。次の手: Voyage AI 等の埋め込みを足してベクトル検索を RRF に合流（`searchChunkIds` の `extraRankings` に差し込み口あり）。ただし先に自分の質問で評価してから。
+- **語彙一致が中心**。同義語・言い換えに弱い箇所があります。辞書（`worker/src/synonyms.ts`）で一部を補いましたが、本物の書籍での効果は未測定です。次の手: 評価セット（`docs/enhancement-plan.md` の A1）で測ってから、埋め込みを足してベクトル検索を RRF に合流（`searchChunkIds` の `extraRankings` に差し込み口あり）。
 - 文献（参考文献リスト）は既定で検索対象外。PMID は節の全文表示から PubMed へ飛べます。
 - 図の「図中の文字・構造」は転写者の記述で、検索はできるが引用してはいけない扱い。
 - 転写の誤りは検出できません（`validate` は形式の検査）。重要な数値は必ず原本で再確認する運用が前提です。
