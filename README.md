@@ -52,7 +52,7 @@ web/         PWA（ビルド不要、外部ライブラリ無し）
 eval/        評価（run_eval.ts 検索・run_ask_eval.ts 回答・lib.ts、clinical.template.jsonl、smoke 22問）。手順は docs/evaluation.md
 scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）、sample_numeric.py（数値の転写誤り率の作業表と集計）
 tests/       Python テスト、合成フィクスチャ、ブラウザ確認 (e2e/ui_smoke.py)
-docs/        FORMAT.md（転写の書式）、clinical-use.md（実臨床の参考利用の範囲）、enhancement-plan.md（強化案と設計）、evaluation.md（測定と評価の手順）
+docs/        FORMAT.md（転写の書式）、clinical-use.md（実臨床の参考利用の範囲）、enhancement-plan.md（強化案と設計）、evaluation.md（測定と評価の手順）、book-update.md（書籍の再出力・更新を取り込む手順）
 ```
 
 ## セットアップ
@@ -83,6 +83,8 @@ python scripts/import_ebooktextstudio.py BASE --only "書名のフォルダ名" 
 ```
 
 `--push` を付けない実行は変換と SQL 生成だけの予行演習です。変換結果と SQL は `work/` に出ます（著作物なので `.gitignore` 済み）。
+
+書籍の再出力・更新を取り込むときの順序（`book_id` の固定、取り込み前の控え、予行演習の出力の読み方、取り込み後の確認、評価セットへの影響、やり直し）は `docs/book-update.md`。
 
 頁の決め方（誤った頁を出さないための保守的な規則）:
 - 頁の終わり（`p.N ここまで`・`改ページ`）を1件ずつ数え、他の番号と「番号 − 通し番号」が一致するものだけを信用します。OCR の読み違い（11, 1058, 19 など）は捨てます。
