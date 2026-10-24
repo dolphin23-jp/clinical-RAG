@@ -16,6 +16,10 @@ export const AI_MARK = "〔AI草案〕";
 export const BLANK_HEADER = "［日付］　［患者ID］　［氏名］";
 export const AI_NOTICE = `※${AI_MARK}の印がある項目は、AI（書籍の検索に基づく草案）の提案を、医師が採用したものです。`;
 
+/** The headings of a problem's plan entries by what the doctor recorded (an AI item is never "done": only the doctor sets that). */
+export const PLAN_HEADINGS = { planned: "計画（予定・検討。実施の記録ではありません）", done: "実施（医師の記録）", stopped: "中止・しない" };
+export const CARRIED_MARK = "〔救急から〕";
+
 /** The typed case's parts, as sources for a field. */
 export const SOURCE_LABELS = {
   ctx: "年代・性別・場面",
@@ -55,7 +59,7 @@ export function headingRole(heading) {
 export const FILL = {
   A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
   A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
-  A05: { admission: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals", "findings", "structured"], problem_list: ["d:problems"], problem_ap: ["own", "d:assessment", "d:plan"], outlook: ["d:contingency"] },
+  A05: { admission: ["ctx", "b:route"], hpi: ["complaint"], background: ["history"], baseline: ["b:baseline"], initial: ["vitals", "findings", "structured"], summary: ["b:summary"], problem_list: ["d:problems", "b:list"], problem_ap: ["own", "d:assessment", "d:plan", "b:ap"], general: ["b:general"], outlook: ["d:contingency", "b:outlook"] },
   A06: { context: ["ctx"], interval: ["complaint"], objective: ["vitals", "findings", "structured"], problem_ap: ["own", "d:problems", "d:assessment", "d:plan"], handover: ["d:contingency"] },
   A08: { context: ["ctx"], hpi: ["complaint"], initial: ["vitals", "findings", "structured"] },
   B02: { summary: ["ctx", "complaint"], findings: ["vitals", "findings", "structured"] },
@@ -93,9 +97,11 @@ function sectionsOf(type) {
  * kase: the typed case ({age, sex, setting, complaint, vitals, findings, history, own, structured}).
  * `structured` (the flow's answered questions, web/intake.js) is placed beside the findings until the scene-by-scene routing (docs/enhancement-plan.md 8) exists.
  * items: adopted draft items [{ role, heading, text, cites: [{kind, title, page, url}] }] (anything else is ignored).
+ * board: from a case record (web/case-record.js boardOf): { adm: {route, summary, baseline, general, outlook}, contingency, problems } — the
+ * doctor's own admission texts, and the problems with the entries the doctor carried over.  Only the types whose fields list a `b:` source use it.
  * Returns { type, sections: [{ key, label, requirement, blocks, empty }], adopted, unfilled, omitted }.
  */
-export function assemble(typeId, { kase = {}, items = [] } = {}) {
+export function assemble(typeId, { kase = {}, items = [], board = null } = {}) {
   if (!ENABLED.includes(typeId)) throw new Error(`note type ${typeId} is not offered`);
   const type = NOTE_TYPES[typeId];
   if (!type) throw new Error(`note type ${typeId} is not imported`);
@@ -105,10 +111,16 @@ export function assemble(typeId, { kase = {}, items = [] } = {}) {
   const unfilled = [];
   const omitted = [];
   const used = new Set();
+  let boardAi = 0; // the AI entries that reached the note through the board (they carry the AI mark like adopted items)
   for (const s of sectionsOf(type)) {
     const blocks = [];
     for (const src of fill[s.key] ?? []) {
-      if (src.startsWith("d:")) {
+      if (src.startsWith("b:")) {
+        for (const b of boardBlocks(board, src.slice(2))) {
+          blocks.push(b);
+          boardAi += countAi(b);
+        }
+      } else if (src.startsWith("d:")) {
         const role = src.slice(2);
         const mine = adopted.filter((i) => i.role === role);
         if (mine.length) {
@@ -131,8 +143,28 @@ export function assemble(typeId, { kase = {}, items = [] } = {}) {
   }
   // an adopted item whose role has no field in this type is reported, never silently dropped
   const unplaced = adopted.filter((i) => !used.has(i));
-  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, adopted: used.size, unplaced: unplaced.length, unfilled, omitted };
+  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted };
 }
+
+const ADM_LABELS = { route: "入院の経路・目的（先生の入力）", summary: "Clinical Summary（先生の入力）", baseline: "ベースライン（先生の入力）", general: "全身管理・治療目標・予防（先生の入力）", outlook: "再評価・退院条件・申し送り（先生の入力）" };
+
+/** The blocks a board source gives a field: the doctor's own admission texts, the problem list, the A/P by problem, the criteria to call. */
+function boardBlocks(board, src) {
+  if (!board) return [];
+  const named = (board.problems ?? []).filter((p) => String(p.label ?? "").trim());
+  const out = [];
+  if (src in ADM_LABELS) {
+    const text = String(board.adm?.[src] ?? "").trim();
+    if (text) out.push({ kind: "case", source: `adm.${src}`, label: ADM_LABELS[src], text });
+    if (src === "outlook" && board.contingency?.length) out.push({ kind: "contingency", label: "コンサルト・医師コールの基準（草案）", entries: board.contingency });
+  } else if (src === "list" && named.length) out.push({ kind: "list", label: "優先順位つき Problem List", problems: named });
+  else if (src === "ap") {
+    const withContent = named.filter((p) => p.assess?.length || p.plan?.length);
+    if (withContent.length) out.push({ kind: "ap", label: "Problem 別 Assessment・Plan", problems: withContent });
+  }
+  return out;
+}
+const countAi = (b) => (b.kind === "ap" ? b.problems.flatMap((p) => [...p.assess, ...p.plan]) : b.kind === "contingency" ? b.entries : []).filter((e) => e.from === "ai").length;
 
 const TAG_RE = /\s*\[(?:推論|標準・出典未確認|施設依存)\]/g;
 
@@ -149,6 +181,20 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
   if (aiMark && note.adopted) out.push(AI_NOTICE);
   out.push("");
   const cites = new Map();
+  /** One item as a line: "・", the AI mark when the item is an AI draft (and the mark is kept), the text, and where it comes from. */
+  const itemLine = (i, ai) => {
+    let text = String(i.text).replace(/\s+/g, " ").trim();
+    if (!sourceMarks) text = text.replace(TAG_RE, "");
+    const marks = [];
+    if (sourceMarks) {
+      for (const c of i.cites ?? []) {
+        marks.push(`［${citeLabel(c)}］`);
+        cites.set(citeLine(c), true);
+      }
+    }
+    return `・${ai && aiMark ? AI_MARK : ""}${text}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}`;
+  };
+  const withReason = (e, line) => (e.reason ? `${line}（理由: ${e.reason}）` : line);
   for (const s of note.sections) {
     out.push(`■${s.label}`);
     if (s.empty) out.push(UNFILLED);
@@ -156,18 +202,26 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
     for (const b of s.blocks) {
       if (b.kind === "draft") {
         out.push(`［${b.label}］`);
-        for (const i of b.items) {
-          let text = String(i.text).replace(/\s+/g, " ").trim();
-          if (!sourceMarks) text = text.replace(TAG_RE, "");
-          const marks = [];
-          if (sourceMarks) {
-            for (const c of i.cites ?? []) {
-              marks.push(`［${citeLabel(c)}］`);
-              cites.set(citeLine(c), true);
-            }
+        for (const i of b.items) out.push(itemLine(i, true));
+      } else if (b.kind === "contingency") {
+        out.push(`［${b.label}］`);
+        for (const e of b.entries) out.push(itemLine(e, e.from === "ai"));
+      } else if (b.kind === "list") {
+        b.problems.forEach((p, n) => out.push(`${n + 1}. ${p.label}${p.certaintyLabel ? `（${p.certaintyLabel}）` : ""}${sourceMarks && p.from === "ed" ? ` ${CARRIED_MARK}` : ""}`));
+      } else if (b.kind === "ap") {
+        b.problems.forEach((p, n) => {
+          out.push(`［${n + 1}. ${p.label}${p.certaintyLabel ? `（${p.certaintyLabel}）` : ""}］`);
+          if (p.assess.length) {
+            out.push("評価:");
+            for (const e of p.assess) out.push(itemLine(e, e.from === "ai"));
           }
-          out.push(`・${aiMark ? AI_MARK : ""}${text}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}`);
-        }
+          for (const st of ["planned", "done", "stopped"]) {
+            const mine = p.plan.filter((e) => (e.state ?? "planned") === st);
+            if (!mine.length) continue;
+            out.push(`${PLAN_HEADINGS[st]}:`);
+            for (const e of mine) out.push(withReason(e, itemLine(e, e.from === "ai")));
+          }
+        });
       } else {
         if (several || b.kind === "own" || b.source === "findings") out.push(`［${b.label}］`);
         out.push(b.text);

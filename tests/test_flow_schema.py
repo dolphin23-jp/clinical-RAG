@@ -25,9 +25,14 @@ module = "demo"
 version = 3
 status = "draft"
 ddx_slot = 5
+origin_q = "t_onset"
+origin_label = "発症"
 
 bridge = [
   { q = "age", ent = "context" },
+  { q = "onset", ent = "observation", concept = "ZZ_SENTINEL_CONCEPT", at = "t_onset", neg = ["gradual"], unable = ["unable"], wait = ["sudden"] },
+  { q = "t_onset", ent = "time" },
+  { q = "note", ent = "none", why = "ZZ_SENTINEL_WHY" },
 ]
 
 [[phase]]
@@ -91,6 +96,13 @@ id = "note"
 slot = 3
 label = "メモ"
 type = "text"
+
+[[question]]
+id = "t_onset"
+slot = 3
+label = "発症時刻"
+type = "time"
+line = "発症（{value}）"
 
 [[question]]
 id = "axis_pick"
@@ -173,8 +185,8 @@ class ImportTest(unittest.TestCase):
         self.assertEqual([p["id"] for p in f["phases"]], ["p1", "p2"])
         self.assertEqual(f["phases"][0], {"id": "p1", "name": "受け入れ", "short": "受け入れ", "slots": [1, 2]})
         q = {x["id"]: x for x in f["questions"]}
-        self.assertEqual(list(q), ["age", "sex", "onset", "assoc", "preg", "note"])  # the file's order
-        self.assertEqual(q["age"], {"id": "age", "slot": 1, "label": "年齢", "type": "number", "unit": "歳", "core": True})
+        self.assertEqual(list(q), ["age", "sex", "onset", "assoc", "preg", "note", "t_onset"])  # the file's order
+        self.assertEqual(q["age"], {"id": "age", "slot": 1, "label": "年齢", "type": "number", "unit": "歳", "core": True, "br": {"ent": "context"}})
         self.assertEqual(q["onset"]["options"][0], {"id": "sudden", "label": "突然（秒〜分）", "short": "突然"})
         self.assertEqual(q["onset"]["options"][1], {"id": "gradual", "label": "徐々に"})
         self.assertEqual(q["onset"]["line"], "発症様式：{value}")
@@ -183,13 +195,30 @@ class ImportTest(unittest.TestCase):
 
     def test_judgement_and_prose_are_not_taken(self):
         text = imp.render(self.flows, self.scenes, "abc")
-        for left_out in ("ZZ_SENTINEL_RULE_TEXT", "ZZ_SENTINEL_HINT", "ZZ_SENTINEL_HELP", "ZZ_SENTINEL_DDX", "ZZ_SENTINEL_SCENE_BODY", "ddx_slot", "bridge", '"help"', '"hint"', '"up"', "r1"):
+        for left_out in ("ZZ_SENTINEL_RULE_TEXT", "ZZ_SENTINEL_HINT", "ZZ_SENTINEL_HELP", "ZZ_SENTINEL_DDX", "ZZ_SENTINEL_SCENE_BODY", "ZZ_SENTINEL_CONCEPT", "ZZ_SENTINEL_WHY", "ddx_slot", "bridge", '"help"', '"hint"', '"up"', "r1", '"concept"', '"why"'):
             self.assertNotIn(left_out, text)
         for q in self.flow["questions"]:
-            self.assertLessEqual(set(q), set(imp.QUESTION_KEYS) | {"options"})
+            self.assertLessEqual(set(q), set(imp.QUESTION_KEYS) | {"options", "br"})
         # the scene keeps its frames' names and purposes, not their contents
         s = self.scenes[0]
         self.assertEqual(s["frames"], [{"n": 1, "name": "事前情報", "purposes": ["P1", "P3"]}, {"n": 2, "name": "初期評価", "purposes": ["P2"]}, {"n": 3, "name": "病歴", "purposes": ["P1", "P4"]}])
+
+    def test_the_bridge_keeps_its_structure_and_leaves_its_prose(self):
+        q = {x["id"]: x for x in self.flow["questions"]}
+        # kind, the time question it hangs on, and the option ids that mean none / unable / waiting
+        self.assertEqual(q["onset"]["br"], {"ent": "observation", "at": "t_onset", "neg": ["gradual"], "unable": ["unable"], "wait": ["sudden"]})
+        self.assertEqual(q["t_onset"]["br"], {"ent": "time"})
+        self.assertEqual(q["note"]["br"], {"ent": "none"})  # the reason it is not mapped (prose) is not taken
+        self.assertNotIn("br", q["sex"])  # not declared: nothing is made up
+        # the time axis starts at the flow's own question, with its own name
+        self.assertEqual(self.flow["origin"], {"q": "t_onset", "label": "発症"})
+
+    def test_a_bridge_or_origin_that_names_what_does_not_exist_is_refused(self):
+        bad_option = FLOW.replace('neg = ["gradual"]', 'neg = ["nonesuch"]')
+        bad_origin = FLOW.replace('origin_q = "t_onset"', 'origin_q = "nowhere"')
+        for name, text in {"bridge option": bad_option, "origin_q": bad_origin}.items():
+            with self.subTest(name), self.assertRaises(SystemExit):
+                imp.load_all(make({"x.toml": text}))
 
     def test_axis_questions_are_skipped_and_said(self):
         self.assertNotIn("axis_pick", [q["id"] for q in self.flow["questions"]])
@@ -248,12 +277,16 @@ class CommittedFileTest(unittest.TestCase):
         flows = js_json(text, "FLOWS")
         self.assertGreaterEqual(len(flows), 13)
         for f in flows.values():
-            self.assertLessEqual(set(f), {"id", "scene", "module", "version", "title", "phases", "questions", "defs", "skipped"})
+            self.assertLessEqual(set(f), {"id", "scene", "module", "version", "title", "phases", "questions", "defs", "skipped", "origin"})
             self.assertTrue(f["questions"] and f["phases"])
             for p in f["phases"]:
                 self.assertLessEqual(set(p), {"id", "name", "short", "slots"})
+            self.assertLessEqual(set(f.get("origin", {})), {"q", "label"})
             for q in f["questions"]:
-                self.assertLessEqual(set(q), set(imp.QUESTION_KEYS) | {"options"})
+                self.assertLessEqual(set(q), set(imp.QUESTION_KEYS) | {"options", "br"})
+                self.assertLessEqual(set(q.get("br", {})), set(imp.BRIDGE_SCALARS) | set(imp.BRIDGE_LISTS))
+                for k in imp.BRIDGE_LISTS:  # the option ids the bridge names are the question's own
+                    self.assertLessEqual(set(q.get("br", {}).get(k, [])), {o["id"] for o in q.get("options", [])})
                 self.assertIn(q["type"], imp.SUPPORTED_TYPES)
                 for o in q.get("options", []):
                     self.assertLessEqual(set(o), {"id", "label", "short"})

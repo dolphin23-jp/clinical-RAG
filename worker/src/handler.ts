@@ -5,6 +5,7 @@ import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
 import { ConvInputError, convStore } from "./convstore.ts";
 import { EvalInputError, evalStore, ID_RE, type D1Rw } from "./evalstore.ts";
+import { RecordInputError, recordStore } from "./recordstore.ts";
 import { scanAll } from "./idguard.ts";
 import { numericWorksheet } from "./numsample.ts";
 import { caseSystem, createSystem } from "./prompt.ts";
@@ -35,6 +36,8 @@ export interface AppDeps {
   rw?: D1Rw;
   /** conversations expire this many days after their last turn (0 = never) */
   conversationRetentionDays?: number;
+  /** case records (recordstore.ts) expire this many days after their last update (0 = never) */
+  caseRecordRetentionDays?: number;
 }
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
@@ -204,6 +207,9 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
     // Conversations in D1 (doctor's decision 2026-10-24, docs/clinical-use.md 1d)
     if (path === "/api/conversations" || path.startsWith("/api/conversations/")) return await convRoutes(req, url, deps);
 
+    // Case records in D1 (doctor's decision 2026-10-24, docs/clinical-use.md 1e)
+    if (path === "/api/records" || path.startsWith("/api/records/")) return await recordRoutes(req, url, deps);
+
     // Evaluation questions in D1 and a one-question retrieval run (T1-8 on an iPad; doctor's decision 2026-10-24).
     if (path.startsWith("/api/eval/")) return await evalRoutes(req, url, deps);
 
@@ -309,6 +315,43 @@ async function convRoutes(req: Request, url: URL, deps: AppDeps): Promise<Respon
     return json({ error: "not found" }, 404);
   } catch (e) {
     if (e instanceof ConvInputError) return json({ error: e.message, code: e.code }, 400);
+    throw e;
+  }
+}
+
+async function recordRoutes(req: Request, url: URL, deps: AppDeps): Promise<Response> {
+  if (!deps.rw) return json({ error: "case record storage is not configured" }, 501);
+  const store = recordStore(deps.rw, { retentionDays: deps.caseRecordRetentionDays });
+  const now = (deps.now?.() ?? new Date()).toISOString();
+  try {
+    if (url.pathname === "/api/records") {
+      if (req.method === "GET") return json({ records: await store.list(now), retention_days: store.retentionDays });
+      if (req.method === "DELETE") {
+        await store.removeAll();
+        return json({ deleted: "all" });
+      }
+    }
+    const m = /^\/api\/records\/([^/]+)$/.exec(url.pathname);
+    if (m) {
+      const id = decodeURIComponent(m[1]);
+      if (req.method === "GET") {
+        const r = await store.get(id, now);
+        return r ? json(r) : json({ error: "not found" }, 404);
+      }
+      if (req.method === "DELETE") return json({ deleted: await store.remove(id) });
+      if (req.method === "PUT") {
+        let b: any;
+        try {
+          b = await req.json();
+        } catch {
+          return json({ error: "invalid JSON" }, 400);
+        }
+        return json(await store.put(id, { rev: b?.rev, record: b?.record }, now));
+      }
+    }
+    return json({ error: "not found" }, 404);
+  } catch (e) {
+    if (e instanceof RecordInputError) return json({ error: e.message, code: e.code, ...(e.rev !== undefined ? { rev: e.rev } : {}) }, e.status);
     throw e;
   }
 }

@@ -118,9 +118,9 @@ test("HTTP: append, list, restore, delete; 401 without the token, 501 without st
 const SRC = join(REPO, "worker", "src");
 const code = (f: string) => readFileSync(join(SRC, f), "utf-8");
 
-test("writes: SQL writes exist only in the three store modules and touch only their tables", () => {
-  const allowedFiles = new Set(["usage.ts", "evalstore.ts", "convstore.ts"]);
-  const allowedTables = new Set(["usage_daily", "eval_questions", "conversations", "conv_turns"]);
+test("writes: SQL writes exist only in the four store modules and touch only their tables", () => {
+  const allowedFiles = new Set(["usage.ts", "evalstore.ts", "convstore.ts", "recordstore.ts"]);
+  const allowedTables = new Set(["usage_daily", "eval_questions", "conversations", "conv_turns", "case_records"]);
   const tables = new Set<string>();
   for (const f of readdirSync(SRC).filter((x) => x.endsWith(".ts"))) {
     const text = code(f);

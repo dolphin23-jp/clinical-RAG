@@ -15,6 +15,7 @@ export function initCase(ctx) {
   const modes = $("#case-modes");
   const warn = $("#case-warn");
   const msg = $("#case-msg");
+  const hooks = { pinned: null, cleared: null }; // the case record follows the pinned case (record-ui.js)
   let current = null; // the pinned case (cleaned) or null
   let attach = true; // free questions carry the pinned case while this is on (the mode buttons always do)
 
@@ -100,6 +101,7 @@ export function initCase(ctx) {
     attach = true;
     refresh();
     dlg.close();
+    hooks.pinned?.(current);
   });
   $("#case-clear").addEventListener("click", () => {
     clear();
@@ -137,10 +139,12 @@ export function initCase(ctx) {
   }
 
   function clear() {
+    const had = !!current;
     current = null;
     attach = true;
     fill(emptyCase());
     refresh();
+    if (had) hooks.cleared?.();
   }
 
   refresh();
@@ -150,15 +154,19 @@ export function initCase(ctx) {
     /** the case a free question carries: the pinned one, unless the doctor switched it off */
     attached: () => (current && attach ? { ...current } : null),
     /** pin a case read back from a saved conversation */
-    set(c) {
+    set(c, { keepLink = false } = {}) {
       const cleaned = cleanCase(c);
       if (isEmptyCase(cleaned)) return clear();
+      if (!keepLink) hooks.cleared?.(); // a case that comes from somewhere else (a conversation, a created case) is not the open record's
       current = cleaned;
       attach = true;
       fill(cleaned);
       refresh();
     },
     clear,
+    /** record-ui.js: told when a case is pinned (again) and when the pinned case is cleared */
+    onPinned: (fn) => (hooks.pinned = fn),
+    onCleared: (fn) => (hooks.cleared = fn),
     setBusy(b) {
       for (const x of modes.querySelectorAll("button")) x.disabled = b;
     },

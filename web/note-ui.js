@@ -28,7 +28,7 @@ function ownContent(node) {
 }
 
 export function initNotes(ctx) {
-  const { el, $, openDialog, copyText } = ctx;
+  const { el, $, openDialog, copyText, toRecord } = ctx;
   const dlg = $("#note");
   const pick = $("#note-type");
   const optAi = $("#note-opt-ai");
@@ -108,6 +108,25 @@ export function initNotes(ctx) {
       }),
     );
     turn.foot.append(button);
+    if (toRecord) {
+      // the doctor's act: the adopted items are taken into this case's record (made if the case has none); nothing is carried further by itself
+      const take = el("button", "record-add", "症例の記録へ");
+      take.type = "button";
+      take.addEventListener("click", async () => {
+        const items = [...turn.body.querySelectorAll(".adopt input:checked")].map((b) => itemData.get(b.closest("li, p, tr"))).filter(Boolean);
+        if (!items.length) {
+          take.textContent = "先に項目を「採用」してください";
+          setTimeout(() => (take.textContent = "症例の記録へ"), 2500);
+          return;
+        }
+        take.disabled = true;
+        const r = await toRecord(turn.case, items);
+        take.disabled = false;
+        take.textContent = r.ok ? `記録に取り込みました（新しく ${r.added} 件）` : r.message || "取り込めませんでした";
+        setTimeout(() => (take.textContent = "症例の記録へ"), 3500);
+      });
+      turn.foot.append(take);
+    }
   }
 
   // ---------------------------------------------------------------- the dialog

@@ -339,13 +339,62 @@ input.intake-time { width: 140px; min-height: 44px; padding: 0 8px; font-size: 1
 textarea.intake-text { min-height: 48px; }
 .intake-legacy { margin-top: 8px; }
 
+/* ---- case record (web/record-ui.js; docs/enhancement-plan.md 8) ---- */
+.btn.danger { color: var(--danger); border-color: var(--danger); background: var(--surface); }
+.btn.rec-small { min-height: 40px; padding: 0 12px; font-size: 13px; }
+.casebar-note.linked { background: var(--accent-soft); font-weight: 700; }
+.rec-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rec-status { font-size: 12.5px; color: var(--muted); }
+.rec-status[data-state="saved"] { color: var(--accent); }
+.rec-status[data-state="error"], .rec-status[data-state="blocked"], .rec-status[data-state="conflict"], .rec-status[data-state="gone"] { color: var(--danger); font-weight: 700; }
+.rec-title { margin: 12px 0 4px; font-size: 1.1em; }
+details.rec-sec { margin-top: 14px; padding: 0 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+details.rec-sec > summary { min-height: 48px; display: flex; align-items: center; font-weight: 700; cursor: pointer; }
+.rec-sub { margin: 16px 0 6px; font-size: 13.5px; font-weight: 700; }
+h4.rec-sub { font-size: 14px; }
+.rec-axis { margin: 6px 0; padding: 0; list-style: none; border-left: 3px solid var(--accent-soft); }
+.rec-axis-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 0 6px 12px; }
+.rec-min { min-width: 54px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.rec-clock { min-width: 48px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rec-what { font-weight: 600; }
+.rec-note, .rec-cite { font-size: 12px; color: var(--muted); }
+.rec-detail { flex-basis: 100%; padding-left: 112px; font-size: 13px; color: var(--ink); line-height: 1.6; }
+.rec-check { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13.5px; line-height: 1.6; }
+.rec-check-text { font-weight: 600; }
+.rec-check-items { margin-top: 2px; color: var(--muted); font-size: 12.5px; }
+.rec-adopted { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.rec-role { font-size: 11.5px; font-weight: 700; color: var(--accent); }
+.rec-text { font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
+select.rec-carry { min-height: 44px; }
+.rec-problem { margin: 10px 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.rec-problem-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rec-num { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 700; }
+.rec-id { flex: none; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+input.rec-label { flex: 1; min-width: 160px; }
+.rec-tag { flex: none; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: var(--muted); background: var(--surface-2); }
+.rec-tag.ai { color: var(--aid-ink); background: var(--aid-bg); }
+.rec-cert { align-items: center; margin: 10px 0 0; }
+.rec-cert-label { font-size: 12.5px; color: var(--muted); }
+.rec-entry { margin: 6px 0; }
+textarea.rec-entry-text, textarea.rec-adm { width: 100%; min-height: 48px; }
+.rec-entry-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.rec-state { margin: 0; }
+input.rec-reason { flex: 1; min-width: 160px; }
+.rec-list { margin: 10px 0 0; padding: 0; list-style: none; }
+.rec-item { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.rec-item-head { display: flex; flex-direction: column; gap: 2px; }
+.rec-item-title { font-weight: 700; }
+.rec-item-meta { font-size: 12.5px; color: var(--muted); }
+.note-opts { margin: 6px 0; }
+.rec-note-text { max-height: 56dvh; }
+
 /* ---- chart-note draft (web/note-ui.js; docs/enhancement-plan.md 7.3) ---- */
 .adopt { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 0 10px; min-height: 34px; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; white-space: nowrap; vertical-align: middle; }
 .adopt input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .adopted { background: var(--accent-soft); border-radius: 6px; box-shadow: -4px 0 0 var(--accent-soft); }
 td.adopt-cell { white-space: nowrap; }
 .casebar-note { flex: none; min-height: 36px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: none; color: var(--accent); font-size: 13px; font-weight: 600; }
-.note-open { color: var(--accent) !important; border-color: var(--accent) !important; font-weight: 600; }
+.note-open, .record-add { color: var(--accent) !important; border-color: var(--accent) !important; font-weight: 600; }
 .note-text { margin: 12px 0 0; padding: 12px; max-height: 48dvh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font); font-size: 14px; line-height: 1.75; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
 
 /* ---- creating a fictional case (web/create-ui.js; docs/enhancement-plan.md 7.4) ---- */

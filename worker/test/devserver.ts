@@ -198,6 +198,7 @@ createServer(async (req, res) => {
         fetchImpl: fakeAnthropic,
         rw,
         conversationRetentionDays: 30,
+        caseRecordRetentionDays: 60,
         pages: withPages ? { get: async (key) => (/^pages\/[^/]+\/[34]\.webp$/.test(key) ? { body: png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer, contentType: "image/png" } : null) } : undefined,
       });
       res.writeHead(r.status, Object.fromEntries(r.headers));
