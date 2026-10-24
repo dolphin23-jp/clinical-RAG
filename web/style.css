@@ -323,3 +323,13 @@ td.adopt-cell { white-space: nowrap; }
 .note-open { color: var(--accent) !important; border-color: var(--accent) !important; font-weight: 600; }
 .note-text { margin: 12px 0 0; padding: 12px; max-height: 48dvh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font); font-size: 14px; line-height: 1.75; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
 
+/* ---- creating a fictional case (web/create-ui.js; docs/enhancement-plan.md 7.4) ---- */
+.create-panel { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.create-panel .btn-row { margin-top: 8px; }
+.create-panel .notice { margin: 8px 0; }
+.create-panel .overlaps { margin: 4px 0 8px; padding-left: 1.2em; font-size: 13px; color: var(--danger); line-height: 1.6; }
+.create-draft .note-text { max-height: 40dvh; }
+.create-draft .btn { margin-top: 8px; }
+.create-draft .btn[disabled], .create-panel .btn[disabled] { opacity: 0.45; }
+.fictionmark { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--aid-bg); color: var(--aid-ink); font-size: 12.5px; line-height: 1.6; }
+

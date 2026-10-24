@@ -39,7 +39,7 @@ with sync_playwright() as pw:
     page.goto(BASE + "/")
     page.evaluate(f"localStorage.setItem('mb.token','{TOKEN}')")
     page.reload()
-    page.wait_for_function("document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
 
     # 1. open the screen; the band is there too
     page.click("#btn-tools")

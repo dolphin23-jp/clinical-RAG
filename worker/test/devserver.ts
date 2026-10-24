@@ -52,7 +52,7 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
   if (!toolResult) {
     if (/__apierror__/.test(question)) return new Response(JSON.stringify({ error: { message: "overloaded (fake)" } }), { status: 529 });
     // case mode: the final user message starts with the typed case, and the request itself is only a button label
-    const caseLine = /- 主訴と経過: ([^\n]*)/.exec(question)?.[1];
+    const caseLine = /- 主訴と経過: ([^\n]*)/.exec(question)?.[1] ?? /- テーマ: ([^\n]*)/.exec(question)?.[1];
     const q = [(caseLine ?? question).replace(/\s+/g, " ").slice(0, 40)];
     const json = JSON.stringify({ queries: q });
     return sseBody([
@@ -111,6 +111,33 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
   // case mode: the second system block names the mode and lists its headings; answer with one cited line and tagged uncited lines per heading
   const sys2: string = body.system?.[1]?.text ?? "";
   const modeLabel = /この依頼の型: ([^\n]+)/.exec(sys2)?.[1];
+  if (modeLabel === "架空症例の作成") {
+    // case creation: every heading and the seven input lines; the theme can ask for a flaw (__copy__ repeats the book, __dose__ writes a dose and
+    // a threshold, __id__ writes an identifier-like number), so the checks on the screen can be seen working
+    const asked = body.messages.map((m: any) => (typeof m.content === "string" ? m.content : "")).join("\n");
+    const theme = [...asked.matchAll(/- テーマ: ([^\n]*)/g)].at(-1)?.[1] ?? "";
+    const bookText = A.content.slice(2).map((b: any) => b.text).join(""); // the first two blocks are the meta line and the heading: not the section's own text
+    const copied = /__copy__/.test(theme) ? bookText.replace(/\s+/g, "").slice(0, 80) : "患者は夕方に受診し、前日から食欲がなく、ぼんやりしていた。";
+    const dose = /__dose__/.test(theme) ? "\n- ヘパリンは 5000 単位 で開始し、Cr 2.0 以上で減量する。" : "";
+    const idnum = /__id__/.test(theme) ? "（検体番号 12345678）" : "";
+    let k = 0;
+    const put = (t: string, c?: Ev) => {
+      evs.push(...txt(k, t));
+      if (c) evs.push(c);
+      evs.push(stop(k));
+      k++;
+    };
+    put(`## 導入文\n\n${copied}救急外来を受診した。\n\n`);
+    put(
+      `## 症例の入力用\n\n- 年代: 70代\n- 性別: 男性\n- 場面: 救急\n- 主訴と経過: ゼルニア値の低下を指摘され、3日前から発熱と咳が続く。\n- バイタル: BP 92/54, HR 108, SpO2 94%\n- 所見・検査: Cr 2.4 mg/dL, K 5.8 mEq/L, ゼルニア値 18${idnum}\n- 既往・内服: 高血圧。アムロジピン内服。\n\n`,
+    );
+    put("## 所見の表\n\n| 項目 | 値 | 根拠 |\n|---|---|---|\n| ゼルニア値 | 18 | 典型的に低下する |", cd(k, cite(A, 1, 2)));
+    put("\n| Cr | 2.4 mg/dL | [推論] |\n\n");
+    put(`## 見立て\n\n- 想定する診断は架空症候群。鑑別は感染に伴う腎前性AKI。${dose}\n\n`);
+    put("## 落とし穴\n\n- 内服薬の関与を聞かないと、原因を見誤る。\n\n## 教訓\n\n- 典型的な低下に加えて、背景の薬剤を確かめる。\n\n## 書籍に見つからなかった点\n\n- 該当なし\n");
+    evs.push(md("end_turn", 300), ["message_stop", { type: "message_stop" }]);
+    return sseBody(evs, 6);
+  }
   if (modeLabel && modeLabel !== "症例を踏まえた質問") {
     const heads = [...sys2.matchAll(/^## (.+)$/gm)].map((m) => m[1]).filter((h) => !h.startsWith("この依頼の型") && !h.startsWith("症例が添えられているとき"));
     let k = 0;

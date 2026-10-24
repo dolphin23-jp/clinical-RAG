@@ -100,8 +100,8 @@ test("parseCase: refuses non-objects, wrong types, unknown choices, over-long te
 });
 const parseCaseLoose = (o: object) => ({ age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", ...o });
 
-test("parseMode: the five modes; anything else is refused; absent is undefined", () => {
-  assert.deepEqual([...MODES], ["assess", "ddx", "miss", "consult", "ask"]);
+test("parseMode: the six modes; anything else is refused; absent is undefined", () => {
+  assert.deepEqual([...MODES], ["assess", "ddx", "miss", "consult", "ask", "create"]);
   for (const m of MODES) assert.equal(parseMode(m), m);
   assert.equal(parseMode(undefined), undefined);
   assert.equal(parseMode(""), undefined);
@@ -306,7 +306,9 @@ test("web/case-model.js equals worker/src/casemode.ts: choices, limits and mode 
   assert.deepEqual(web.SETTINGS, [...SETTINGS]);
   assert.deepEqual(Object.fromEntries(web.FIELDS.map((f: any) => [f.key, f.max])), TEXT_LIMITS);
   assert.deepEqual(web.TEXT_KEYS, Object.keys(TEXT_LIMITS));
-  assert.deepEqual(web.MODES.map((m: any) => [m.id, m.label]), MODES.filter((m) => m !== "ask").map((m) => [m, MODE_LABELS[m]]));
+  // the four buttons: not the free question, and not case creation (which has its own dialog)
+  assert.deepEqual(web.MODES.map((m: any) => [m.id, m.label]), MODES.filter((m) => m !== "ask" && m !== "create").map((m) => [m, MODE_LABELS[m]]));
+  assert.equal(web.CREATE_LABEL, MODE_LABELS.create);
 });
 
 test("web/case-model.js: cleanCase keeps only known keys and choices, cuts to the limit; summary and rows show what was typed", () => {

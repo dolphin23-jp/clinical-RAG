@@ -1,7 +1,8 @@
 import { buildAnswerMarkdown } from "./answer-marks.js";
 import { initCase } from "./case.js";
+import { initCreate } from "./create-ui.js";
 import { initNotes } from "./note-ui.js";
-import { MODES, caseKey, caseRows, caseTexts, cleanCase } from "./case-model.js";
+import { CREATE_LABEL, MODES, caseKey, caseRows, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
 import { initConversations } from "./conv.js";
@@ -265,8 +266,11 @@ function runMode(id) {
 
 /** Identifier-like kinds in the question and (in case mode) in every free-text field of the case. */
 function idHits(q, kase) {
+  return idHitsOf([q, ...(kase ? caseTexts(kase) : [])]);
+}
+function idHitsOf(texts) {
   const seen = new Map();
-  for (const t of [q, ...(kase ? caseTexts(kase) : [])]) for (const h of scanIdentifiers(t)) if (!seen.has(h.label)) seen.set(h.label, h);
+  for (const t of texts) for (const h of scanIdentifiers(t)) if (!seen.has(h.label)) seen.set(h.label, h);
   return [...seen.values()];
 }
 
@@ -285,6 +289,15 @@ function submit(q, mode, confirmed) {
   ask(q, hits.length > 0, mode);
 }
 
+/** A creation request ("架空症例を作る"): a theme and wishes, no case. Its free text gets the same identifier check. */
+function submitCreate(params, confirmed) {
+  if (S.busy) return;
+  if (!S.token) return openSettings("最初にアクセストークンを入力してください。");
+  const hits = idHitsOf([params.theme, params.goal]);
+  if (hits.length && !confirmed) return openGuard({ create: params }, hits);
+  ask(`${CREATE_LABEL}（${params.theme}）`, hits.length > 0, "create", params);
+}
+
 // ---------------------------------------------------------------- identifier check before sending (docs/clinical-use.md 2.3)
 // The input is never edited or stored; the doctor either fixes it or confirms. The Worker runs the same check.
 const guard = $("#guard");
@@ -300,6 +313,7 @@ $("#guard-send").addEventListener("click", () => {
   guardSent = true;
   guard.close();
   const p = guardPending;
+  if (p.create) return submitCreate(p.create, true);
   const kase = p.mode ? caseCtl.pinned() : null;
   if (kase && caseTexts(kase).some((t) => scanIdentifiers(t).length)) S.caseAckKey = caseKey(kase);
   submit(p.q, p.mode, true);
@@ -343,9 +357,11 @@ function setBusy(b) {
 // ---------------------------------------------------------------- turns
 const DRAFT_MARK = "草案です。手元の書籍の検索に基づく参考情報で、最終判断は医師が行います。印のない・薄い文は、書籍の記述ではありません。";
 const DRAFT_COPY_HEAD = "【AIの草案・参考情報（書籍の検索に基づく）。最終判断は医師】\n";
+const FICTION_MARK = "架空症例です。実在の患者・症例ではありません。書籍の典型的な所見をもとに新しく作った草案で、数値は例示です（閾値・用量・書籍の症例文は書かない決まりで、あれば警告が出ます）。診断は「見立て」の節にあり、最初は畳まれています。最終判断は医師が行います。";
+const FICTION_COPY_HEAD = "【架空症例（書籍を参考にAIが作成。実在の症例ではありません。数値は例示）】\n";
 
 /** What a turn asked with a case adds to its saved payload (conv.js): the mode and the case exactly as sent. */
-const casePayload = (turn) => (turn.case ? { mode: turn.mode, case: turn.case } : {});
+const casePayload = (turn) => (turn.case ? { mode: turn.mode, case: turn.case } : turn.create ? { mode: "create", create: turn.create } : {});
 
 /** Case-mode drafts have fixed `##` headings: fold the answer into one section per heading (all open; tap a heading to close it). */
 function foldSections(body) {
@@ -368,7 +384,7 @@ function foldSections(body) {
 function makeTurn(question, caseInfo = null) {
   const root = el("article", "turn");
   const q = el("div", "q");
-  q.append(el("small", null, caseInfo ? "質問（症例つき）" : "質問"), document.createTextNode(question));
+  q.append(el("small", null, caseInfo?.create ? "架空症例の作成" : caseInfo ? "質問（症例つき）" : "質問"), document.createTextNode(question));
   const a = el("div", "a");
   const status = el("div", "status");
   status.setAttribute("role", "status");
@@ -382,7 +398,15 @@ function makeTurn(question, caseInfo = null) {
   hits.hidden = true;
   const foot = el("div", "foot");
   const saveNote = el("span", "save-note");
-  if (caseInfo) {
+  if (caseInfo?.create) {
+    // the request a fictional case was made from, and the reminder that it is fictional
+    const box = el("details", "casebox");
+    box.append(el("summary", null, "この依頼"));
+    const dl = el("dl");
+    for (const [k, v] of createRows(caseInfo.create)) dl.append(el("dt", null, k), el("dd", null, v));
+    box.append(dl);
+    a.append(box, el("p", "fictionmark", FICTION_MARK));
+  } else if (caseInfo) {
     // the case this answer was written from, and the reminder that it is a draft
     const box = el("details", "casebox");
     box.append(el("summary", null, "この質問に付けた症例"));
@@ -393,7 +417,7 @@ function makeTurn(question, caseInfo = null) {
   }
   a.append(status, body, notices, numbers, refs, hits, foot);
   root.append(q, a);
-  const turn = { root, status, statusTxt: status.querySelector(".txt"), notices, numbers, saveNote, body, refs, hits, foot, raw: "", sources: new Map(), cites: new Map(), question, queued: false, last: 0, mode: caseInfo?.mode ?? null, case: caseInfo?.kase ?? null };
+  const turn = { root, status, statusTxt: status.querySelector(".txt"), notices, numbers, saveNote, body, refs, hits, foot, raw: "", sources: new Map(), cites: new Map(), question, queued: false, last: 0, mode: caseInfo?.mode ?? null, case: caseInfo?.kase ?? null, create: caseInfo?.create ?? null };
   root.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-cite]");
     if (btn) openCite(turn.cites.get(btn.dataset.cite));
@@ -471,7 +495,8 @@ function finish(turn, ev) {
       }
       return keys;
     },
-    { citeOpen: CITE_OPEN, citeClose: CITE_CLOSE, mark: citesBook },
+    // a created case is new text by design: its lines have no book behind them, so nothing is shown lighter there
+    { citeOpen: CITE_OPEN, citeClose: CITE_CLOSE, mark: citesBook && turn.mode !== "create" },
   );
   const { groups } = built;
   let { md, plain } = built;
@@ -511,21 +536,31 @@ function finish(turn, ev) {
     }
   }
 
-  if (citesBook && /uncited/.test(turn.body.innerHTML)) notice(turn, "薄い文字は、書籍の引用が付いていない文です（推論・一般知識）。書籍の記載として読まないでください。");
+  if (citesBook && turn.mode !== "create" && /uncited/.test(turn.body.innerHTML)) notice(turn, "薄い文字は、書籍の引用が付いていない文です（推論・一般知識）。書籍の記載として読まないでください。");
   renderNumbers(turn, ev.numbers);
   renderHits(turn, new Set(bookCites.map((c) => c.parent_id)));
 
   const copy = el("button", null, "回答をコピー");
   copy.type = "button";
   copy.addEventListener("click", async () => {
-    await copyText((turn.case ? DRAFT_COPY_HEAD : "") + stripCiteMarks(turn.answer));
+    await copyText((turn.case ? DRAFT_COPY_HEAD : turn.create ? FICTION_COPY_HEAD : "") + stripCiteMarks(turn.answer));
     copy.textContent = "コピーしました";
     setTimeout(() => (copy.textContent = "回答をコピー"), 1800);
   });
   turn.foot.append(copy, el("span", null, usageText(ev)), turn.saveNote);
   notes.decorate(turn); // an assessment/plan draft gets a tick on each item the doctor may adopt into a chart note
+  if (turn.mode === "create") {
+    // the answer with the cited pages written in (pages come from the citation metadata), for reading the created case back
+    turn.annotated = ev.blocks
+      .map((b) => {
+        const pages = [...new Set((b.citations || []).map((c) => (c.kind === "web" ? "Web" : `書籍${c.page ? ` ${c.page}` : ""}`)))];
+        return pages.length ? b.text.replace(/(\s*)$/, ` ［${pages.join("］［")}］$1`) : b.text;
+      })
+      .join("");
+    creator.decorate(turn, ev);
+  }
   S.history.push({ q: turn.question, a: turn.answer, ack: turn.ack });
-  conv.saveTurn(turn, { kind: "final", blocks: ev.blocks, sources: [...turn.sources.values()], numbers: ev.numbers || [], usage: ev.usage, stop_reason: ev.stop_reason, searched_books: ev.searched_books, turns: ev.turns, ...casePayload(turn) });
+  conv.saveTurn(turn, { kind: "final", blocks: ev.blocks, sources: [...turn.sources.values()], numbers: ev.numbers || [], usage: ev.usage, stop_reason: ev.stop_reason, searched_books: ev.searched_books, turns: ev.turns, ...(ev.overlap ? { overlap: ev.overlap } : {}), ...casePayload(turn) });
 }
 
 /** Puts text on the clipboard (with a fallback for a browser that refuses the async API). */
@@ -606,8 +641,8 @@ function openConversation(data) {
   let lastCase = null;
   for (const t of data.turns) {
     const p = t.payload || {};
-    const info = p.case ? { mode: typeof p.mode === "string" ? p.mode : "ask", kase: cleanCase(p.case) } : null;
-    if (info) lastCase = info.kase;
+    const info = p.case ? { mode: typeof p.mode === "string" ? p.mode : "ask", kase: cleanCase(p.case) } : p.create ? { mode: "create", create: cleanCreate(p.create) } : null;
+    if (info?.kase) lastCase = info.kase;
     const turn = makeTurn(t.question, info);
     turn.restored = true;
     turn.ack = false;
@@ -617,7 +652,7 @@ function openConversation(data) {
       turn.raw = p.raw || "";
       degrade(turn, { message: p.message || "", items: p.items || [] });
     } else {
-      finish(turn, { blocks: p.blocks || [{ text: t.answer, citations: [] }], usage: p.usage || zeroUsage(), numbers: p.numbers || [], stop_reason: p.stop_reason, searched_books: p.searched_books !== false });
+      finish(turn, { blocks: p.blocks || [{ text: t.answer, citations: [] }], usage: p.usage || zeroUsage(), numbers: p.numbers || [], stop_reason: p.stop_reason, searched_books: p.searched_books !== false, overlap: p.overlap });
     }
     turn.saveNote.textContent = "保存済み";
   }
@@ -656,10 +691,10 @@ function usageText(ev) {
   return `書籍検索${u.book_searches}回${u.web_search_requests ? `・Web検索${u.web_search_requests}回` : ""}・入力${u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens}tok・出力${u.output_tokens}tok・概算 $${usd.toFixed(3)}（約${yen}円）`;
 }
 
-async function ask(question, ack = false, mode = null) {
+async function ask(question, ack = false, mode = null, create = null) {
   empty.hidden = true;
-  const kase = mode ? caseCtl.pinned() : null;
-  const turn = makeTurn(question, kase ? { mode, kase } : null);
+  const kase = mode && mode !== "create" ? caseCtl.pinned() : null;
+  const turn = makeTurn(question, kase ? { mode, kase } : create ? { mode: "create", create } : null);
   turn.ack = ack;
   $("#thread").append(turn.root);
   turn.root.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -671,7 +706,7 @@ async function ask(question, ack = false, mode = null) {
   for (const h of recent) history.push({ role: "user", text: h.q }, { role: "assistant", text: h.a.slice(0, 6000) });
   // an earlier question the doctor confirmed is re-sent as history, so the confirmation travels with it
   const acked = ack || recent.some((h) => h.ack);
-  const payload = { question, history, ...(kase ? { mode, case: kase } : {}), web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
+  const payload = { question, history, ...(kase ? { mode, case: kase } : create ? { mode: "create", create } : {}), web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
 
   let finished = false;
   try {
@@ -872,6 +907,11 @@ initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, bo
 const conv = initConversations({ api, el, $, openDialog, S, openConversation, scrollToTurn });
 const caseCtl = initCase({ el, $, openDialog, runMode });
 const notes = initNotes({ el, $, openDialog, copyText });
+const creator = initCreate({ el, $, openDialog, copyText, runCreate: (params) => submitCreate(params, false), pinCase: (c) => caseCtl.set(c) });
+$("#case-create").addEventListener("click", () => {
+  $("#case").close();
+  creator.open();
+});
 $("#casebar-note").addEventListener("click", () => notes.open({ kase: caseCtl.pinned(), label: "固定中の症例だけ", items: () => [] }));
 updateChips();
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {

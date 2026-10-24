@@ -66,3 +66,34 @@ export function caseRows(c) {
   for (const f of FIELDS) if (c[f.key]) rows.push([f.label, c[f.key]]);
   return rows;
 }
+
+// ---------------------------------------------------------------- creating a fictional case (docs/enhancement-plan.md 7.4)
+// Twin of the same lists in worker/src/casemode.ts (pinned equal by worker/test/casemode.test.ts).
+
+export const LEVELS = ["標準", "紛らわしい鑑別あり", "複合問題"];
+export const CREATE_LIMITS = { theme: 100, goal: 300 };
+export const CREATE_LABEL = "架空症例を作る";
+
+export const emptyCreate = () => ({ theme: "", setting: "", level: LEVELS[0], goal: "", pitfall: true });
+
+/** A creation request read back from a saved conversation (or any untrusted shape): known keys, choices checked, texts cut. */
+export function cleanCreate(raw) {
+  const out = emptyCreate();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  if (typeof raw.theme === "string") out.theme = raw.theme.trim().slice(0, CREATE_LIMITS.theme);
+  if (typeof raw.goal === "string") out.goal = raw.goal.trim().slice(0, CREATE_LIMITS.goal);
+  if (typeof raw.setting === "string" && SETTINGS.includes(raw.setting)) out.setting = raw.setting;
+  if (typeof raw.level === "string" && LEVELS.includes(raw.level)) out.level = raw.level;
+  if (typeof raw.pitfall === "boolean") out.pitfall = raw.pitfall;
+  return out;
+}
+
+/** Rows to show a creation request read-only: [label, value]. */
+export const createRows = (c) => [
+  ["テーマ", c.theme],
+  ["場面", c.setting || "（指定なし）"],
+  ["難しさ", c.level],
+  ["学ばせたいこと", c.goal || "（指定なし）"],
+  ["落とし穴", c.pitfall ? "入れる" : "入れない"],
+];
+
