@@ -8,6 +8,8 @@
 
 export const CITE_OPEN = "";
 export const CITE_CLOSE = "";
+// UNCITED (answer-marks.js): a line from a block the books do not back, shown lighter
+export const UNCITED = "\uE002";
 
 const SENT_RE = /(\d+)/;
 const TRAIL_SENT_RE = /((?:\d+)+)\s*$/;
@@ -24,7 +26,17 @@ const el = (tag, cls, text) => {
   return e;
 };
 
+/** one source line: a leading UNCITED turns the whole line into <span class="uncited"> */
+function inlineLine(text, opts, parent) {
+  if (text.startsWith(UNCITED)) {
+    const s = el("span", "uncited");
+    inline(text.slice(1), opts, s);
+    parent.append(s);
+  } else inline(text, opts, parent);
+}
+
 export function inline(text, opts, parent) {
+  text = text.split(UNCITED).join(""); // a stray marker (not at a line start) is never shown
   // A fresh regex per call: inline() recurses (bold), and a shared /g regex would have its lastIndex reset by the
   // inner call, making the outer loop re-match the same span forever.
   const re = new RegExp(INLINE_SRC.source, "g");
@@ -136,7 +148,7 @@ function renderList(items, opts) {
       }
     }
     const li = el("li");
-    inline(it.text, opts, li);
+    inlineLine(it.text, opts, li);
     stack[stack.length - 1].list.append(li);
     lastLi = li;
   }
@@ -234,7 +246,7 @@ export function renderMarkdown(src, opts = {}) {
     const p = el("p");
     buf.forEach((l, k) => {
       if (k) p.append(el("br"));
-      inline(l.trim(), opts, p);
+      inlineLine(l.trim(), opts, p);
     });
     frag.append(p);
   }
@@ -243,5 +255,5 @@ export function renderMarkdown(src, opts = {}) {
 
 /** Plain text of markdown source, without citation sentinels (for the clipboard and chat history). */
 export function stripCiteMarks(s) {
-  return String(s).replace(/\d+/g, "");
+  return String(s).replace(/\d+/g, "").split(UNCITED).join("");
 }

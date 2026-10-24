@@ -94,6 +94,17 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
   const txt = (i: number, t: string) => [["content_block_start", { type: "content_block_start", index: i, content_block: { type: "text", text: "" } }], ...t.match(/[\s\S]{1,9}/g)!.map((p) => ["content_block_delta", { type: "content_block_delta", index: i, delta: { type: "text_delta", text: p } }] as Ev)] as Ev[];
   const stop = (i: number): Ev => ["content_block_stop", { type: "content_block_stop", index: i }];
   const cd = (i: number, c: any): Ev => ["content_block_delta", { type: "content_block_delta", index: i, delta: { type: "citations_delta", citation: c } }];
+  if (/__numbers__/.test(first)) {
+    // numbers in all three states (cited / only in a retrieved section / nowhere) and one line no book backs
+    const loc = (cited_text: string) => ({ type: "search_result_location", source: A.source, title: A.title, cited_text, search_result_index: 0, start_block_index: 1, end_block_index: 2 });
+    const out: Ev[] = [ms({ input_tokens: 4200, cache_read_input_tokens: 2100 })];
+    out.push(...txt(0, "- 架空薬Xは 10 mg/日 で開始します。"), cd(0, loc("架空薬Xを 10 mg/日 で開始し")), stop(0));
+    out.push(...txt(1, "\n- eGFR 30 未満では半量が目安です。"), cd(1, loc("ゼルニア値を確認する")), stop(1));
+    out.push(...txt(2, "\n- 最大 500 mg/日 まで増やせるとされています。"), cd(2, loc("別の記載")), stop(2));
+    out.push(...txt(3, "\n- ここは書籍に記載のない、一般的な推論の文です。\n"), stop(3));
+    out.push(md("end_turn", 100), ["message_stop", { type: "message_stop" }]);
+    return sseBody(out, 8);
+  }
   const evs: Ev[] = [ms({ input_tokens: 4200, cache_read_input_tokens: 2100 })];
   evs.push(...txt(0, "## 要点\n\n**検索結果の冒頭節**を根拠に整理します。\n\n"), stop(0));
   evs.push(...txt(1, "- 第一に、この節の記載内容を要約する。"), cd(1, cite(A, 1, 2)), stop(1));
@@ -132,6 +143,7 @@ createServer(async (req, res) => {
         allowedModels: ["claude-sonnet-5-5", "claude-opus-5-5"],
         fetchImpl: fakeAnthropic,
         rw,
+        conversationRetentionDays: 30,
         pages: withPages ? { get: async (key) => (/^pages\/[^/]+\/[34]\.webp$/.test(key) ? { body: png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer, contentType: "image/png" } : null) } : undefined,
       });
       res.writeHead(r.status, Object.fromEntries(r.headers));

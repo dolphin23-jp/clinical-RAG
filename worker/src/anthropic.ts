@@ -5,9 +5,10 @@
 // first" is enforced here instead: text produced before the first book search is held back, and an answer that
 // skips the search is discarded and re-requested once with an explicit instruction.
 import type { Db } from "./db.ts";
-import { resolveCitation, toSearchResult, type SourceMeta, type UiCitation } from "./format.ts";
+import { pageLabel as pageLabelOf, resolveCitation, toSearchResult, type SourceMeta, type UiCitation } from "./format.ts";
 import { DEFAULT_WEB_DOMAINS, SEARCH_TOOL, SYSTEM_PROMPT } from "./prompt.ts";
 import { searchParents } from "./search.ts";
+import { checkNumbers, type NumFinding } from "./numcheck.ts";
 import { contentTerms } from "./tokenize.ts";
 
 export interface Usage {
@@ -34,7 +35,7 @@ export type StreamEvent =
   | { t: "sources"; items: SourceCard[] }
   | { t: "delta"; text: string }
   | { t: "reset" } // drop the answer text streamed so far (it was commentary before a tool call)
-  | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string; searched_books: boolean }
+  | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string; searched_books: boolean; numbers: NumFinding[] }
   // the answer could not be completed, but the library still could be searched: show the sections instead of nothing.
   // Text already streamed stays on screen as an unfinished answer (doctor's decision, 2026-10-24).
   | { t: "degraded"; message: string; items: SourceCard[] }
@@ -237,6 +238,8 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
   };
   const registry = new Map<string, SourceMeta>();
   const cards = new Map<string, SourceCard>();
+  // the sections this answer could have drawn from (memory only, for the number check)
+  const retrieved = new Map<string, { text: string; page_label: string }>();
   const maxTurns = deps.maxTurns ?? 6;
   const maxSearches = deps.maxBookSearches ?? 4;
 
@@ -329,6 +332,7 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
             }
             const blocks = parents.map((p) => toSearchResult(p, queries));
             for (const { meta } of blocks) registry.set(meta.source, meta);
+            for (const p of parents) retrieved.set(p.parent_id, { text: p.text, page_label: pageLabelOf(p) });
             const items: SourceCard[] = blocks.map(({ meta }) => ({
               source: meta.source,
               parent_id: meta.parent_id,
@@ -376,7 +380,13 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
       await degrade("モデルが回答を拒否しました（stop_reason=refusal）。質問を言い換えてください。");
       return;
     }
-    emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0 });
+    const numbers = checkNumbers({
+      answer: blocks.map((b) => b.text).join("\n"),
+      cited: blocks.flatMap((b) => b.citations.map((c) => ({ cited_text: c.cited_text, page: c.page, kind: c.kind }))),
+      retrieved: [...retrieved.values()],
+      inputs: [input.question, ...(input.history ?? []).filter((h) => h.role === "user").map((h) => h.text)],
+    });
+    emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0, numbers });
   } catch (e) {
     await degrade((e as Error).message);
   }

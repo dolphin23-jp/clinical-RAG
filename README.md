@@ -36,6 +36,8 @@ Cloudflare Worker ──────────────►  Anthropic Messa
 | 閲覧環境 | 自前 PWA | Claude アプリのコネクタ経由だと、iOS で頁画像やストリーミング表示を制御できない（未検証部分が多い） |
 | 検索語の拡張 | 辞書（`worker/src/synonyms.ts`）で、同義語・略語・表記ゆれと関連語を低い重みで足す。各1本の OR 検索にまとめる | 語の一致では「高K血症」で「hyperkalemia」や「透析」の節に当たらないため。D1 の問い合わせの数を増やしすぎないため |
 | 入力のガード | 画面と Worker の両方で、識別情報らしき入力（8桁以上の数字・電話番号・ID/MRN・メール・識別の語）を検査し、確認なしには送らない。氏名と日付は検出しない | 実臨床の参考利用で、氏名・ID を入れない約束を道具の側でも守るため（`docs/clinical-use.md`） |
+| 会話の保存 | 1往復ごとにサーバー（D1）に保存し、「会話」の画面で開き直し・削除・質問へのジャンプ。識別情報の確認を通した質問は保存しない。30日で自動的に消える（`CONVERSATION_RETENTION_DAYS`） | アプリの再起動（iPad）や再読み込みで会話が消えるため。医師の決定（`docs/clinical-use.md` の 1d） |
+| 数値の突き合わせ・薄い表示 | 回答中の数値を、検索結果の本文と機械で突き合わせ（引用の中／検索結果の中／どこにもない）、書籍の引用がない文を薄く表示する | 用量の誤りを、モデルの自己申告の印だけに頼らず見つけるため。判定ではなく注意 |
 | 失敗時の振る舞い | 回答の生成が失敗しても、見つかった節（なければ質問の内容語で検索し直した節）を出す。途中までの回答は残す | 回答が出ないときも、書籍を引ける状態を保つため |
 
 ## ディレクトリ
@@ -116,7 +118,7 @@ npx wrangler deploy
 `/api/ask` の1日の上限は `wrangler.jsonc` の `DAILY_ASK_LIMIT`（日本時間で数える。仮の値 100、`"0"` で上限なし）。回数は D1 の `usage_daily`（日付と回数だけ）に Worker が自分で作って数えます。
 
 表示された URL を iPhone / iPad の Safari で開き、共有 → 「ホーム画面に追加」。初回に設定画面でアクセストークンを入力します
-（この端末のブラウザにだけ保存。会話内容は保存しません）。URL は推測されにくいものにし、可能なら Cloudflare Access を前段に置いてください。
+（この端末のブラウザにだけ保存）。会話は、1往復ごとにサーバー（D1）に保存され、ヘッダーの「会話」から開き直せます（最後のやりとりから 30 日で自動的に消えます。識別情報の確認を通した質問は保存されません。`docs/clinical-use.md` の 1d）。URL は推測されにくいものにし、可能なら Cloudflare Access を前段に置いてください。
 
 ### 4. 原本の頁画像（任意）
 
@@ -131,7 +133,7 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（76件）
+cd worker && node --test test/*.test.ts            # TS テスト（95件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
@@ -139,6 +141,7 @@ node --no-warnings worker/test/devserver.ts library.sqlite 8787 &
 python3 tests/e2e/ui_smoke.py http://localhost:8787 /tmp/ui     # 要 playwright + Chromium（5 は rk4 の章が前提）
 python3 tests/e2e/ui_clinical.py http://localhost:8787 /tmp/uc  # 帯・入力ガード・縮退（合成の書籍で動く）
 python3 tests/e2e/ui_tools.py http://localhost:8787 /tmp/ut     # 測定・評価の画面（iPad 幅）
+python3 tests/e2e/ui_conv.py http://localhost:8787 /tmp/uv      # 会話の保存・復元・削除、数値の突き合わせ、薄い表示
 # 実 D1 相当（workerd）
 cd worker && printf 'ANTHROPIC_API_KEY=x\nAPP_TOKEN=local-dev-token-0123456789\n' > .dev.vars
 npx wrangler d1 execute medbook --local --file ../d1/001_data.sql   # 000 → 001 → 999 の順
@@ -157,7 +160,7 @@ npx wrangler dev --local
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 47 件・TypeScript 76 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
+- Python 47 件・TypeScript 95 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
 - 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。

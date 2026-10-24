@@ -243,6 +243,28 @@ legend { padding: 0; font-size: 13.5px; font-weight: 600; }
 .msg { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 14px; }
 .msg.ok { background: var(--accent-soft); color: var(--accent); }
 .msg.err { background: var(--danger-bg); color: var(--danger); }
+/* answer marks (web/answer-marks.js, worker/src/numcheck.ts) */
+.uncited { color: var(--muted); }
+.numbers { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.numbers.has-missing { border-color: var(--danger); }
+.numbers h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.numbers ul { margin: 0; padding: 0; list-style: none; }
+.num { padding: 2px 0; font-size: 14px; line-height: 1.6; }
+.num strong { padding: 0 6px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+.num.retrieved strong { background: var(--warn-bg); color: var(--warn-ink); }
+.num.not_found { color: var(--danger); font-weight: 600; }
+.num.not_found strong { background: var(--danger-bg); color: var(--danger); }
+.save-note { color: var(--muted); }
+.save-note.err { color: var(--danger); font-weight: 600; }
+.turn.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { from { background: var(--accent-soft); } to { background: transparent; } }
+.qjump { margin: 8px 0; padding: 0; list-style: none; }
+.convlist { margin: 8px 0; padding: 0; list-style: none; }
+.conv { display: flex; align-items: stretch; gap: 8px; border-top: 1px solid var(--line); padding: 6px 0; }
+.conv-open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 6px 2px; min-height: 48px; }
+.conv-open .conv-title { display: block; font-size: 15px; line-height: 1.5; }
+.conv-open small { color: var(--muted); font-size: 12px; }
+.conv .btn { align-self: center; }
 .guard-list { margin: 8px 0; padding-left: 1.2em; color: var(--danger); font-weight: 600; }
 
 /* ---- measurement / evaluation (web/tools.js) ---- */

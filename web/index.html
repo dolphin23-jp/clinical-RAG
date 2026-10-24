@@ -22,6 +22,9 @@
   <div class="bar-row">
   <h1>医書検索</h1>
   <div class="bar-actions">
+    <button type="button" id="btn-convs" class="icon-btn" aria-label="会話の一覧">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 11h7M8.5 14h4"/></svg>
+    </button>
     <button type="button" id="btn-tools" class="icon-btn" aria-label="測定・評価">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>
     </button>
@@ -88,7 +91,7 @@
 
     <label class="field" for="in-token">アクセストークン</label>
     <input id="in-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="デプロイ時に設定した APP_TOKEN">
-    <p class="help">この端末のブラウザにのみ保存されます。会話の内容は保存しません（画面を閉じると消えます）。</p>
+    <p class="help">トークンは、この端末のブラウザにのみ保存されます。会話は、終わるたびにサーバーに保存され、ヘッダーの「会話」から開き直せます（一定期間で自動的に消えます。識別情報の確認を通した質問は保存されません）。</p>
 
     <label class="field" for="in-model">モデル</label>
     <select id="in-model">
@@ -109,6 +112,24 @@
       <button type="button" id="btn-save" class="btn primary">保存して接続確認</button>
       <button type="button" id="btn-forget" class="btn">トークンを消去</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="convs" aria-labelledby="convs-title">
+  <p class="band" role="note">参考情報・患者を特定する情報は入れない・最終判断は医師</p>
+  <div class="sheet-head">
+    <h2 id="convs-title">会話</h2>
+    <button type="button" class="icon-btn" data-close aria-label="閉じる">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-here" aria-selected="true" aria-controls="pane-here">この会話</button>
+    <button type="button" role="tab" id="tab-saved" aria-selected="false" aria-controls="pane-saved">保存した会話</button>
+  </div>
+  <div class="sheet-body">
+    <section id="pane-here" role="tabpanel" aria-labelledby="tab-here"></section>
+    <section id="pane-saved" role="tabpanel" aria-labelledby="tab-saved" hidden></section>
   </div>
 </dialog>
 

@@ -13,6 +13,8 @@ export interface Env {
   WEB_ALLOWED_DOMAINS?: string;
   /** /api/ask calls per day, Japan time ("0" or unset = no cap) */
   DAILY_ASK_LIMIT?: string;
+  /** conversations expire this many days after their last turn ("0" = keep until deleted; default 30) */
+  CONVERSATION_RETENTION_DAYS?: string;
 }
 
 const list = (s?: string): string[] | undefined => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : undefined);
@@ -29,6 +31,7 @@ export default {
       dailyAskLimit: Math.max(0, Math.floor(Number(env.DAILY_ASK_LIMIT ?? 0))) || 0,
       counter: d1Counter(env.DB),
       rw: env.DB,
+      conversationRetentionDays: Number.isFinite(Number(env.CONVERSATION_RETENTION_DAYS ?? 30)) ? Number(env.CONVERSATION_RETENTION_DAYS ?? 30) : 30,
       pages: env.PAGES
         ? {
             async get(key) {
