@@ -25,7 +25,11 @@ export const MAX_TITLE = 80;
 export const MAX_DEPTH = 8;
 export const MAX_STRING = 8000;
 export const RECORD_VERSION = 1;
-const KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+/** A key is a plain name: it starts with a letter and holds no run of five or more digits (so an ID or a phone number cannot be a key). */
+const KEY_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const DIGIT_RUN = /\d{5,}/;
+/** A number in a record is a lab value or a count; a number this large could be an ID or a phone number written as a number. */
+export const MAX_NUMBER = 1e9;
 
 export class RecordInputError extends Error {
   code: string;
@@ -107,18 +111,23 @@ export function recordStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
       await purge(now);
       const cur = await first<{ rev: number }>("SELECT rev FROM case_records WHERE id = ?", id);
       if (cur) {
-        if (base !== cur.rev) {
-          const e = new RecordInputError("別の画面で更新されています。開き直してください", "conflict", 409);
-          e.rev = cur.rev;
-          throw e;
-        }
-        await run("UPDATE case_records SET title = ?, payload = ?, updated_at = ?, rev = ? WHERE id = ?", title, payload, now, cur.rev + 1, id);
+        if (base !== cur.rev) throw conflict(cur.rev);
+        // the revision is checked again by the write itself (WHERE rev = ?): two saves that both read `rev` can not both win
+        const res = await run("UPDATE case_records SET title = ?, payload = ?, updated_at = ?, rev = ? WHERE id = ? AND rev = ?", title, payload, now, cur.rev + 1, id, cur.rev);
+        const changes = changesOf(res);
+        if (changes === 0) throw conflict((await first<{ rev: number }>("SELECT rev FROM case_records WHERE id = ?", id))?.rev ?? cur.rev + 1);
         return { rev: cur.rev + 1, updated_at: now };
       }
       if (base !== 0) throw new RecordInputError("この記録は見つかりません（保持期間が過ぎたか、別の画面で終えた可能性があります）", "gone", 404);
       const n = Number((await first<{ n: number }>("SELECT COUNT(*) AS n FROM case_records"))?.n ?? 0);
       if (n >= MAX_RECORDS) throw new RecordInputError(`記録は ${MAX_RECORDS} 件までです。終えた症例を消してください`, "too_many_records", 409);
-      await run("INSERT INTO case_records (id, title, created_at, updated_at, rev, payload) VALUES (?, ?, ?, ?, ?, ?)", id, title, now, now, 1, payload);
+      try {
+        await run("INSERT INTO case_records (id, title, created_at, updated_at, rev, payload) VALUES (?, ?, ?, ?, ?, ?)", id, title, now, now, 1, payload);
+      } catch (e) {
+        // another request made this id between the read and the insert
+        if (/UNIQUE|PRIMARY KEY|constraint/i.test(String((e as Error)?.message ?? e))) throw conflict((await first<{ rev: number }>("SELECT rev FROM case_records WHERE id = ?", id))?.rev ?? 1);
+        throw e;
+      }
       return { rev: 1, updated_at: now };
     },
 
@@ -136,6 +145,20 @@ export function recordStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
       await run("DELETE FROM case_records");
     },
   };
+}
+
+function conflict(rev: number): RecordInputError {
+  const e = new RecordInputError("別の画面で更新されています。開き直してください", "conflict", 409);
+  e.rev = rev;
+  return e;
+}
+
+/** Rows changed by a write: D1 reports `meta.changes`, the local SQLite `changes`.  Unknown means the check cannot be trusted: fail closed. */
+function changesOf(res: unknown): number {
+  const r = res as { meta?: { changes?: unknown }; changes?: unknown } | undefined;
+  const n = r?.meta?.changes ?? r?.changes;
+  if (typeof n !== "number") throw new Error("the database did not report how many rows a write changed");
+  return n;
 }
 
 /** Validates a record document and returns it; throws RecordInputError (the identifier refusal names kinds only). */
@@ -158,7 +181,7 @@ function walk(v: unknown, depth: number, out: string[]): void {
     return;
   }
   if (v === null || typeof v === "number" || typeof v === "boolean") {
-    if (typeof v === "number" && !Number.isFinite(v)) throw new RecordInputError("record has a number that is not finite");
+    if (typeof v === "number" && (!Number.isFinite(v) || Math.abs(v) >= MAX_NUMBER)) throw new RecordInputError("record has a number that is not a plain value");
     return;
   }
   if (depth >= MAX_DEPTH) throw new RecordInputError(`record is nested deeper than ${MAX_DEPTH}`);
@@ -168,7 +191,8 @@ function walk(v: unknown, depth: number, out: string[]): void {
   }
   if (typeof v !== "object") throw new RecordInputError("record has a value that is not JSON");
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-    if (!KEY_RE.test(k)) throw new RecordInputError("record has a key that is not a plain name");
+    if (!KEY_RE.test(k) || DIGIT_RUN.test(k)) throw new RecordInputError("record has a key that is not a plain name");
+    out.push(k); // a key is checked like a value
     walk(x, depth + 1, out);
   }
 }

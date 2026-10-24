@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { before, test } from "node:test";
 import type { Db } from "../src/db.ts";
 import { handle, type AppDeps } from "../src/handler.ts";
-import { MAX_DEPTH, MAX_RECORDS, MAX_RECORD_PAYLOAD, MAX_STRING, MAX_TITLE, RecordInputError, check, recordStore } from "../src/recordstore.ts";
+import { MAX_DEPTH, MAX_NUMBER, MAX_RECORDS, MAX_RECORD_PAYLOAD, MAX_STRING, MAX_TITLE, RecordInputError, check, recordStore } from "../src/recordstore.ts";
 import { buildFixtureDb, openDb, openRw, REPO } from "./nodeDb.ts";
 
 let db: Db;
@@ -202,4 +202,50 @@ test("the record screen keeps nothing in the browser's own storage and talks onl
   assert.doesNotMatch(ui, /\/api\/ask|\/api\/search/);
   const model = readFileSync(join(REPO, "web", "case-record.js"), "utf-8");
   assert.doesNotMatch(model, /import .* from "\.\/(app|record-ui|conv)\.js"/);
+});
+
+// ---------------------------------------------------------------------------------- review follow-ups (PR #11)
+test("store: two saves based on the same revision can not both win (the UPDATE checks the revision itself); a double create is one record", async () => {
+  const s = recordStore(openRw(), { retentionDays: 60 });
+  await s.put(ID(1), { record: rec({ title: "base" }) }, day(1));
+  const r = await Promise.allSettled([s.put(ID(1), { rev: 1, record: rec({ title: "A" }) }, day(2)), s.put(ID(1), { rev: 1, record: rec({ title: "B" }) }, day(2))]);
+  assert.equal(r.filter((x) => x.status === "fulfilled").length, 1, JSON.stringify(r.map((x: any) => x.status)));
+  const lost: any = r.find((x) => x.status === "rejected");
+  assert.ok(lost.reason instanceof RecordInputError && lost.reason.code === "conflict" && lost.reason.status === 409 && lost.reason.rev === 2);
+  const won = (r.find((x) => x.status === "fulfilled") as any).value;
+  assert.equal(won.rev, 2);
+  assert.equal((await s.get(ID(1), day(2)))!.rev, 2);
+  // the same id created twice at once: one record, the other save is a conflict (not a database error)
+  const c = await Promise.allSettled([s.put(ID(2), { record: rec({ title: "A" }) }, day(2)), s.put(ID(2), { record: rec({ title: "B" }) }, day(2))]);
+  assert.equal(c.filter((x) => x.status === "fulfilled").length, 1);
+  assert.ok((c.find((x) => x.status === "rejected") as any).reason instanceof RecordInputError);
+  assert.equal(((c.find((x) => x.status === "rejected") as any).reason as RecordInputError).code, "conflict");
+  assert.equal((await s.list(day(2))).filter((x) => x.id === ID(2)).length, 1);
+});
+
+test("store: a database that does not report changed rows is not trusted (the save fails closed instead of assuming it won)", async () => {
+  const real = openRw();
+  const blind: any = {
+    prepare(sql: string) {
+      const p = real.prepare(sql);
+      return { bind: (...v: unknown[]) => { const b: any = p.bind(...v); return { ...b, run: async () => { await b.run(); return undefined; } }; }, run: () => p.run() };
+    },
+  };
+  const s = recordStore(blind, { retentionDays: 60 });
+  await s.put(ID(1), { record: rec() }, day(1)); // an insert needs no count
+  await assert.rejects(s.put(ID(1), { rev: 1, record: rec({ title: "x" }) }, day(2)), /did not report/);
+});
+
+test("store: keys and numbers are checked like values — no ID or phone number as a key, no number that could be one", async () => {
+  const s = recordStore(openRw(), { retentionDays: 60 });
+  for (const [where, r] of Object.entries({
+    "digits as a key": rec({ "12345678901234": 1 }),
+    "an ID-like key": rec({ "ID-12345678": "x" }),
+    "a key starting with a digit": rec({ "1abc": "x" }),
+    "an 11-digit number": rec({ n: 12345678901 }),
+    "a phone number as a number": rec({ ed: { case: { complaint: "x", tel: 9012345678 } } }),
+  })) await rejects(s.put(ID(1), { record: r }, day(1)), "bad_request", (e) => assert.ok(!/12345678|9012345678/.test(e.message), where));
+  // what the screen really writes passes: question ids with a digit, lab values, counters
+  await s.put(ID(1), { record: rec({ ed: { case: { intake: { flow: "emergency-department.abdominal-pain", answers: { spo2: 94, bp_r: 120, temp: 38.4, glu: 110000 } } } } }) }, day(1));
+  assert.ok(MAX_NUMBER >= 1e9);
 });

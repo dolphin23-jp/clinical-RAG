@@ -322,16 +322,20 @@ $("#guard-send").addEventListener("click", () => {
 guard.addEventListener("close", () => {
   if (!guardSent) qEl.focus();
 });
-$("#btn-new").addEventListener("click", () => {
-  // a pinned case that was never asked (so never saved) would be lost; one that was asked stays in its saved conversation
-  if (caseCtl.pinned() && !S.convId && !confirm("固定した症例は、まだ質問されていないため保存されていません。新しい会話を始めると外れます。よろしいですか？")) return;
+/** A new conversation is a new patient: the thread, its history and the saved-conversation id go, and so does the pinned case. */
+function newConversation() {
   if (S.busy) S.ctrl?.abort();
   S.history = [];
   S.convId = null; // the conversation so far stays saved on the server; the next question starts a new one
   S.caseAckKey = "";
-  caseCtl.clear(); // a new conversation is a new patient: the last case never rides along by accident
+  caseCtl.clear(); // the last case never rides along by accident
   for (const t of document.querySelectorAll(".turn")) t.remove();
   empty.hidden = false;
+}
+$("#btn-new").addEventListener("click", () => {
+  // a pinned case that was never asked (so never saved) would be lost; one that was asked stays in its saved conversation
+  if (caseCtl.pinned() && !S.convId && !confirm("固定した症例は、まだ質問されていないため保存されていません。新しい会話を始めると外れます。よろしいですか？")) return;
+  newConversation();
 });
 
 function setBusy(b) {
@@ -907,7 +911,7 @@ async function showPage(bookId, n, host) {
 initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, books: () => S.books });
 const conv = initConversations({ api, el, $, openDialog, S, openConversation, scrollToTurn });
 const caseCtl = initCase({ el, $, openDialog, runMode });
-const records = initRecords({ api, el, $, openDialog, copyText, caseCtl });
+const records = initRecords({ api, el, $, openDialog, copyText, caseCtl, hasThread: () => !!document.querySelector(".turn"), newConversation });
 caseCtl.onPinned((k) => records.onCasePinned(k));
 caseCtl.onCleared(() => records.onCaseCleared());
 const notes = initNotes({ el, $, openDialog, copyText, toRecord: (kase, items) => records.addAdopted(kase, items) });

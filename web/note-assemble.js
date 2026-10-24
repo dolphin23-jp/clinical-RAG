@@ -105,7 +105,7 @@ export function assemble(typeId, { kase = {}, items = [], board = null } = {}) {
   if (!ENABLED.includes(typeId)) throw new Error(`note type ${typeId} is not offered`);
   const type = NOTE_TYPES[typeId];
   if (!type) throw new Error(`note type ${typeId} is not imported`);
-  const adopted = items.filter((i) => i && ROLES[i.role] && String(i.text ?? "").trim());
+  const adopted = items.filter((i) => i && Object.hasOwn(ROLES, i.role) && String(i.text ?? "").trim());
   const fill = FILL[typeId] ?? {};
   const sections = [];
   const unfilled = [];
@@ -151,7 +151,10 @@ const ADM_LABELS = { route: "入院の経路・目的（先生の入力）", sum
 /** The blocks a board source gives a field: the doctor's own admission texts, the problem list, the A/P by problem, the criteria to call. */
 function boardBlocks(board, src) {
   if (!board) return [];
-  const named = (board.problems ?? []).filter((p) => String(p.label ?? "").trim());
+  // a problem without a name stays in the note when it has content ("（名前なし）"): content is never dropped silently
+  const named = (board.problems ?? [])
+    .filter((p) => String(p.label ?? "").trim() || p.assess?.length || p.plan?.length)
+    .map((p) => (String(p.label ?? "").trim() ? p : { ...p, label: "（名前なし）" }));
   const out = [];
   if (src in ADM_LABELS) {
     const text = String(board.adm?.[src] ?? "").trim();
@@ -164,7 +167,7 @@ function boardBlocks(board, src) {
   }
   return out;
 }
-const countAi = (b) => (b.kind === "ap" ? b.problems.flatMap((p) => [...p.assess, ...p.plan]) : b.kind === "contingency" ? b.entries : []).filter((e) => e.from === "ai").length;
+const countAi = (b) => (b.kind === "ap" ? b.problems.flatMap((p) => [...p.assess, ...p.plan]) : b.kind === "contingency" ? b.entries : b.kind === "list" ? b.problems : []).filter((e) => e.from === "ai" || e.ai === true).length;
 
 const TAG_RE = /\s*\[(?:推論|標準・出典未確認|施設依存)\]/g;
 
@@ -195,6 +198,17 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
     return `・${ai && aiMark ? AI_MARK : ""}${text}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}`;
   };
   const withReason = (e, line) => (e.reason ? `${line}（理由: ${e.reason}）` : line);
+  /** A problem's heading text: "label（certainty）", with the AI mark and the citations when the label is an AI draft's and the marks are kept. */
+  const problemName = (p, withMarks) => {
+    let label = String(p.label);
+    if (!sourceMarks) label = label.replace(TAG_RE, "");
+    const marks = [];
+    if (sourceMarks && withMarks) for (const c of p.cites ?? []) {
+      marks.push(`［${citeLabel(c)}］`);
+      cites.set(citeLine(c), true);
+    }
+    return `${withMarks && p.ai && aiMark ? AI_MARK : ""}${label}${p.certaintyLabel ? `（${p.certaintyLabel}）` : ""}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}${sourceMarks && withMarks && p.from === "ed" ? ` ${CARRIED_MARK}` : ""}`;
+  };
   for (const s of note.sections) {
     out.push(`■${s.label}`);
     if (s.empty) out.push(UNFILLED);
@@ -207,10 +221,10 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
         out.push(`［${b.label}］`);
         for (const e of b.entries) out.push(itemLine(e, e.from === "ai"));
       } else if (b.kind === "list") {
-        b.problems.forEach((p, n) => out.push(`${n + 1}. ${p.label}${p.certaintyLabel ? `（${p.certaintyLabel}）` : ""}${sourceMarks && p.from === "ed" ? ` ${CARRIED_MARK}` : ""}`));
+        b.problems.forEach((p, n) => out.push(`${n + 1}. ${problemName(p, true)}`));
       } else if (b.kind === "ap") {
         b.problems.forEach((p, n) => {
-          out.push(`［${n + 1}. ${p.label}${p.certaintyLabel ? `（${p.certaintyLabel}）` : ""}］`);
+          out.push(`［${n + 1}. ${problemName(p, false)}］`);
           if (p.assess.length) {
             out.push("評価:");
             for (const e of p.assess) out.push(itemLine(e, e.from === "ai"));

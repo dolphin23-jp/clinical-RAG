@@ -49,7 +49,13 @@ with sync_playwright() as pw:
     logs, puts = [], []
     page.on("console", lambda m: logs.append((m.type, m.text)) if m.type in ("error", "warning") else None)
     page.on("pageerror", lambda e: logs.append(("pageerror", str(e))))
-    page.on("dialog", lambda d: d.accept())
+    policy = {"accept": True, "log": []}  # what a confirm() is answered with, and what it asked
+
+    def on_dialog(d):
+        policy["log"].append(d.message)
+        d.accept() if policy["accept"] else d.dismiss()
+
+    page.on("dialog", on_dialog)
 
     def on_request(r):
         if "/api/records/" in r.url and r.method == "PUT":
@@ -162,7 +168,7 @@ with sync_playwright() as pw:
     check(rows[0].startswith("0分") and "21:40" in rows[0] and "病着" in rows[0], "the arrival is minute 0")
     check(rows[1].startswith("+12分") and "12誘導ECG" in rows[1] and "ECG異常なし" in rows[1], f"12 minutes after the arrival, with the finding hung on it ({rows[1]})")
     check(rows[2].startswith("+50分") and "鎮痛" in rows[2], "analgesia at +50")
-    check(rows[3].startswith("+150分") and "Disposition決定" in rows[3] and "翌日と見なした" in rows[3], f"a time past midnight is read as the next day and says so ({rows[3]})")
+    check(rows[3].startswith("+150分") and "Disposition決定" in rows[3] and "翌日" in rows[3] and "病着の前として読む" in rows[3], f"a time past midnight is read as the next day, says so, and can be read the other way ({rows[3]})")
     axis = page.locator(".rec-axis").inner_text()
     check(not re.search(r"遅|早い|基準|正常|異常です|警告", axis), "the axis judges nothing")
     check("遅い・早いの判定や、基準の時間との比較はしません" in rec_text(), "the screen says there is no judgement of time")
@@ -170,7 +176,8 @@ with sync_playwright() as pw:
 
     # 5. the notes on what is blank: counted, named, not concluded
     ids = [c.get_attribute("data-id") for c in page.locator(".rec-check").all()]
-    check(ids[:3] == ["core_missing", "waiting", "undecided"] and "no_problems" in ids and "unfilled" in ids, f"checks: {ids}")
+    check(ids[:4] == ["core_missing", "waiting", "assumed_times", "undecided"] and "no_problems" in ids and "unfilled" in ids, f"checks: {ids}")
+    check("仮の読み方をした時刻が 1 件" in page.locator(".rec-check[data-id=assumed_times]").inner_text(), "the time read by assumption is counted")
     check("未確認。陰性ではありません" in page.locator(".rec-check[data-id=core_missing]").inner_text(), "unanswered core questions are 未確認, not negative")
     check("5 件" in page.locator(".rec-check[data-id=undecided]").inner_text(), "five adopted items are waiting for the doctor's decision")
     check("CT" in page.locator(".rec-check[data-id=waiting]").inner_text(), "the result the doctor marked as waiting is listed")
@@ -356,12 +363,111 @@ with sync_playwright() as pw:
     check(api("GET", "/api/records")["body"]["records"] == [] and page.locator("#casebar-record").inner_text() == "記録", "ending it from inside deletes it and unlinks the case")
     page.keyboard.press("Escape")
 
+    # 16. review follow-ups: a double tap makes one record; the reading of an ambiguous time can be flipped and is kept
+    page.click("#btn-records")
+    page.wait_for_selector("text=保存した記録はありません")
+    page.locator("#record button", has_text="いま固定している症例を記録にする").dblclick()
+    page.wait_for_selector(".rec-title")
+    page.wait_for_timeout(500)
+    recs2 = api("GET", "/api/records")["body"]["records"]
+    check(len(recs2) == 1, f"a double tap made one record ({len(recs2)})")
+    rid2 = recs2[0]["id"]
+    dispo = page.locator(".rec-axis-row[data-q=t_dispo]")
+    dispo.locator("button.rec-reading").click()
+    dispo = page.locator(".rec-axis-row[data-q=t_dispo]")
+    check(dispo.locator(".rec-min").inner_text() == "-1290分" and "前として計算" in dispo.inner_text(), f"read the other way: before the arrival ({dispo.inner_text()})")
+    wait_saved()
+    check(api("GET", f"/api/records/{rid2}")["body"]["record"]["ed"]["reading"] == {"t_dispo": "before"}, "the doctor's reading is saved with the record")
+    page.locator(".rec-axis-row[data-q=t_dispo] button.rec-reading").click()
+    check(page.locator(".rec-axis-row[data-q=t_dispo] .rec-min").inner_text() == "+150分", "and can be flipped back")
+    wait_saved()
+
+    # 17. a save whose answer is lost is not taken for another screen's save
+    adm = page.locator("textarea.rec-adm")
+    state = {"n": 0}
+
+    def lose_first_put(route):
+        if route.request.method == "PUT" and state["n"] == 0:
+            state["n"] += 1
+            route.fetch()  # the Worker gets it and saves
+            route.abort()  # but the page never sees the answer
+        else:
+            route.continue_()
+
+    page.route("**/api/records/*", lose_first_put)
+    adm.nth(0).fill("入院の経路: 救急から（1回目）")
+    page.wait_for_timeout(2600)
+    check("保存できませんでした" in page.locator("#record .rec-status").inner_text(), "the lost answer shows as not saved")
+    adm.nth(0).fill("入院の経路: 救急から（2回目）")
+    page.wait_for_timeout(3200)
+    wait_saved()
+    check("別の画面で更新されています" not in page.locator("#record").inner_text(), "the next save is not taken for another screen's (the server's copy was ours)")
+    check(api("GET", f"/api/records/{rid2}")["body"]["record"]["adm"]["route"] == "入院の経路: 救急から（2回目）", "and the later text reached the server")
+    page.unroute("**/api/records/*")
+
+    # 18. leaving the record with something unsaved asks first
+    page.route("**/api/records/*", lambda route: route.abort() if route.request.method == "PUT" else route.continue_())
+    adm = page.locator("textarea.rec-adm")
+    adm.nth(0).fill("保存できない間に書いた文")
+    page.wait_for_timeout(2600)
+    policy["log"].clear()
+    policy["accept"] = False
+    page.locator("#record button", has_text="記録の一覧").click()
+    page.wait_for_timeout(500)
+    check(any("保存されていない変更があります" in m for m in policy["log"]) and page.locator(".rec-problem, .rec-axis").count() >= 0 and page.locator("textarea.rec-adm").count() == 5, "leaving with unsaved text asks, and cancel stays in the record")
+    check(adm.nth(0).input_value() == "保存できない間に書いた文", "nothing was dropped")
+    page.unroute("**/api/records/*")
+    policy["accept"] = True
+    page.wait_for_timeout(300)
+    adm.nth(0).fill("保存できない間に書いた文（もう一度）")
+    page.wait_for_timeout(2600)
+    wait_saved()
+    page.keyboard.press("Escape")
+
+    # 19. pinning a case with another age or sex asks whether it is the same patient; cancel lets the record go (and keeps it saved)
+    page.click("#casebar-record")
+    check(page.locator("#case-linked").count() == 1, "the case dialog carries the linked notice")
+    page.keyboard.press("Escape")
+    page.click("#btn-case")
+    check(page.locator("#case-linked").is_visible() and "別の患者の症例を入れるときは、先に「症例を外す」" in page.locator("#case-linked").inner_text(), "the case dialog says it is linked and what to do for another patient")
+    page.select_option("#case-age", "30代")
+    policy["log"].clear()
+    policy["accept"] = False
+    page.click("#case-pin")
+    page.wait_for_timeout(800)
+    check(any("年代・性別が、この記録の症例と違います" in m for m in policy["log"]), "a different age asks whether it is the same patient")
+    check(page.locator("#casebar-record").inner_text() == "記録", "cancel: the record is let go (the case stays pinned on its own)")
+    check(api("GET", f"/api/records/{rid2}")["body"]["record"]["ed"]["case"]["age"] == "70代", "and the record still holds the 70代 case")
+    policy["accept"] = True
+
+    # 20. opening a record while another patient's thread is on screen starts a new conversation (after asking); cancel changes nothing
+    turns_before = page.locator(".turn").count()
+    page.click("#btn-records")
+    page.wait_for_selector(".rec-item")
+    policy["log"].clear()
+    policy["accept"] = False
+    page.locator(".rec-item button", has_text="開く").first.click()
+    page.wait_for_timeout(500)
+    check(any("いまの会話を閉じて新しい会話を始めます" in m for m in policy["log"]) and page.locator(".turn").count() == turns_before and not page.locator(".rec-problem, .rec-axis").count(), "with another case's thread on screen, opening asks; cancel changes nothing")
+    policy["accept"] = True
+    page.locator(".rec-item button", has_text="開く").first.click()
+    page.wait_for_selector(".rec-axis")
+    check(page.locator(".turn").count() == 0, "accepted: the thread is closed (a new conversation), so nothing of the other case rides along")
+    check("70代・男性・救急" in page.locator("#casebar-text").inner_text() and page.locator("#casebar-record").inner_text() == "記録（連動中）", "and the record's case is pinned and linked")
+    page.keyboard.press("Escape")
+    page.click("#case-modes button[data-mode=ddx]")
+    wait_done(1)
+    first_conv = api("GET", "/api/conversations")["body"]["conversations"]
+    check(len(first_conv) >= 2, f"the new question is saved in a new conversation ({len(first_conv)} conversations)")
+    api("DELETE", f"/api/records/{rid2}")
+
     # 15. nothing of the record is kept in the browser's own storage
     store = page.evaluate("JSON.stringify([localStorage, sessionStorage])")
     check("腎前性AKI" not in store and "高血圧の管理" not in store and "21:52" not in store, "the record is not kept in localStorage / sessionStorage")
 
     # the browser logs a refused request as a console error: the 400 (identifier), 409 (another screen) and 404 (ended) above are on purpose
-    expected = re.compile(r"Failed to load resource: the server responded with a status of (400|404|409)")
+    # (and the requests this test aborts itself to lose an answer or go offline)
+    expected = re.compile(r"Failed to load resource: (the server responded with a status of (400|404|409)|net::ERR_FAILED)")
     bad = [l for l in logs if l[0] in ("error", "pageerror") and not expected.search(l[1])]
     check(not bad, f"no console errors other than the refusals this test causes ({bad[:3]})")
     br.close()
