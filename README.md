@@ -49,10 +49,10 @@ worker/      Cloudflare Worker（TypeScript）と Node 製テスト
   src/       handler / anthropic(ツールループ) / search / format / prompt(システムプロンプト) / db / tokenize
   test/      node:test（27件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
 web/         PWA（ビルド不要、外部ライブラリ無し）
-eval/        検索評価（run_eval.ts、smoke 22問、questions.template.jsonl）
-scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）
+eval/        評価（run_eval.ts 検索・run_ask_eval.ts 回答・lib.ts、clinical.template.jsonl、smoke 22問）。手順は docs/evaluation.md
+scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）、sample_numeric.py（数値の転写誤り率の作業表と集計）
 tests/       Python テスト、合成フィクスチャ、ブラウザ確認 (e2e/ui_smoke.py)
-docs/        FORMAT.md（転写 Markdown の書式と、実章で見つかった注意点）
+docs/        FORMAT.md（転写の書式）、clinical-use.md（実臨床の参考利用の範囲）、enhancement-plan.md（強化案と設計）、evaluation.md（測定と評価の手順）
 ```
 
 ## セットアップ
@@ -129,7 +129,7 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（56件）
+cd worker && node --test test/*.test.ts            # TS テスト（67件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
@@ -148,13 +148,13 @@ npx wrangler dev --local
 - 回答の `[n]` をタップ → 引用箇所・頁・節の全文・原本頁。「検索でヒットした節」を開くと、モデルが何を読んだかが見えます。
 - 回答に書籍の引用が一つも無いときは、画面に警告が出ます（記憶ベースの可能性）。
 - 振る舞い（回答の型・出典の扱い・迎合しない等）は `worker/src/prompt.ts` に集約しています。ここを直せば挙動が変わります。
-- 評価: `eval/questions.template.jsonl` を参考に自分の質問を 30〜50 問書き、`node --no-warnings eval/run_eval.ts library.sqlite eval/questions.jsonl` で hit@k を測ってください。
+- 評価: `eval/clinical.template.jsonl` を `eval/clinical.local.jsonl` にコピーして自分の質問を 30〜50 問書き、`node --no-warnings eval/run_eval.ts --api https://<worker> eval/clinical.local.jsonl --compare-dict` で hit@k と辞書の効果を測ってください（無料。回答まで見るのは `eval/run_ask_eval.ts`）。数値の転写誤り率は `scripts/sample_numeric.py`。手順は `docs/evaluation.md`。
 
 ## 検証状況（正直な一覧）
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 33 件・TypeScript 56 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
+- Python 45 件・TypeScript 67 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
 - 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。

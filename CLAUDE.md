@@ -14,7 +14,7 @@
 
 - 書籍・頁画像の本文（著作物）。`library/` `books/` `work/` `d1/` `pages_out/` は `.gitignore` 済み
 - 質問・回答の本文を保存する処理、質問を出すログ（`docs/clinical-use.md` の 2.4）。書き込みを足すときは、先に医師に確認する（いまある書き込みは、利用上限の日付と回数だけ。`docs/enhancement-plan.md` の T1-2）
-- API キー・トークン・実際の質問ファイル（評価用の質問は `eval/*.local.jsonl`。`.gitignore` 済み）
+- API キー・トークン・実際の質問ファイル（評価用の質問は `eval/*.local.jsonl`。`.gitignore` 済み）。数値の作業表と回答の記録も `work/` にだけ置く（`docs/evaluation.md` の 4）
 - 施設の内部プロトコル
 
 ## 守りの部品（2026-10-24。変えるときは同じ変更でテストを直す）
