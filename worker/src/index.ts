@@ -1,5 +1,6 @@
 import { fromD1 } from "./db.ts";
 import { handle } from "./handler.ts";
+import { d1Counter } from "./usage.ts";
 
 export interface Env {
   DB: D1Database;
@@ -10,6 +11,8 @@ export interface Env {
   MODEL?: string;
   ALLOWED_MODELS?: string;
   WEB_ALLOWED_DOMAINS?: string;
+  /** /api/ask calls per day, Japan time ("0" or unset = no cap) */
+  DAILY_ASK_LIMIT?: string;
 }
 
 const list = (s?: string): string[] | undefined => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : undefined);
@@ -23,6 +26,8 @@ export default {
       model: env.MODEL ?? "claude-sonnet-5-5",
       allowedModels: list(env.ALLOWED_MODELS),
       webDomains: list(env.WEB_ALLOWED_DOMAINS),
+      dailyAskLimit: Math.max(0, Math.floor(Number(env.DAILY_ASK_LIMIT ?? 0))) || 0,
+      counter: d1Counter(env.DB),
       pages: env.PAGES
         ? {
             async get(key) {

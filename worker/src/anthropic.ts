@@ -8,6 +8,7 @@ import type { Db } from "./db.ts";
 import { resolveCitation, toSearchResult, type SourceMeta, type UiCitation } from "./format.ts";
 import { DEFAULT_WEB_DOMAINS, SEARCH_TOOL, SYSTEM_PROMPT } from "./prompt.ts";
 import { searchParents } from "./search.ts";
+import { contentTerms } from "./tokenize.ts";
 
 export interface Usage {
   input_tokens: number;
@@ -34,6 +35,9 @@ export type StreamEvent =
   | { t: "delta"; text: string }
   | { t: "reset" } // drop the answer text streamed so far (it was commentary before a tool call)
   | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string; searched_books: boolean }
+  // the answer could not be completed, but the library still could be searched: show the sections instead of nothing.
+  // Text already streamed stays on screen as an unfinished answer (doctor's decision, 2026-10-24).
+  | { t: "degraded"; message: string; items: SourceCard[] }
   | { t: "error"; message: string };
 
 export interface AskDeps {
@@ -232,8 +236,35 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
     book_searches: 0,
   };
   const registry = new Map<string, SourceMeta>();
+  const cards = new Map<string, SourceCard>();
   const maxTurns = deps.maxTurns ?? 6;
   const maxSearches = deps.maxBookSearches ?? 4;
+
+  /**
+   * Failure path (API error, broken stream, turn limit, refusal). Unless the user cancelled, hand over the sections found
+   * so far, or search the question's content words once more (no LLM involved). With nothing to show, it stays an error.
+   */
+  const degrade = async (message: string): Promise<void> => {
+    if (deps.signal?.aborted) {
+      emit({ t: "error", message });
+      return;
+    }
+    let items = [...cards.values()];
+    if (!items.length) {
+      const terms = contentTerms(input.question);
+      const queries = [terms.length ? terms.join(" ") : input.question.slice(0, 200)];
+      try {
+        const parents = await searchParents(deps.db, queries, { bookIds: input.bookIds });
+        items = parents.map((p) => {
+          const { meta } = toSearchResult(p, queries);
+          return { source: meta.source, parent_id: meta.parent_id, book_id: meta.book_id, title: meta.title, page_label: meta.page_label, flags: meta.flags, queries };
+        });
+      } catch {
+        items = [];
+      }
+    }
+    emit(items.length ? { t: "degraded", message, items } : { t: "error", message });
+  };
 
   const messages: any[] = [];
   for (const h of (input.history ?? []).slice(-8)) {
@@ -298,18 +329,17 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
             }
             const blocks = parents.map((p) => toSearchResult(p, queries));
             for (const { meta } of blocks) registry.set(meta.source, meta);
-            emit({
-              t: "sources",
-              items: blocks.map(({ meta }) => ({
-                source: meta.source,
-                parent_id: meta.parent_id,
-                book_id: meta.book_id,
-                title: meta.title,
-                page_label: meta.page_label,
-                flags: meta.flags,
-                queries,
-              })),
-            });
+            const items: SourceCard[] = blocks.map(({ meta }) => ({
+              source: meta.source,
+              parent_id: meta.parent_id,
+              book_id: meta.book_id,
+              title: meta.title,
+              page_label: meta.page_label,
+              flags: meta.flags,
+              queries,
+            }));
+            for (const it of items) if (!cards.has(it.source)) cards.set(it.source, it);
+            emit({ t: "sources", items });
             results.push({ type: "tool_result", tool_use_id: b.id, content: blocks.map((x) => x.block) });
           } catch (e) {
             results.push({ type: "tool_result", tool_use_id: b.id, is_error: true, content: `検索に失敗しました: ${(e as Error).message}`.slice(0, 300) });
@@ -333,7 +363,7 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
     }
     if (!last) throw new Error("no response");
     if (last.stop_reason === "tool_use" || last.stop_reason === "pause_turn") {
-      emit({ t: "error", message: `検索の往復が上限（${maxTurns}回）に達しても回答が完了しませんでした。質問を絞って再度お試しください。` });
+      await degrade(`検索の往復が上限（${maxTurns}回）に達しても回答が完了しませんでした。質問を絞って再度お試しください。`);
       return;
     }
     const blocks = last.content
@@ -343,11 +373,11 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
         citations: ((b.citations ?? []) as any[]).map((c) => resolveCitation(c, registry)).filter((x): x is UiCitation => !!x),
       }));
     if (last.stop_reason === "refusal") {
-      emit({ t: "error", message: "モデルが回答を拒否しました（stop_reason=refusal）。質問を言い換えてください。" });
+      await degrade("モデルが回答を拒否しました（stop_reason=refusal）。質問を言い換えてください。");
       return;
     }
     emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0 });
   } catch (e) {
-    emit({ t: "error", message: (e as Error).message });
+    await degrade((e as Error).message);
   }
 }

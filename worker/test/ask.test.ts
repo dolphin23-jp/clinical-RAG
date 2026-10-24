@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { runAsk, type StreamEvent } from "../src/anthropic.ts";
 import type { Db } from "../src/db.ts";
 import { handle, type AppDeps } from "../src/handler.ts";
+import { DEFAULT_WEB_DOMAINS, SYSTEM_PROMPT } from "../src/prompt.ts";
+import { d1Counter, jstDay, type AskCounter, type D1Like } from "../src/usage.ts";
 import { buildFixtureDb, openDb } from "./nodeDb.ts";
 
 let db: Db;
@@ -265,10 +268,70 @@ test("API errors surface as a single error event without leaking the key", async
   assert.ok(!JSON.stringify(evs).includes("sk-test-secret"));
 });
 
-test("a model that keeps calling tools is cut off at maxTurns", async () => {
+test("a model that keeps calling tools is cut off at maxTurns; the sections it found are still handed over", async () => {
   const api = mockApi([() => toolUseTurn(["a"], "1"), () => toolUseTurn(["b"], "2")]);
   const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl, maxTurns: 2 }, { question: "q" });
-  assert.equal(evs.at(-1)?.t, "error");
+  const last = evs.at(-1) as Extract<StreamEvent, { t: "degraded" }>;
+  assert.equal(last.t, "degraded");
+  assert.match(last.message, /上限（2回）/);
+  assert.ok(last.items.length >= 1 && last.items.every((i) => i.source.startsWith("medbook://")));
+  assert.ok(!evs.some((e) => e.t === "final"));
+});
+
+// ---------------------------------------------------------------------------------- degraded (T1-3)
+test("degraded: the API fails before any search -> the question's content words are searched (no LLM) and shown", async () => {
+  const api = mockApi([() => new Response(JSON.stringify({ error: { message: "overloaded" } }), { status: 529 })]);
+  const evs = await collect({ db, apiKey: "sk-test-secret", model: "m", fetchImpl: api.fetchImpl }, { question: "ゼルニア値の基準は？" });
+  assert.equal(api.calls.length, 1);
+  const last = evs.at(-1) as Extract<StreamEvent, { t: "degraded" }>;
+  assert.equal(last.t, "degraded");
+  assert.match(last.message, /529.*overloaded/);
+  assert.ok(last.items.length >= 1);
+  assert.ok(last.items.some((i) => /架空症候群/.test(i.title)));
+  assert.deepEqual(last.items[0].queries, ["ゼルニア値 基準"]);
+  assert.ok(!JSON.stringify(evs).includes("sk-test-secret"));
+});
+
+test("degraded: a stream that breaks mid-answer keeps the streamed text and hands over the sections already found", async () => {
+  const broken: Ev[] = [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 9 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "途中までの回答" } }],
+    ["error", { type: "error", error: { type: "overloaded_error", message: "stream broke" } }],
+  ];
+  const api = mockApi([() => toolUseTurn(["架空薬X"]), () => broken]);
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: "架空薬Xの使い方" });
+  const types = evs.map((e) => e.t);
+  assert.ok(types.indexOf("delta") < types.indexOf("degraded"), types.join());
+  assert.equal(evs.filter((e) => e.t === "delta").map((e: any) => e.text).join(""), "途中までの回答");
+  const last = evs.at(-1) as Extract<StreamEvent, { t: "degraded" }>;
+  assert.equal(last.t, "degraded");
+  assert.match(last.message, /stream broke/);
+  assert.deepEqual(last.items[0].queries, ["架空薬X"]); // the sections from the model's own search, not a re-search
+  assert.ok(!types.includes("final"));
+});
+
+test("degraded: a refusal also hands over the sections found", async () => {
+  const refusal: Ev[] = [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 9 } } }],
+    ["message_delta", { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 1 } }],
+    ["message_stop", { type: "message_stop" }],
+  ];
+  const api = mockApi([() => toolUseTurn(["ゼルニア値"]), () => refusal]);
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: "q" });
+  const last = evs.at(-1) as Extract<StreamEvent, { t: "degraded" }>;
+  assert.equal(last.t, "degraded");
+  assert.match(last.message, /refusal/);
+});
+
+test("degraded: a request the user cancelled ends as a plain error, without searching again", async () => {
+  const ctl = new AbortController();
+  ctl.abort();
+  const fetchImpl = (async () => {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }) as typeof fetch;
+  const evs = await collect({ db, apiKey: "k", model: "m", fetchImpl, signal: ctl.signal }, { question: "ゼルニア値の基準は？" });
+  assert.deepEqual(evs.filter((e) => e.t === "degraded" || e.t === "error").map((e) => e.t), ["error"]);
 });
 
 // ---------------------------------------------------------------------------------- HTTP layer
@@ -333,4 +396,135 @@ test("HTTP: /api/search returns retrieval results without calling the LLM", asyn
   assert.equal(called, false);
   assert.equal((await handle(new Request("http://x/api/search", authed({ method: "POST", body: JSON.stringify({ queries: [] }) })), app())).status, 400);
   assert.equal((await handle(new Request("http://x/api/search", { method: "POST", body: "{}" }), app())).status, 401);
+});
+
+// ---------------------------------------------------------------------------------- identifier guard (T1-1)
+const post = (path: string, body: unknown) => new Request(`http://x${path}`, authed({ method: "POST", body: JSON.stringify(body) }));
+const countingFetch = () => {
+  const api = mockApi([() => toolUseTurn(["ゼルニア値"]), (b) => answerTurn(b.messages.at(-1).content[0].content[0].source)]);
+  return api;
+};
+
+test("HTTP guard: an identifier in the question is refused before the model is called; only the kind is returned", async () => {
+  const api = countingFetch();
+  const res = await handle(post("/api/ask", { question: "患者ID 123456 の70代男性、K 6.8" }), app({ fetchImpl: api.fetchImpl }));
+  assert.equal(res.status, 400);
+  const j: any = await res.json();
+  assert.equal(j.code, "possible_identifier");
+  assert.ok(j.labels.includes("ID・MRN の後ろの数字"));
+  assert.ok(!JSON.stringify(j).includes("123456"));
+  assert.equal(api.calls.length, 0);
+});
+
+test("HTTP guard: age band, findings and lab values pass; names and dates are not detected (doctor's decision)", async () => {
+  const api = countingFetch();
+  const q = "70代男性、田中さん。2025-10-24 来院、3日前から倦怠感。K 6.8 mEq/L、Cr 2.1、eGFR 25、心電図でテント状T波";
+  const res = await handle(post("/api/ask", { question: q }), app({ fetchImpl: api.fetchImpl }));
+  assert.equal(res.status, 200);
+  await res.text();
+  assert.equal(api.calls.length, 2);
+});
+
+test("HTTP guard: the user's earlier turns are checked, the model's are not; ack_identifier lets a confirmed question through", async () => {
+  const userHist = [{ role: "user", text: "カルテ番号 12345678 の件" }, { role: "assistant", text: "了解" }];
+  assert.equal((await handle(post("/api/ask", { question: "続き", history: userHist }), app({ fetchImpl: countingFetch().fetchImpl }))).status, 400);
+  const asstHist = [{ role: "user", text: "文献は？" }, { role: "assistant", text: "PMID 12345678 が参考になる" }];
+  const ok = await handle(post("/api/ask", { question: "続き", history: asstHist }), app({ fetchImpl: countingFetch().fetchImpl }));
+  assert.equal(ok.status, 200);
+  await ok.text();
+  const acked = await handle(post("/api/ask", { question: "患者ID 123456", ack_identifier: true }), app({ fetchImpl: countingFetch().fetchImpl }));
+  assert.equal(acked.status, 200);
+  await acked.text();
+  // only the literal boolean counts as a confirmation
+  assert.equal((await handle(post("/api/ask", { question: "患者ID 123456", ack_identifier: "yes" }), app())).status, 400);
+});
+
+test("HTTP guard: /api/search refuses identifier-like queries unless acknowledged", async () => {
+  const res = await handle(post("/api/search", { queries: ["090-1234-5678"] }), app());
+  assert.equal(res.status, 400);
+  assert.equal(((await res.json()) as any).code, "possible_identifier");
+  assert.equal((await handle(post("/api/search", { queries: ["090-1234-5678"], ack_identifier: true }), app())).status, 200);
+});
+
+test("HTTP: /api/search reports the dictionary terms it added", async () => {
+  const j: any = await (await handle(post("/api/search", { queries: ["高K血症 治療"] }), app())).json();
+  assert.ok(j.expanded.synonyms.includes("高カリウム血症") && j.expanded.synonyms.includes("hyperkalemia"));
+  assert.ok(j.expanded.related.includes("カリウム吸着薬"));
+});
+
+// ---------------------------------------------------------------------------------- daily cap (T1-2)
+function memCounter(fail = false) {
+  const days = new Map<string, number>();
+  const counter: AskCounter = {
+    async increment(day) {
+      if (fail) throw new Error("D1 down");
+      days.set(day, (days.get(day) ?? 0) + 1);
+      return days.get(day)!;
+    },
+  };
+  return { counter, days };
+}
+
+test("daily cap: asks over the limit get 429 before the model is called; the day is Japan time", async () => {
+  const { counter, days } = memCounter();
+  const now = () => new Date("2026-10-24T15:30:00Z"); // 00:30 on the 25th in Japan
+  const deps = (api: ReturnType<typeof countingFetch>) => app({ fetchImpl: api.fetchImpl, counter, dailyAskLimit: 2, now });
+  for (let i = 0; i < 2; i++) {
+    const r = await handle(post("/api/ask", { question: "ゼルニア値" }), deps(countingFetch()));
+    assert.equal(r.status, 200);
+    await r.text();
+  }
+  const third = countingFetch();
+  const r3 = await handle(post("/api/ask", { question: "ゼルニア値" }), deps(third));
+  assert.equal(r3.status, 429);
+  const j: any = await r3.json();
+  assert.equal(j.code, "daily_limit");
+  assert.match(j.error, /日本時間の0時/);
+  assert.equal(third.calls.length, 0);
+  assert.deepEqual([...days.keys()], ["2026-10-25"]);
+  assert.equal(jstDay(new Date("2026-10-24T14:59:59Z")), "2026-10-24");
+});
+
+test("daily cap: refused (identifier) and search-only requests are not counted; limit 0 = no cap; counter failure does not block", async () => {
+  const { counter, days } = memCounter();
+  await handle(post("/api/ask", { question: "患者ID 123456" }), app({ counter, dailyAskLimit: 1 }));
+  await handle(post("/api/search", { queries: ["ゼルニア値"] }), app({ counter, dailyAskLimit: 1 }));
+  assert.equal(days.size, 0);
+  const off = await handle(post("/api/ask", { question: "ゼルニア値" }), app({ fetchImpl: countingFetch().fetchImpl, counter, dailyAskLimit: 0 }));
+  assert.equal(off.status, 200);
+  await off.text();
+  assert.equal(days.size, 0);
+  const broken = await handle(post("/api/ask", { question: "ゼルニア値" }), app({ fetchImpl: countingFetch().fetchImpl, counter: memCounter(true).counter, dailyAskLimit: 1 }));
+  assert.equal(broken.status, 200);
+  await broken.text();
+});
+
+test("daily cap: the D1 counter SQL stores only the day and a count, and counts per day", async () => {
+  const d = new DatabaseSync(":memory:");
+  const d1: D1Like = {
+    prepare(sql: string) {
+      const st = d.prepare(sql);
+      return {
+        bind: (...v: unknown[]) => ({ first: async <T>() => (st.get(...(v as any[])) as T) ?? null }),
+        run: async () => st.run(),
+      };
+    },
+  };
+  const c = d1Counter(d1);
+  assert.equal(await c.increment("2026-10-25"), 1);
+  assert.equal(await c.increment("2026-10-25"), 2);
+  assert.equal(await c.increment("2026-10-26"), 1);
+  const cols = (d.prepare("PRAGMA table_info(usage_daily)").all() as any[]).map((r) => r.name);
+  assert.deepEqual(cols, ["day", "asks"]);
+});
+
+// ---------------------------------------------------------------------------------- prompt (clinical-use 2.5-2.7)
+test("system prompt keeps the clinical-reference rules and the specialty", () => {
+  assert.match(SYSTEM_PROMPT, /腎臓内科を志し、内科一般と救急も診る/);
+  assert.match(SYSTEM_PROMPT, /施設プロトコルは別途確認/);
+  assert.match(SYSTEM_PROMPT, /要検算/);
+  assert.match(SYSTEM_PROMPT, /年齢・検査値などの症例固有の値を入れず/);
+  assert.match(SYSTEM_PROMPT, /最終判断は質問者自身/);
+  assert.doesNotMatch(SYSTEM_PROMPT, /投与速度（mL\/hr）/); // the old instruction asked the model to convert to mL/hr
+  for (const d of ["kdigo.org", "pmda.go.jp", "jaam.jp", "naika.or.jp"]) assert.ok(DEFAULT_WEB_DOMAINS.includes(d), d);
 });

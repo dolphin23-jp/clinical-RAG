@@ -65,11 +65,20 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 /* ---- header ---- */
 .bar {
   position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: calc(env(safe-area-inset-top) + 4px) calc(var(--gutter) - 8px) 4px var(--gutter);
+  padding-top: env(safe-area-inset-top);
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
+}
+.bar-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px calc(var(--gutter) - 8px) 4px var(--gutter);
+}
+/* always-on scope line (docs/clinical-use.md 2.6): header and every dialog, no way to hide it */
+.band {
+  margin: 0; padding: 3px var(--gutter); flex: none;
+  font-size: 12px; line-height: 1.5; text-align: center; letter-spacing: 0.02em;
+  color: var(--warn-ink); background: var(--warn-bg);
 }
 .bar h1 { font-size: 17px; margin: 0; letter-spacing: 0.04em; }
 .bar-actions { display: flex; }
@@ -234,3 +243,4 @@ legend { padding: 0; font-size: 13.5px; font-weight: 600; }
 .msg { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 14px; }
 .msg.ok { background: var(--accent-soft); color: var(--accent); }
 .msg.err { background: var(--danger-bg); color: var(--danger); }
+.guard-list { margin: 8px 0; padding-left: 1.2em; color: var(--danger); font-weight: 600; }

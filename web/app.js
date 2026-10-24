@@ -1,3 +1,4 @@
+import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
 
 // ---------------------------------------------------------------- config
@@ -57,7 +58,7 @@ const S = {
     }
   })(),
   books: [],
-  history: [], // [{q, a}] plain text only; never persisted
+  history: [], // [{q, a, ack}] plain text only; never persisted
   busy: false,
   ctrl: null,
 };
@@ -244,9 +245,35 @@ $("#composer").addEventListener("submit", (e) => {
   const q = qEl.value.trim();
   if (!q) return;
   if (!S.token) return openSettings("最初にアクセストークンを入力してください。");
+  const hits = scanIdentifiers(q);
+  if (hits.length) return openGuard(q, hits);
+  send(q, false);
+});
+
+function send(q, ack) {
   qEl.value = "";
   autosize();
-  ask(q);
+  ask(q, ack);
+}
+
+// ---------------------------------------------------------------- identifier check before sending (docs/clinical-use.md 2.3)
+// The input is never edited or stored; the doctor either fixes it or confirms. The Worker runs the same check.
+const guard = $("#guard");
+let guardQ = "";
+let guardSent = false;
+function openGuard(q, hits) {
+  guardQ = q;
+  guardSent = false;
+  $("#guard-list").replaceChildren(...hits.map((h) => el("li", null, h.label)));
+  openDialog(guard);
+}
+$("#guard-send").addEventListener("click", () => {
+  guardSent = true;
+  guard.close();
+  send(guardQ, true);
+});
+guard.addEventListener("close", () => {
+  if (!guardSent) qEl.focus();
 });
 $("#btn-new").addEventListener("click", () => {
   if (S.busy) S.ctrl?.abort();
@@ -408,17 +435,7 @@ function finish(turn, ev) {
     }
   }
 
-  const used = new Set(bookCites.map((c) => c.parent_id));
-  if (turn.sources.size) {
-    turn.hits.hidden = false;
-    turn.hits.append(el("summary", null, `検索でヒットした節（${turn.sources.size}）`));
-    for (const s of turn.sources.values()) {
-      const b = el("button", "hit" + (used.has(s.parent_id) ? " used" : ""), `${used.has(s.parent_id) ? "引用 · " : ""}${cleanTitle(s.title)}`);
-      b.type = "button";
-      b.dataset.hit = s.source;
-      turn.hits.append(b);
-    }
-  }
+  renderHits(turn, new Set(bookCites.map((c) => c.parent_id)));
 
   const copy = el("button", null, "回答をコピー");
   copy.type = "button";
@@ -439,7 +456,35 @@ function finish(turn, ev) {
     setTimeout(() => (copy.textContent = "回答をコピー"), 1800);
   });
   turn.foot.append(copy, el("span", null, usageText(ev)));
-  S.history.push({ q: turn.question, a: turn.answer });
+  S.history.push({ q: turn.question, a: turn.answer, ack: turn.ack });
+}
+
+function renderHits(turn, used, open = false) {
+  if (!turn.sources.size) return;
+  turn.hits.hidden = false;
+  turn.hits.open = open;
+  turn.hits.replaceChildren(el("summary", null, `検索でヒットした節（${turn.sources.size}）`));
+  for (const s of turn.sources.values()) {
+    const b = el("button", "hit" + (used.has(s.parent_id) ? " used" : ""), `${used.has(s.parent_id) ? "引用 · " : ""}${cleanTitle(s.title)}`);
+    b.type = "button";
+    b.dataset.hit = s.source;
+    turn.hits.append(b);
+  }
+}
+
+/** The answer failed, but the library search did not: show what was found (and what was already written). */
+function degrade(turn, ev) {
+  turn.done = true;
+  turn.status.hidden = true;
+  notice(turn, ev.message, "err");
+  if (turn.raw) {
+    turn.body.replaceChildren(renderMarkdown(turn.raw));
+    notice(turn, "回答は途中で止まりました。ここまでの文には書籍の引用が付いていません。下の節で確かめてください。");
+  }
+  notice(turn, "回答の生成に失敗したため、書籍の検索で見つかった節を示します（モデルの回答ではありません）。");
+  for (const s of ev.items) if (!turn.sources.has(s.source)) turn.sources.set(s.source, s);
+  renderHits(turn, new Set(), true);
+  if (turn.raw) S.history.push({ q: turn.question, a: turn.raw, ack: turn.ack });
 }
 
 /** Titles sent to the model end with ［flag］ tags; the UI shows them as badges instead. */
@@ -463,17 +508,21 @@ function usageText(ev) {
   return `書籍検索${u.book_searches}回${u.web_search_requests ? `・Web検索${u.web_search_requests}回` : ""}・入力${u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens}tok・出力${u.output_tokens}tok・概算 $${usd.toFixed(3)}（約${yen}円）`;
 }
 
-async function ask(question) {
+async function ask(question, ack = false) {
   empty.hidden = true;
   const turn = makeTurn(question);
+  turn.ack = ack;
   $("#thread").append(turn.root);
   turn.root.scrollIntoView({ block: "start", behavior: "smooth" });
   setBusy(true);
   S.ctrl = new AbortController();
 
   const history = [];
-  for (const h of S.history.slice(-4)) history.push({ role: "user", text: h.q }, { role: "assistant", text: h.a.slice(0, 6000) });
-  const payload = { question, history, web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}) };
+  const recent = S.history.slice(-4);
+  for (const h of recent) history.push({ role: "user", text: h.q }, { role: "assistant", text: h.a.slice(0, 6000) });
+  // an earlier question the doctor confirmed is re-sent as history, so the confirmation travels with it
+  const acked = ack || recent.some((h) => h.ack);
+  const payload = { question, history, web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
 
   let finished = false;
   try {
@@ -502,6 +551,10 @@ async function ask(question) {
         case "final":
           finished = true;
           finish(turn, ev);
+          break;
+        case "degraded":
+          finished = true;
+          degrade(turn, ev);
           break;
         case "error":
           finished = true;

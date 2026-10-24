@@ -79,6 +79,16 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
     ]);
   }
   const A = results[0];
+  const first = typeof body.messages[0]?.content === "string" ? body.messages[0].content : "";
+  if (/__midbreak__/.test(first)) {
+    // the answer starts streaming, then the upstream stream breaks (exercises the degraded path with partial text)
+    return sseBody([
+      ms({ input_tokens: 4200, cache_read_input_tokens: 2100 }),
+      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "途中まで書いた回答の文。" } }],
+      ["error", { type: "error", error: { type: "overloaded_error", message: "stream broke (fake)" } }],
+    ]);
+  }
   const cite = (r: any, s: number, e: number) => ({ type: "search_result_location", source: r.source, title: r.title, cited_text: r.content.slice(s, e).map((b: any) => b.text).join("\n"), search_result_index: 0, start_block_index: s, end_block_index: e });
   const txt = (i: number, t: string) => [["content_block_start", { type: "content_block_start", index: i, content_block: { type: "text", text: "" } }], ...t.match(/[\s\S]{1,9}/g)!.map((p) => ["content_block_delta", { type: "content_block_delta", index: i, delta: { type: "text_delta", text: p } }] as Ev)] as Ev[];
   const stop = (i: number): Ev => ["content_block_stop", { type: "content_block_stop", index: i }];

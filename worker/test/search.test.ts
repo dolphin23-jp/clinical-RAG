@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { before, test } from "node:test";
 import type { Db } from "../src/db.ts";
 import { rrf, searchChunkIds, searchParents } from "../src/search.ts";
+import { DICTIONARY, expandQueries, MAX_RELATED, MAX_SYNONYMS } from "../src/synonyms.ts";
 import { buildFixtureDb, openDb } from "./nodeDb.ts";
 
 let db: Db;
@@ -105,4 +106,81 @@ test("search degrades to the bigram index when the trigram table is unusable", a
   };
   const r = await searchParents(broken, ["腎炎"]);
   assert.ok(r.length >= 1);
+});
+
+// ---------------------------------------------------------------------------------- dictionary expansion (T1-9)
+test("expandQueries: other spellings and related words of matched groups; terms already in the query are not repeated", () => {
+  const e = expandQueries(["高K血症 治療"]);
+  assert.ok(e.synonyms.includes("高カリウム血症") && e.synonyms.includes("hyperkalemia"));
+  assert.ok(!e.synonyms.includes("高K血症"));
+  assert.ok(e.related.includes("カリウム吸着薬") && e.related.includes("透析"));
+  // abbreviations work inside a Japanese sentence, as whole words only
+  assert.ok(expandQueries(["AKIの定義と病期分類"]).synonyms.includes("急性腎障害"));
+  assert.deepEqual(expandQueries(["HDLコレステロール"]).synonyms, []);
+  assert.deepEqual(expandQueries(["CRP 上昇"]).synonyms, []);
+});
+
+test("expandQueries: ambiguous abbreviations lead to the full name but are never added to a search", () => {
+  assert.ok(expandQueries(["PE を疑う"]).synonyms.includes("肺塞栓症"));
+  const fromFull = expandQueries(["肺塞栓症"]);
+  assert.ok(!fromFull.synonyms.includes("PE") && !fromFull.synonyms.includes("PTE"));
+  assert.ok(!expandQueries(["血液透析"]).synonyms.includes("HD"));
+});
+
+test("expandQueries: caps hold and nothing fires on unrelated words", () => {
+  const all = expandQueries([DICTIONARY.map((g) => g.terms[0]).join(" ")]);
+  assert.ok(all.synonyms.length <= MAX_SYNONYMS && all.related.length <= MAX_RELATED);
+  assert.deepEqual(expandQueries(["ゼルニア値"]), { synonyms: [], related: [] });
+});
+
+test("dictionary content: no numbers (doses, thresholds) and no duplicate spellings across groups", () => {
+  const seen = new Map<string, number>();
+  DICTIONARY.forEach((g, i) => {
+    for (const t of [...g.terms, ...(g.abbr ?? []), ...(g.related ?? [])]) {
+      assert.doesNotMatch(t, /\d+\s*(mg|g|ml|mL|mEq|mmol|%|単位|倍)/, t);
+    }
+    for (const t of [...g.terms, ...(g.abbr ?? [])]) {
+      const k = t.normalize("NFKC").toLowerCase();
+      assert.ok(!seen.has(k), `"${t}" is in groups ${seen.get(k)} and ${i}`);
+      seen.set(k, i);
+    }
+  });
+});
+
+test("search: a synonym finds a section the literal word cannot; an empty dictionary turns expansion off", async () => {
+  const dict = [{ terms: ["ゼルニア値", "zernia level"] }];
+  assert.deepEqual(await searchParents(db, ["zernia level"], { dictionary: [] }), []);
+  const r = await searchParents(db, ["zernia level"], { dictionary: dict });
+  assert.ok(r.length >= 1 && r.every((p) => p.text.includes("ゼルニア値")));
+});
+
+test("search: related words reach the section that discusses the condition under another heading", async () => {
+  const dict = [{ terms: ["架空病Q"], related: ["架空薬X"] }];
+  const r = await searchParents(db, ["架空病Q"], { dictionary: dict });
+  assert.ok(r.some((p) => p.path.includes("薬物治療")));
+});
+
+test("search: expansion never removes a literal hit, and adds at most 4 D1 queries", async () => {
+  let n = 0;
+  const counting: Db = { all: (sql: string, ...p: unknown[]) => (n++, db.all(sql, ...p)) };
+  const plain = await searchParents(counting, ["腎炎"], { dictionary: [] });
+  const nPlain = n;
+  n = 0;
+  const dict = [{ terms: ["腎炎", "nephritis"], related: ["架空薬X", "ゼルニア値"] }];
+  const expanded = await searchParents(counting, ["腎炎"], { dictionary: dict });
+  assert.ok(n - nPlain <= 4, `${n} vs ${nPlain}`);
+  const ids = new Set(expanded.map((p) => p.parent_id));
+  assert.ok(plain.length >= 1);
+  for (const p of plain) assert.ok(ids.has(p.parent_id), p.path); // the fixture has 5 parents, so nothing is pushed out by the cap
+  assert.equal(expanded[0].parent_id, plain[0].parent_id); // the literal best hit stays first
+});
+
+test("search: dictionary hits do not suppress the content-word retry of a sentence-like query", async () => {
+  const params: string[] = [];
+  const spy: Db = { all: (sql: string, ...p: unknown[]) => (params.push(...p.map(String)), db.all(sql, ...p)) };
+  // related words alone would already find 3+ chunks; the retry for "ゼルニア値" must still run
+  const dict = [{ terms: ["ゼルニア値", "zernia"], related: ["架空薬X", "腎炎", "eGFR", "架空症候群"] }];
+  const r = await searchParents(spy, ["ゼルニア値が基準の半分以下になる状態とは何ですか"], { dictionary: dict });
+  assert.ok(params.includes('"ゼル ルニ ニア ア値"') || params.some((x) => x.includes('"ゼル ルニ ニア ア値"')), "content-word retry ran");
+  assert.ok(r.some((p) => p.text.includes("基準の半分以下")));
 });
