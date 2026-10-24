@@ -112,6 +112,9 @@ export function convStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
       if (hits.length) throw new ConvInputError(`患者を特定できる情報の可能性があるため、この質問は保存しません（${hits.map((h) => h.label).join("、")}）`, "possible_identifier");
       const p = t.payload as any;
       if (!p || typeof p !== "object" || Array.isArray(p) || (p.kind !== "final" && p.kind !== "degraded")) throw new ConvInputError('payload must be an object with kind "final" or "degraded"');
+      // a turn made in case mode carries the case it was asked with (payload.case): its text is checked like the question
+      const caseHits = scanAll(caseStrings(p.case));
+      if (caseHits.length) throw new ConvInputError(`患者を特定できる情報の可能性があるため、この症例の入力は保存しません（${caseHits.map((h) => h.label).join("、")}）`, "possible_identifier");
       const payload = JSON.stringify(p);
       if (payload.length > MAX_PAYLOAD) throw new ConvInputError(`payload is longer than ${MAX_PAYLOAD} characters`);
 
@@ -148,6 +151,12 @@ export function convStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
       await run("DELETE FROM conversations");
     },
   };
+}
+
+/** The string values of a saved case (one level: the case is a flat object of strings). */
+function caseStrings(c: unknown): string[] {
+  if (!c || typeof c !== "object" || Array.isArray(c)) return [];
+  return Object.values(c as Record<string, unknown>).filter((v): v is string => typeof v === "string");
 }
 
 function safeParse(s: unknown): unknown {

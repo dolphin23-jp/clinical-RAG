@@ -37,6 +37,7 @@ Cloudflare Worker ──────────────►  Anthropic Messa
 | 検索語の拡張 | 辞書（`worker/src/synonyms.ts`）で、同義語・略語・表記ゆれと関連語を低い重みで足す。各1本の OR 検索にまとめる | 語の一致では「高K血症」で「hyperkalemia」や「透析」の節に当たらないため。D1 の問い合わせの数を増やしすぎないため |
 | 入力のガード | 画面と Worker の両方で、識別情報らしき入力（8桁以上の数字・電話番号・ID/MRN・メール・識別の語）を検査し、確認なしには送らない。氏名と日付は検出しない | 実臨床の参考利用で、氏名・ID を入れない約束を道具の側でも守るため（`docs/clinical-use.md`） |
 | 会話の保存 | 1往復ごとにサーバー（D1）に保存し、「会話」の画面で開き直し・削除・質問へのジャンプ。識別情報の確認を通した質問は保存しない。30日で自動的に消える（`CONVERSATION_RETENTION_DAYS`） | アプリの再起動（iPad）や再読み込みで会話が消えるため。医師の決定（`docs/clinical-use.md` の 1d） |
+| 症例モード | ヘッダーの「症例」に年代・性別・場面・主訴と経過・バイタル・所見・既往を入れて固定し（画面の上に1行で残る）、「アセスメントとプラン（草案）」「鑑別と反証」「見落としチェック」「コンサルト・医師コールの基準」を作る。固定の見出し、引用のない文には出どころの印（`[推論]` `[標準・出典未確認]` `[施設依存]`）。自分のアセスメントを入れると「先生の案との差」（正誤・点数なし）。症例の全欄に識別情報のガード。症例は会話と一緒に保存される | 症例を前に論点・根拠・反証を整理するため。医師の決定（`docs/clinical-use.md` の 1d の②）。草案であり、最終判断は医師 |
 | 数値の突き合わせ・薄い表示 | 回答中の数値を、検索結果の本文と機械で突き合わせ（引用の中／検索結果の中／どこにもない）、書籍の引用がない文を薄く表示する | 用量の誤りを、モデルの自己申告の印だけに頼らず見つけるため。判定ではなく注意 |
 | 失敗時の振る舞い | 回答の生成が失敗しても、見つかった節（なければ質問の内容語で検索し直した節）を出す。途中までの回答は残す | 回答が出ないときも、書籍を引ける状態を保つため |
 
@@ -133,7 +134,7 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（95件）
+cd worker && node --test test/*.test.ts            # TS テスト（111件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
@@ -142,6 +143,7 @@ python3 tests/e2e/ui_smoke.py http://localhost:8787 /tmp/ui     # 要 playwright
 python3 tests/e2e/ui_clinical.py http://localhost:8787 /tmp/uc  # 帯・入力ガード・縮退（合成の書籍で動く）
 python3 tests/e2e/ui_tools.py http://localhost:8787 /tmp/ut     # 測定・評価の画面（iPad 幅）
 python3 tests/e2e/ui_conv.py http://localhost:8787 /tmp/uv      # 会話の保存・復元・削除、数値の突き合わせ、薄い表示
+python3 tests/e2e/ui_case.py http://localhost:8787 /tmp/ucase   # 症例モード（固定・4つの依頼・識別情報・保存と復元）
 # 実 D1 相当（workerd）
 cd worker && printf 'ANTHROPIC_API_KEY=x\nAPP_TOKEN=local-dev-token-0123456789\n' > .dev.vars
 npx wrangler d1 execute medbook --local --file ../d1/001_data.sql   # 000 → 001 → 999 の順

@@ -51,7 +51,9 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
   const question: string = typeof body.messages.at(-1).content === "string" ? body.messages.at(-1).content : "";
   if (!toolResult) {
     if (/__apierror__/.test(question)) return new Response(JSON.stringify({ error: { message: "overloaded (fake)" } }), { status: 529 });
-    const q = [question.replace(/\s+/g, " ").slice(0, 40)];
+    // case mode: the final user message starts with the typed case, and the request itself is only a button label
+    const caseLine = /- 主訴と経過: ([^\n]*)/.exec(question)?.[1];
+    const q = [(caseLine ?? question).replace(/\s+/g, " ").slice(0, 40)];
     const json = JSON.stringify({ queries: q });
     return sseBody([
       ms({ input_tokens: 700, cache_creation_input_tokens: 2100, cache_read_input_tokens: 0 }),
@@ -106,6 +108,27 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
     return sseBody(out, 8);
   }
   const evs: Ev[] = [ms({ input_tokens: 4200, cache_read_input_tokens: 2100 })];
+  // case mode: the second system block names the mode and lists its headings; answer with one cited line and tagged uncited lines per heading
+  const sys2: string = body.system?.[1]?.text ?? "";
+  const modeLabel = /この依頼の型: ([^\n]+)/.exec(sys2)?.[1];
+  if (modeLabel && modeLabel !== "症例を踏まえた質問") {
+    const heads = [...sys2.matchAll(/^## (.+)$/gm)].map((m) => m[1]).filter((h) => !h.startsWith("この依頼の型") && !h.startsWith("症例が添えられているとき"));
+    let k = 0;
+    heads.forEach((h, i) => {
+      evs.push(...txt(k, `## ${h}\n\n`), stop(k));
+      k++;
+      if (i === 0) {
+        evs.push(...txt(k, "- 検索結果の記載に基づく要点（入力の Cr 2.4 mg/dL を踏まえる）。"), cd(k, cite(A, 1, 2)), stop(k));
+        k++;
+        evs.push(...txt(k, "\n- 採用薬の選択は施設の運用による。 [施設依存]\n"), stop(k));
+        k++;
+      }
+      evs.push(...txt(k, `\n- ${h}について、この症例の入力からの整理。 [推論]\n- 標準的な初期対応として確立している内容。 [標準・出典未確認]\n\n`), stop(k));
+      k++;
+    });
+    evs.push(md("end_turn", 300), ["message_stop", { type: "message_stop" }]);
+    return sseBody(evs, 6);
+  }
   evs.push(...txt(0, "## 要点\n\n**検索結果の冒頭節**を根拠に整理します。\n\n"), stop(0));
   evs.push(...txt(1, "- 第一に、この節の記載内容を要約する。"), cd(1, cite(A, 1, 2)), stop(1));
   evs.push(...txt(2, "\n- 第二に、別の観点の補足（**数値**は原本確認）。"), cd(2, cite(A, 2, 3)), stop(2));

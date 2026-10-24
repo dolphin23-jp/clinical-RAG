@@ -104,6 +104,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .fine { font-size: 12.5px; color: var(--muted); margin: 20px 0 0; }
 
 .turn { margin-top: 22px; scroll-margin-top: 64px; }
+body.has-case .turn { scroll-margin-top: 112px; }
 .q {
   background: var(--surface-2); border-radius: 14px; padding: 10px 14px;
   white-space: pre-wrap; font-size: 15.5px; line-height: 1.7;
@@ -285,3 +286,30 @@ legend { padding: 0; font-size: 13.5px; font-weight: 600; }
 input[type="number"].n-input { width: 72px; min-height: 44px; padding: 0 8px; font-size: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .btn-row .help { align-self: center; margin: 0; }
 .eval-results { margin-top: 12px; }
+
+/* ---- case mode (web/case.js; docs/enhancement-plan.md 7.2) ---- */
+.casebar { display: flex; align-items: center; gap: 4px; padding: 0 calc(var(--gutter) - 6px) 0 var(--gutter); border-top: 1px solid var(--line); font-size: 13px; }
+.casebar-open { flex: 1; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 8px; text-align: left; background: none; border: 0; padding: 0; color: var(--ink); }
+.casebar-tag { flex: none; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); }
+.casebar-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.casebar.detached .casebar-text { opacity: 0.5; }
+.casebar-attach { flex: none; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 6px; color: var(--muted); }
+.casebar-attach input { width: 20px; height: 20px; accent-color: var(--accent); }
+.chips.modes { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+.chip.mode { flex: none; color: var(--ink); border-color: var(--accent); }
+.chip.mode:disabled { opacity: 0.45; }
+.case-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.case-choice select { width: 100%; }
+textarea.case-text { display: block; width: 100%; max-height: 36dvh; resize: vertical; }
+.draftmark { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 12.5px; line-height: 1.6; }
+.casebox { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; font-size: 13px; }
+.casebox summary { min-height: 40px; display: flex; align-items: center; color: var(--muted); cursor: pointer; }
+.casebox dl { margin: 0 0 8px; }
+.casebox dt { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.casebox dd { margin: 0; white-space: pre-wrap; line-height: 1.6; }
+details.sec { border-top: 1px solid var(--line); margin-top: 10px; }
+details.sec > summary { min-height: 44px; display: flex; align-items: center; font-weight: 600; font-size: 1.05em; cursor: pointer; }
+.src-tag { display: inline-block; margin: 0 2px; padding: 0 7px; border-radius: 999px; font-size: 11px; line-height: 1.7; font-weight: 600; background: var(--surface-2); color: var(--muted); vertical-align: baseline; }
+.src-tag[data-tag="標準・出典未確認"] { background: var(--warn-bg); color: var(--warn-ink); }
+.src-tag[data-tag="施設依存"] { background: var(--aid-bg); color: var(--aid-ink); }
+#case-warn { position: sticky; top: 0; z-index: 1; margin-top: 0; }

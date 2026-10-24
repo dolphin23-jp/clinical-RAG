@@ -22,6 +22,9 @@
   <div class="bar-row">
   <h1>医書検索</h1>
   <div class="bar-actions">
+    <button type="button" id="btn-case" class="icon-btn" aria-label="症例">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h8l3 3v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M9 12h6M12 9v6"/></svg>
+    </button>
     <button type="button" id="btn-convs" class="icon-btn" aria-label="会話の一覧">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 11h7M8.5 14h4"/></svg>
     </button>
@@ -36,6 +39,10 @@
     </button>
   </div>
   </div>
+  <div id="casebar" class="casebar" hidden>
+    <button type="button" id="casebar-open" class="casebar-open" aria-label="症例を開く"><span class="casebar-tag">症例</span><span id="casebar-text" class="casebar-text"></span></button>
+    <label class="casebar-attach"><input type="checkbox" id="casebar-attach" checked> <span>質問に付ける</span></label>
+  </div>
 </header>
 
 <main id="thread">
@@ -47,6 +54,7 @@
       <li>「Web検索」をオンにすると、書籍に無い点をガイドライン等で補います。</li>
       <li>用量・閾値など数値は、必ず原本の頁で再確認してください。</li>
       <li>施設プロトコルは入っていません。施設の運用は別途確認してください。</li>
+      <li>ヘッダーの「症例」に年代・所見・検査値を入れると、アセスメントとプランの草案、鑑別と反証、見落としチェック、コンサルトの基準を作れます（草案です。最終判断は医師）。</li>
     </ul>
     <p class="try-title">例</p>
     <div class="examples" id="examples"></div>
@@ -55,6 +63,7 @@
 </main>
 
 <form id="composer" autocomplete="off">
+  <div id="case-modes" class="chips modes" role="group" aria-label="症例への依頼" hidden></div>
   <div class="chips">
     <button type="button" id="chip-web" class="chip" aria-pressed="false">Web検索</button>
     <button type="button" id="chip-books" class="chip">書籍: すべて</button>
@@ -111,6 +120,27 @@
     <div class="btn-row">
       <button type="button" id="btn-save" class="btn primary">保存して接続確認</button>
       <button type="button" id="btn-forget" class="btn">トークンを消去</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="case" aria-labelledby="case-title">
+  <p class="band" role="note">参考情報・患者を特定する情報は入れない・最終判断は医師</p>
+  <div class="sheet-head">
+    <h2 id="case-title">症例</h2>
+    <button type="button" class="icon-btn" data-close aria-label="閉じる">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sheet-body">
+    <p class="help">入れてよいのは、年代・主要所見・検査値の数値までです。氏名・ID・生年月日・住所・施設名は入れません。日付は「3日前から」のように経過で書き、稀な病名と地域・職業などの組み合わせは一般化してください。</p>
+    <p class="help">固定すると、画面の上に1行で残り、質問のたびに自動で付きます。質問を送ると、会話と一緒にサーバーに保存されます（一定期間で自動的に消え、画面から消せます。識別情報の確認を通した質問は保存されません）。出力は草案です。</p>
+    <div id="case-warn" class="notice err" role="alert" hidden></div>
+    <p id="case-msg" class="msg err" hidden></p>
+    <div id="case-fields"></div>
+    <div class="btn-row">
+      <button type="button" id="case-pin" class="btn primary">この症例を固定する</button>
+      <button type="button" id="case-clear" class="btn">症例を外す</button>
     </div>
   </div>
 </dialog>
