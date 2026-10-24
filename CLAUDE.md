@@ -27,6 +27,7 @@
 - 数値の突き合わせ（`worker/src/numcheck.ts`。`final.numbers`）と、引用のない文の薄い表示（`web/answer-marks.js`。書籍の引用が1つもない回答では付けない）は、判定ではなく注意として出す。数値の抽出は `numsample.ts` と共通。医師が入力した数値（質問・症例・履歴）は突き合わせの対象にしない
 - 会話の画面（`web/conv.js`）: 保存・復元・一覧・削除。復元した往復は保存し直さない。`tests/e2e/ui_conv.py`
 - 症例モード（`worker/src/casemode.ts`・`web/case-model.js`・`web/case.js`。医師の決定 1d の②。`docs/enhancement-plan.md` の 7.2）: 症例は**医師が入力した事実だけ**で、未入力の欄は「（未入力）」のまま渡す（陰性にしない）。識別情報のガードは、質問だけでなく症例の**自由記述のすべての欄**に、画面（入力中の警告と送信前の確認）とサーバー（`/api/ask` の入口。保存の入口 `convstore.ts` も `payload.case` を見る）の両方でかける。症例は、タブのメモリと、会話の往復に付けた保存（`payload.case`）にだけ置く（ブラウザの保存領域には置かない。テストが検査する）。「新しい会話」は固定した症例を外す。モードごとの指示と固定の見出しは `worker/src/prompt.ts` の1か所（`CASE_RULES`・`MODE_HEADINGS`）。症例は最後の質問にだけ付け、履歴には入れない。出力は草案で、画面に「草案・最終判断は医師」を出し、引用のない文には `[推論]` `[標準・出典未確認]` `[施設依存]` の印を付けさせる。**「先生の案との差」は、医師が自分のアセスメントを入力したときだけ**求め、違いを並べるだけで、正誤・点数・評価は付けない。選択肢・上限・モードの名前は `casemode.ts` と `web/case-model.js` が双子（`worker/test/casemode.test.ts` が等しいことを検査）。`tests/e2e/ui_case.py`
+- カルテ記載の下書き（`web/note-assemble.js`・`web/note-ui.js`・`web/note-types.js`。医師の決定 1d の③。`docs/enhancement-plan.md` の 7.3）: **型は clinical-modules の `note-types/*.toml` から `scripts/import_note_types.py` で取り込む**（欄の名前・順序・必須か条件つきか・版だけ。`sources` や臨床の内容は取り込まない。手で写さない。取り込んだ Modules のコミットを記録する。`tests/test_note_types.py`）。Modules 側の運用（訓練）は変えない。**組み立ては決定論で、AI を使わない**。入るのは、症例の入力と、**医師が「採用」した草案の項目だけ**（採用は、アセスメントとプランの草案の、問題リスト・各問題の評価・初期プラン・コンサルト・医師コールの基準の項目だけ。確認すべき数値・書籍に見つからなかった点・先生の案との差は、草案自身の節で、記載に入れない）。未入力の必須欄は「（未入力）」のまま、条件つきで中身のない欄は出さない（作文で埋めない）。**日付・患者ID・氏名は空欄**（`［日付］［患者ID］［氏名］`）。草案の計画は「予定・検討」と明示し、実施済みの欄に入れない。採用した項目の「AI草案」の印と出どころの印は、コピーのとき別々に外せる（数値の【出典未確認・要確認】は常に残る）。入れる欄のない採用は、黙って捨てず画面に出す。記載の画面は**読み取り専用で、送信・保存・書き出し・印刷・共有をしない**（コピーだけ。採用の選びはタブのメモリだけ）。Worker に記載の API は作らない。`worker/test/note.test.ts`・`tests/e2e/ui_note.py`
 - 「測定・評価」の画面（`web/tools.js`）: 数値の作業表の判定は端末の中だけ（`mb.numeric.v1`）。数値の抽出は `scripts/sample_numeric.py` と `worker/src/numsample.ts` が双子（`tests/vectors/numeric_expr.json`）、集計は Python と `web/eval-tools.js` が双子（`tests/vectors/numeric_report.json`）。`tests/e2e/ui_tools.py`
 
 ## 数値と出典
@@ -43,6 +44,6 @@
 
 ## 変更の流れ
 
-- 手元で通す: `cd worker && node --test test/*.test.ts` と `npx tsc --noEmit`、`python3 -m unittest discover -s tests -p 'test_*.py'`。画面を変えたときは `tests/e2e/ui_clinical.py`・`ui_tools.py`・`ui_conv.py`・`ui_case.py`（合成の書籍で動く。README の 5）
+- 手元で通す: `cd worker && node --test test/*.test.ts` と `npx tsc --noEmit`、`python3 -m unittest discover -s tests -p 'test_*.py'`。画面を変えたときは `tests/e2e/ui_clinical.py`・`ui_tools.py`・`ui_conv.py`・`ui_case.py`・`ui_note.py`（合成の書籍で動く。README の 5）
 - CI と Cloudflare のビルドの通知は見ない・対応しない（clinical-modules と同じ運用。2026-10-17 の医師の判断）。代わりに、上のテストを手元で通してからPRにする
 - 振る舞いを変える変更は、同じ変更の中にテストを足す。入力のガード、書き込みの一覧、プロンプトの必須の指示は、テストで固定する

@@ -123,6 +123,10 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
         evs.push(...txt(k, "\n- 採用薬の選択は施設の運用による。 [施設依存]\n"), stop(k));
         k++;
       }
+      if (i === 1) {
+        evs.push(...txt(k, "\n| 問題 | 反証 |\n|---|---|\n| 急性腎障害 | 尿量が回復すれば成り立たない |\n"), stop(k));
+        k++;
+      }
       evs.push(...txt(k, `\n- ${h}について、この症例の入力からの整理。 [推論]\n- 標準的な初期対応として確立している内容。 [標準・出典未確認]\n\n`), stop(k));
       k++;
     });

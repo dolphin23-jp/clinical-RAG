@@ -41,6 +41,7 @@
   </div>
   <div id="casebar" class="casebar" hidden>
     <button type="button" id="casebar-open" class="casebar-open" aria-label="症例を開く"><span class="casebar-tag">症例</span><span id="casebar-text" class="casebar-text"></span></button>
+    <button type="button" id="casebar-note" class="casebar-note">記載</button>
     <label class="casebar-attach"><input type="checkbox" id="casebar-attach" checked> <span>質問に付ける</span></label>
   </div>
 </header>
@@ -142,6 +143,29 @@
       <button type="button" id="case-pin" class="btn primary">この症例を固定する</button>
       <button type="button" id="case-clear" class="btn">症例を外す</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="note" aria-labelledby="note-title">
+  <p class="band" role="note">参考情報・患者を特定する情報は入れない・最終判断は医師</p>
+  <div class="sheet-head">
+    <h2 id="note-title">記載の下書き（試作）</h2>
+    <button type="button" class="icon-btn" data-close aria-label="閉じる">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sheet-body">
+    <p class="help">入力した症例の事実と、あなたが「採用」した草案の項目だけを、記載の型の欄に並べます（AI は使いません）。未入力の必須欄は「（未入力）」のまま、日付・患者ID・氏名は空欄です。実際のカルテに貼るのは先生で、貼る前に必ず確認・修正してください。この画面に保存・書き出し・印刷・共有はありません。</p>
+    <label class="field" for="note-type">記載の型</label>
+    <select id="note-type"></select>
+    <label class="check"><input id="note-opt-ai" type="checkbox" checked> <span>採用した項目に <b id="note-opt-ai-name"></b> の印を付ける</span></label>
+    <label class="check"><input id="note-opt-src" type="checkbox" checked> <span>出どころの印（[推論] など・書籍の頁・出典の一覧）を付ける</span></label>
+    <div class="btn-row">
+      <button type="button" id="note-copy" class="btn primary">コピー</button>
+      <button type="button" class="btn" data-close>閉じる</button>
+    </div>
+    <p id="note-info" class="help"></p>
+    <pre id="note-text" class="note-text" tabindex="0" aria-label="記載の下書き"></pre>
   </div>
 </dialog>
 
