@@ -129,13 +129,14 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（67件）
+cd worker && node --test test/*.test.ts            # TS テスト（76件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
 node --no-warnings worker/test/devserver.ts library.sqlite 8787 &
 python3 tests/e2e/ui_smoke.py http://localhost:8787 /tmp/ui     # 要 playwright + Chromium（5 は rk4 の章が前提）
 python3 tests/e2e/ui_clinical.py http://localhost:8787 /tmp/uc  # 帯・入力ガード・縮退（合成の書籍で動く）
+python3 tests/e2e/ui_tools.py http://localhost:8787 /tmp/ut     # 測定・評価の画面（iPad 幅）
 # 実 D1 相当（workerd）
 cd worker && printf 'ANTHROPIC_API_KEY=x\nAPP_TOKEN=local-dev-token-0123456789\n' > .dev.vars
 npx wrangler d1 execute medbook --local --file ../d1/001_data.sql   # 000 → 001 → 999 の順
@@ -148,13 +149,13 @@ npx wrangler dev --local
 - 回答の `[n]` をタップ → 引用箇所・頁・節の全文・原本頁。「検索でヒットした節」を開くと、モデルが何を読んだかが見えます。
 - 回答に書籍の引用が一つも無いときは、画面に警告が出ます（記憶ベースの可能性）。
 - 振る舞い（回答の型・出典の扱い・迎合しない等）は `worker/src/prompt.ts` に集約しています。ここを直せば挙動が変わります。
-- 評価: `eval/clinical.template.jsonl` を `eval/clinical.local.jsonl` にコピーして自分の質問を 30〜50 問書き、`node --no-warnings eval/run_eval.ts --api https://<worker> eval/clinical.local.jsonl --compare-dict` で hit@k と辞書の効果を測ってください（無料。回答まで見るのは `eval/run_ask_eval.ts`）。数値の転写誤り率は `scripts/sample_numeric.py`。手順は `docs/evaluation.md`。
+- 評価: `eval/clinical.template.jsonl` を `eval/clinical.local.jsonl` にコピーして自分の質問を 30〜50 問書き、`node --no-warnings eval/run_eval.ts --api https://<worker> eval/clinical.local.jsonl --compare-dict` で hit@k と辞書の効果を測ってください（無料。回答まで見るのは `eval/run_ask_eval.ts`）。数値の転写誤り率は `scripts/sample_numeric.py`。**iPad だけで行うときは、ヘッダーの ☑「測定・評価」**（数値の照合と評価セット。PC も Python も要らない）。手順は `docs/evaluation.md`。
 
 ## 検証状況（正直な一覧）
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 45 件・TypeScript 67 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
+- Python 47 件・TypeScript 76 件のテスト、型チェック、`wrangler deploy --dry-run`（設定とバンドル）。2026-10-24 時点。
 - 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。

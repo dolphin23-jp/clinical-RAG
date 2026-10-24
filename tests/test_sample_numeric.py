@@ -178,3 +178,29 @@ class Report(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedVectors(unittest.TestCase):
+    """The same files bind worker/src/numsample.ts and web/eval-tools.js (the iPad screen) to this script."""
+
+    def test_extraction_vectors(self):
+        v = json.loads((ROOT / "tests" / "vectors" / "numeric_expr.json").read_text(encoding="utf-8"))
+        for c in v["cases"]:
+            self.assertEqual([e for _, _, e in sn.number_expressions(sn.norm(c["text"]))], c["exprs"], c["text"])
+
+    def test_report_vectors(self):
+        v = json.loads((ROOT / "tests" / "vectors" / "numeric_report.json").read_text(encoding="utf-8"))
+        words = {"ok": "一致", "err": "誤り", "skip": "判定不能", "": ""}
+        rows = [
+            {"番号": r["no"], "書籍ID": r["book"], "旗": r["flag"], "チャンクID": r["chunk"], "判定": words[r["verdict"]],
+             "誤りの種類": r["kind"], "頁ずれ": "はい" if r["shift"] else "いいえ"}
+            for r in v["rows"]
+        ]
+        s = sn.summarize(rows)
+        e = v["expect"]
+        for k in ("rows", "ok", "err", "skip", "unjudged", "by_book", "by_flag", "chunks", "kinds", "page_shift"):
+            self.assertEqual(s[k], e[k], k)
+        for w in v["wilson"]:
+            lo, hi = sn.wilson(w["k"], w["n"])
+            self.assertAlmostEqual(lo, w["lo"], places=3)
+            self.assertAlmostEqual(hi, w["hi"], places=3)

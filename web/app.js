@@ -1,5 +1,6 @@
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
+import { initTools } from "./tools.js";
 
 // ---------------------------------------------------------------- config
 const EXAMPLES = ["AKIの定義と病期分類（KDIGO）を、見逃しやすい点も含めて教えて", "高カリウム血症を見たとき最初に確認すること", "検査前確率と尤度比の使い方"];
@@ -719,6 +720,7 @@ async function showPage(bookId, n, host) {
 }
 
 // ---------------------------------------------------------------- boot
+initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, books: () => S.books });
 updateChips();
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

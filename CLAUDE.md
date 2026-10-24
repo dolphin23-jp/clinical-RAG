@@ -13,7 +13,7 @@
 ## 絶対に入れない（リポジトリに）
 
 - 書籍・頁画像の本文（著作物）。`library/` `books/` `work/` `d1/` `pages_out/` は `.gitignore` 済み
-- 質問・回答の本文を保存する処理、質問を出すログ（`docs/clinical-use.md` の 2.4）。書き込みを足すときは、先に医師に確認する（いまある書き込みは、利用上限の日付と回数だけ。`docs/enhancement-plan.md` の T1-2）
+- 質問・回答の本文を保存する処理、質問を出すログ（`docs/clinical-use.md` の 2.4）。書き込みを足すときは、先に医師に確認する（いまある書き込みは、利用上限の日付と回数〈T1-2〉と、評価の質問〈`eval_questions`。医師の決定。`docs/clinical-use.md` の 1c〉だけ。評価の質問は保存の前に `eval/lib.ts` の `parseQuestions` の検査を通す。回答と評価の結果は保存しない）
 - API キー・トークン・実際の質問ファイル（評価用の質問は `eval/*.local.jsonl`。`.gitignore` 済み）。数値の作業表と回答の記録も `work/` にだけ置く（`docs/evaluation.md` の 4）
 - 施設の内部プロトコル
 
@@ -24,6 +24,7 @@
 - 利用上限（`worker/src/usage.ts`）の書き込みは、日付と回数だけ。DB の部品（`db.ts`）は読み取りのまま
 - 辞書（`worker/src/synonyms.ts`）は、医師の確認なしで語を足してよい（医師の決定）。数値・用量・閾値・商品名は入れない（テストが数値を検査する）
 - 回答の生成が失敗したときは、見つかった節を出し、途中までの回答は残す（医師の決定）
+- 「測定・評価」の画面（`web/tools.js`）: 数値の作業表の判定は端末の中だけ（`mb.numeric.v1`）。数値の抽出は `scripts/sample_numeric.py` と `worker/src/numsample.ts` が双子（`tests/vectors/numeric_expr.json`）、集計は Python と `web/eval-tools.js` が双子（`tests/vectors/numeric_report.json`）。`tests/e2e/ui_tools.py`
 
 ## 数値と出典
 
@@ -39,6 +40,6 @@
 
 ## 変更の流れ
 
-- 手元で通す: `cd worker && node --test test/*.test.ts` と `npx tsc --noEmit`、`python3 -m unittest discover -s tests -p 'test_*.py'`。画面を変えたときは `tests/e2e/ui_clinical.py`（合成の書籍で動く。README の 5）
+- 手元で通す: `cd worker && node --test test/*.test.ts` と `npx tsc --noEmit`、`python3 -m unittest discover -s tests -p 'test_*.py'`。画面を変えたときは `tests/e2e/ui_clinical.py` と `tests/e2e/ui_tools.py`（合成の書籍で動く。README の 5）
 - CI と Cloudflare のビルドの通知は見ない・対応しない（clinical-modules と同じ運用。2026-10-17 の医師の判断）。代わりに、上のテストを手元で通してからPRにする
 - 振る舞いを変える変更は、同じ変更の中にテストを足す。入力のガード、書き込みの一覧、プロンプトの必須の指示は、テストで固定する

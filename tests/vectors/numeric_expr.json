@@ -1,0 +1,19 @@
+{
+  "_comment": "Shared contract for the number extraction in scripts/sample_numeric.py and worker/src/numsample.ts. `exprs` is the exact list of expressions found (after NFKC), in order. Rows are numbers with a unit or a comparison; page/figure/table/edition/year numbers and numbers that continue a word are not rows.",
+  "cases": [
+    { "text": "架空薬Xを 10 mg/日 で開始", "exprs": ["10 mg/日"] },
+    { "text": "0.05-0.1 μg/kg/min で開始", "exprs": ["0.05-0.1 μg/kg/min"] },
+    { "text": "eGFR 30 未満の場合は半量", "exprs": ["30 未満"] },
+    { "text": "重症はゼルニア値 < 20 とする", "exprs": ["< 20"] },
+    { "text": "K 6.0 mEq/L 以上で治療を考える", "exprs": ["6.0 mEq/L 以上"] },
+    { "text": "１０ｍｇ", "exprs": ["10mg"] },
+    { "text": "3日後に再評価、1日3回", "exprs": ["3日", "1日", "3回"] },
+    { "text": "Cr 2.0 mg/dL 超で減量（p.12 参照、第2版、2030年）", "exprs": ["2.0 mg/dL 超"] },
+    { "text": "HCO3- 18 mEq/L、SpO2 90%", "exprs": ["18 mEq/L", "90%"] },
+    { "text": "p.12 参照、第2版、2030年、表2-1、図3", "exprs": [] },
+    { "text": "Na 140、Cl 102", "exprs": [] },
+    { "text": "1.73 m2 あたり 60 mL/min/1.73 m2", "exprs": ["60 mL/min/1.73 m2"] },
+    { "text": "PMID: 12345678 の 5 mg", "exprs": ["5 mg"] },
+    { "text": "体温 38.5〜39 度、脈拍 ≧ 120", "exprs": ["≧ 120"] }
+  ]
+}

@@ -28,6 +28,7 @@ export default {
       webDomains: list(env.WEB_ALLOWED_DOMAINS),
       dailyAskLimit: Math.max(0, Math.floor(Number(env.DAILY_ASK_LIMIT ?? 0))) || 0,
       counter: d1Counter(env.DB),
+      rw: env.DB,
       pages: env.PAGES
         ? {
             async get(key) {

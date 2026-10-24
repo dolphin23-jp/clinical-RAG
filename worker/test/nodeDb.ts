@@ -26,3 +26,22 @@ export function buildFixtureDb(): string {
   });
   return db;
 }
+
+/** A writable D1 stand-in over node:sqlite (same SQL as production; used for the evaluation store and counters). */
+export function openRw(path = ":memory:") {
+  const d = new DatabaseSync(path);
+  const stmt = (sql: string, v: unknown[]) => {
+    const st = d.prepare(sql);
+    return {
+      run: async () => st.run(...(v as any[])),
+      all: async <T>() => ({ results: st.all(...(v as any[])) as unknown as T[] }),
+      first: async <T>() => ((st.get(...(v as any[])) as T) ?? null),
+    };
+  };
+  return {
+    raw: d,
+    prepare(sql: string) {
+      return { bind: (...v: unknown[]) => stmt(sql, v), run: () => stmt(sql, []).run() };
+    },
+  };
+}

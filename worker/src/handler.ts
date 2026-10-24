@@ -1,7 +1,10 @@
+import { dbBackend, evalRetrieval, parseQuestions } from "../../eval/lib.ts";
 import { runAsk, type StreamEvent } from "./anthropic.ts";
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
+import { EvalInputError, evalStore, ID_RE, type D1Rw } from "./evalstore.ts";
 import { scanAll } from "./idguard.ts";
+import { numericWorksheet } from "./numsample.ts";
 import { getParent, searchParents } from "./search.ts";
 import { expandQueries } from "./synonyms.ts";
 import { jstDay, type AskCounter } from "./usage.ts";
@@ -25,6 +28,8 @@ export interface AppDeps {
   dailyAskLimit?: number;
   counter?: AskCounter;
   now?: () => Date;
+  /** D1 for the evaluation questions (evalstore.ts); unset = the /api/eval/* endpoints answer 501 */
+  rw?: D1Rw;
 }
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
@@ -180,6 +185,20 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       });
     }
 
+    // Numeric transcription-error worksheet for the app (T1-7 on an iPad). Read-only; judgments stay on the device.
+    if (path === "/api/numeric/sample" && req.method === "GET") {
+      const int = (k: string, d: number, lo: number, hi: number) => {
+        const v = Number(url.searchParams.get(k) ?? d);
+        return Number.isInteger(v) ? Math.min(Math.max(v, lo), hi) : d;
+      };
+      const books = (url.searchParams.get("books") ?? "").split(",").map((b) => b.trim()).filter((b) => /^[A-Za-z0-9._-]{1,40}$/.test(b));
+      const sheet = await numericWorksheet(deps.db, { chunks: int("chunks", 40, 1, 100), perChunk: int("per_chunk", 3, 1, 5), seed: int("seed", 1, 0, 2 ** 31 - 1), bookIds: books });
+      return json(sheet);
+    }
+
+    // Evaluation questions in D1 and a one-question retrieval run (T1-8 on an iPad; doctor's decision 2026-10-24).
+    if (path.startsWith("/api/eval/")) return await evalRoutes(req, url, deps);
+
     if (path === "/api/ask" && req.method === "POST") {
       let body: any;
       try {
@@ -214,6 +233,60 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
     return json({ error: "not found" }, 404);
   } catch (e) {
     return json({ error: (e as Error).message }, 500);
+  }
+}
+
+async function evalRoutes(req: Request, url: URL, deps: AppDeps): Promise<Response> {
+  if (!deps.rw) return json({ error: "evaluation storage is not configured" }, 501);
+  const store = evalStore(deps.rw);
+  const now = (deps.now?.() ?? new Date()).toISOString();
+  const body = async () => {
+    try {
+      return await req.json();
+    } catch {
+      throw new EvalInputError("invalid JSON");
+    }
+  };
+  try {
+    if (url.pathname === "/api/eval/questions" && req.method === "GET") {
+      const rows = await store.list();
+      if (url.searchParams.get("format") === "jsonl") {
+        return new Response(rows.map((r) => r.line).join("\n") + (rows.length ? "\n" : ""), { headers: { ...JSON_HEADERS, "content-type": "text/plain; charset=utf-8" } });
+      }
+      return json({ questions: rows });
+    }
+    const qm = /^\/api\/eval\/questions\/([^/]+)$/.exec(url.pathname);
+    if (qm) {
+      const id = decodeURIComponent(qm[1]);
+      if (!ID_RE.test(id)) return json({ error: "bad id" }, 400);
+      if (req.method === "PUT") {
+        const b: any = await body();
+        return json({ question: await store.put(id, b?.line, now) });
+      }
+      if (req.method === "DELETE") return json({ deleted: await store.remove(id) });
+    }
+    if (url.pathname === "/api/eval/import" && req.method === "POST") {
+      const b: any = await body();
+      return json({ imported: await store.importText(b?.text, now) });
+    }
+    // one stored question, searched with and without the dictionary (one request per question keeps the D1 query count low)
+    if (url.pathname === "/api/eval/retrieval" && req.method === "POST") {
+      const b: any = await body();
+      const id = typeof b?.id === "string" ? b.id : "";
+      const row = ID_RE.test(id) ? await store.get(id) : null;
+      if (!row) return json({ error: "no such question" }, 404);
+      const [q] = parseQuestions(row.line);
+      const parents = Number.isInteger(b?.parents) ? Math.min(Math.max(b.parents, 1), 10) : 5;
+      const backend = dbBackend(deps.db);
+      const [on] = await evalRetrieval(backend, [q], { parents, expand: true });
+      const [off] = await evalRetrieval(backend, [q], { parents, expand: false });
+      const top = (h: typeof on.hits) => h.slice(0, 3).map((x) => ({ parent_id: x.parent_id, book_id: x.book_id, page_label: x.page_label, path: x.path }));
+      return json({ id: q.id, group: q.group, severity: q.severity, negative: q.negative, rank_on: on.rank ?? null, rank_off: off.rank ?? null, top_on: top(on.hits), top_off: top(off.hits) });
+    }
+    return json({ error: "not found" }, 404);
+  } catch (e) {
+    if (e instanceof EvalInputError) return json({ error: e.message }, 400);
+    throw e;
   }
 }
 

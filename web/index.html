@@ -22,6 +22,9 @@
   <div class="bar-row">
   <h1>医書検索</h1>
   <div class="bar-actions">
+    <button type="button" id="btn-tools" class="icon-btn" aria-label="測定・評価">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>
+    </button>
     <button type="button" id="btn-new" class="icon-btn" aria-label="新しい会話">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
@@ -106,6 +109,24 @@
       <button type="button" id="btn-save" class="btn primary">保存して接続確認</button>
       <button type="button" id="btn-forget" class="btn">トークンを消去</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="tools" aria-labelledby="tools-title">
+  <p class="band" role="note">参考情報・患者を特定する情報は入れない・最終判断は医師</p>
+  <div class="sheet-head">
+    <h2 id="tools-title">測定・評価</h2>
+    <button type="button" class="icon-btn" data-close aria-label="閉じる">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-num" aria-selected="true" aria-controls="pane-num">数値の照合</button>
+    <button type="button" role="tab" id="tab-eval" aria-selected="false" aria-controls="pane-eval">評価セット</button>
+  </div>
+  <div class="sheet-body">
+    <section id="pane-num" role="tabpanel" aria-labelledby="tab-num"></section>
+    <section id="pane-eval" role="tabpanel" aria-labelledby="tab-eval" hidden></section>
   </div>
 </dialog>
 
