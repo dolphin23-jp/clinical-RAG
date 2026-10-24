@@ -180,12 +180,16 @@ Modules が訓練のままなので、RAG を実臨床の参考にすること�
 
 ### T1-7 数値の誤り率の測定（B3 に進むかを決める材料）
 
+状態: **道具は実装済み**（2026-10-24。`scripts/sample_numeric.py`、`tests/test_sample_numeric.py`）。手順は `docs/evaluation.md` の 2。本番の D1 からも抜ける（`--d1 medbook`。取り込みの `work/library.sqlite` はその回の本だけのため）。**測定そのものは、医師の目視が要る**
+
 - `scripts/sample_numeric.py`（新規）: `library.sqlite` から `numeric_critical` のチャンクを、書籍と旗（`dose_unit`／`threshold`／`lab_threshold`）で層別に数十件抜き、`work/numeric_sample.csv`（`work/` は `.gitignore` 済み）に出す。列: チャンクID・書籍・頁・本文・（空欄）頁画像と一致したか・誤った桁・メモ
 - 手順: 先生が頁画像（R2 または PDF）と本文を目視で突き合わせて空欄を埋める
 - 出力: 書籍別・旗別の誤り率と信頼区間。**どの値なら B3 に投資するかは、先生が決める**（作成者は閾値を決めない）
 - 注意: 頁マーカーの読み違い（README の 0.7〜6%）は頁の話で、数値の誤りではない `[確認]`。数値の誤り率は未測定 `[未確認]`
 
 ### T1-8 臨床版の評価セット（A1）
+
+状態: **道具は実装済み**（2026-10-24。`eval/lib.ts`・`eval/run_eval.ts`（`--api`・`--compare-dict` を追加）・`eval/run_ask_eval.ts`（`--yes` のときだけ実行）・`eval/clinical.template.jsonl`、`worker/test/eval.test.ts`）。`/api/search` に評価用の `expand`（辞書の切り替え）と `max_per_book` を足した（省略時の振る舞いは変わらない）。手順は `docs/evaluation.md` の 3。**質問と正解は医師が書く**
 
 - `eval/clinical.template.jsonl`（雛形）と、`eval/run_eval.ts` の拡張: `severity`（`high`／`normal`）を質問に持たせ、`high` の外れを先頭に出す
 - 回答まで見る `eval/run_ask_eval.ts`（F3 の一部。後続でもよい）: デプロイ済みの `/api/ask` を呼び、引用の有無・数値の状態・必須語（`must_mention`）・棄権を記録する。費用は 1問 5〜15円の概算（README。未実測）

@@ -151,11 +151,21 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       const refused = identifierRefusal(queries, body.ack_identifier);
       if (refused) return refused;
       const bookIds = Array.isArray(body.book_ids) ? body.book_ids.map(String).slice(0, 20) : undefined;
-      const parents = await searchParents(deps.db, queries, { bookIds, includeReferences: !!body.include_references, parents: Math.min(Number(body.parents) || 5, 10) });
+      // `expand: false` turns the dictionary off and `max_per_book` lifts the diversity cap: both exist for evaluation
+      // (eval/run_eval.ts --api compares with and without the dictionary); callers that omit them get the defaults.
+      const expand = body.expand !== false;
+      const maxPerBook = Number.isInteger(body.max_per_book) ? Math.min(Math.max(body.max_per_book, 1), 10) : undefined;
+      const parents = await searchParents(deps.db, queries, {
+        bookIds,
+        includeReferences: !!body.include_references,
+        parents: Math.min(Number(body.parents) || 5, 10),
+        ...(maxPerBook ? { maxPerBook } : {}),
+        ...(expand ? {} : { dictionary: [] }),
+      });
       return json({
         queries,
         // dictionary terms that were added to this search (synonyms.ts), so a reader can see why a section came up
-        expanded: expandQueries(queries),
+        expanded: expand ? expandQueries(queries) : { synonyms: [], related: [] },
         results: parents.map((p) => ({
           parent_id: p.parent_id,
           book_id: p.book_id,
