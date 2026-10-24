@@ -25,13 +25,35 @@ export const FIELDS = [
 export const TEXT_KEYS = FIELDS.map((f) => f.key);
 const LIMITS = Object.fromEntries(FIELDS.map((f) => [f.key, f.max]));
 
-export const emptyCase = () => ({ age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "" });
+/** The most characters of `structured` (the rendered answers of a scene x symptom flow, web/intake.js).  Twin of STRUCTURED_LIMIT in worker/src/casemode.ts. */
+export const STRUCTURED_LIMIT = 6000;
+const INTAKE_ENTRIES = 300;
+
+/**
+ * `structured`: the flow's questions answered, as text (what is sent).  `intake`: the same answers as {flow, answers}, kept by this
+ * screen only so a saved conversation can reopen the form (the Worker does not take it).  Both are "" / null when the form is not used.
+ */
+export const emptyCase = () => ({ age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", structured: "", intake: null });
 
 /** A case with nothing to work from (age/sex/setting alone are not enough). */
-export const isEmptyCase = (c) => !(c.complaint?.trim() || c.vitals?.trim() || c.findings?.trim() || c.history?.trim());
+export const isEmptyCase = (c) => !(c.complaint?.trim() || c.vitals?.trim() || c.findings?.trim() || c.history?.trim() || c.structured?.trim());
 
-/** Every free-text value, for the identifier check. */
-export const caseTexts = (c) => TEXT_KEYS.map((k) => c[k] ?? "");
+/** Every free-text value, for the identifier check (the rendered answers included). */
+export const caseTexts = (c) => [...TEXT_KEYS.map((k) => c[k] ?? ""), c.structured ?? ""];
+
+/** An intake read back from a saved conversation (or any untrusted shape): {flow, answers} with plain values only, or null. */
+export function cleanIntake(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (typeof raw.flow !== "string" || raw.flow.length > 80 || !raw.answers || typeof raw.answers !== "object" || Array.isArray(raw.answers)) return null;
+  const answers = {};
+  for (const [id, v] of Object.entries(raw.answers).slice(0, INTAKE_ENTRIES)) {
+    if (id.length > 60) continue;
+    if (typeof v === "string") answers[id] = v.slice(0, 600);
+    else if (typeof v === "number" && Number.isFinite(v)) answers[id] = v;
+    else if (Array.isArray(v)) answers[id] = v.filter((x) => typeof x === "string" && x.length <= 60).slice(0, 40);
+  }
+  return Object.keys(answers).length ? { flow: raw.flow, answers } : null;
+}
 
 /** A case read back from a saved conversation (or any untrusted shape): known keys only, choices checked, texts cut to the limit. */
 export function cleanCase(raw) {
@@ -39,8 +61,16 @@ export function cleanCase(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
   for (const [k, list] of [["age", AGES], ["sex", SEXES], ["setting", SETTINGS]]) if (typeof raw[k] === "string" && list.includes(raw[k])) out[k] = raw[k];
   for (const k of TEXT_KEYS) if (typeof raw[k] === "string") out[k] = raw[k].trim().slice(0, LIMITS[k]);
+  if (typeof raw.structured === "string") out.structured = raw.structured.trim().slice(0, STRUCTURED_LIMIT);
+  out.intake = out.structured ? cleanIntake(raw.intake) : null;
   return out;
 }
+
+/** The case as the Worker takes it: without `intake` (the form's own answers stay on this screen and in the saved conversation). */
+export const caseForServer = (c) => {
+  const { intake, ...rest } = c;
+  return rest;
+};
 
 /** Same case? (used to remember that the doctor already confirmed the identifier prompt for these words) */
 export const caseKey = (c) => JSON.stringify(cleanCase(c));
@@ -50,10 +80,13 @@ const oneLine = (s, n) => {
   return t.length > n ? t.slice(0, n) + "…" : t;
 };
 
+/** The scene and symptom of the flow whose answers are in `structured` ("救急外来 × 腹痛"), or "". */
+export const structuredTitle = (c) => /^場面・症候: (.+?)（/.exec(c.structured ?? "")?.[1] ?? "";
+
 /** One line for the bar over the thread: 70代・男性・救急｜主訴の冒頭 */
 export function caseSummary(c) {
   const who = [[c.age, c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
-  const body = oneLine(c.complaint || c.findings || c.vitals || c.history || "", 48);
+  const body = oneLine(c.complaint || c.findings || c.vitals || c.history || structuredTitle(c), 48);
   return [who, body].filter(Boolean).join("｜");
 }
 
@@ -63,7 +96,10 @@ export function caseRows(c) {
   const who = [c.age, c.sex].filter(Boolean).join("・");
   if (who) rows.push(["年代・性別", who]);
   if (c.setting) rows.push(["場面", c.setting]);
-  for (const f of FIELDS) if (c[f.key]) rows.push([f.label, c[f.key]]);
+  for (const f of FIELDS) {
+    if (f.key === "own" && c.structured) rows.push(["場面・症候の入力", c.structured]);
+    if (c[f.key]) rows.push([f.label, c[f.key]]);
+  }
   return rows;
 }
 

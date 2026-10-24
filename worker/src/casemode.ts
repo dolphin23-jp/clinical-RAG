@@ -27,6 +27,12 @@ export const SETTINGS = ["外来", "救急", "病棟"] as const;
 /** Free-text fields, in screen order, with their length limits (characters). */
 export const TEXT_LIMITS = { complaint: 1500, vitals: 500, findings: 3000, history: 1500, own: 1500 } as const;
 export type TextKey = keyof typeof TEXT_LIMITS;
+/**
+ * The most characters of `structured`: the answers to a scene x symptom flow's questions, put into words by the screen
+ * (web/intake.js, docs/clinical-use.md 1e).  Twin of STRUCTURED_LIMIT there.  No cap on what the doctor pastes elsewhere: this is
+ * only the size of the rendered answers.
+ */
+export const STRUCTURED_LIMIT = 6000;
 
 export interface CaseInput {
   age: string;
@@ -38,6 +44,8 @@ export interface CaseInput {
   history: string;
   /** the doctor's own assessment (optional); when present the draft adds a section of differences from it */
   own: string;
+  /** the answers to a scene x symptom flow's questions as text (web/intake.js); "" when the structured intake is not used */
+  structured: string;
 }
 
 export class CaseInputError extends Error {
@@ -60,7 +68,7 @@ const ENUMS: Record<"age" | "sex" | "setting", readonly string[]> = { age: AGES,
 export function parseCase(raw: unknown): CaseInput {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new CaseInputError("case must be an object");
   const o = raw as Record<string, unknown>;
-  const out: CaseInput = { age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "" };
+  const out: CaseInput = { age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", structured: "" };
   for (const k of ["age", "sex", "setting"] as const) {
     const v = o[k];
     if (v === undefined || v === null || v === "") continue;
@@ -75,15 +83,22 @@ export function parseCase(raw: unknown): CaseInput {
     if (s.length > TEXT_LIMITS[k]) throw new CaseInputError(`case.${k} is longer than ${TEXT_LIMITS[k]} characters`);
     out[k] = s;
   }
+  const st = o.structured;
+  if (st !== undefined && st !== null) {
+    if (typeof st !== "string") throw new CaseInputError("case.structured must be a string");
+    const s = st.replace(/\r\n?/g, "\n").trim();
+    if (s.length > STRUCTURED_LIMIT) throw new CaseInputError(`case.structured is longer than ${STRUCTURED_LIMIT} characters`);
+    out.structured = s;
+  }
   if (!isEmptyCase(out)) return out;
-  throw new CaseInputError("症例が空です。主訴と経過・バイタル・所見・既往のどれかを入力してください。", "empty_case");
+  throw new CaseInputError("症例が空です。主訴と経過・バイタル・所見・既往・場面ごとの入力のどれかを入力してください。", "empty_case");
 }
 
 /** A case with nothing the model could work from (age/sex/setting alone are not enough). */
-export const isEmptyCase = (c: CaseInput): boolean => !(c.complaint || c.vitals || c.findings || c.history);
+export const isEmptyCase = (c: CaseInput): boolean => !(c.complaint || c.vitals || c.findings || c.history || c.structured);
 
 /** Every free-text value, for the identifier check.  The choice fields are validated against fixed lists instead. */
-export const caseTexts = (c: CaseInput): string[] => (Object.keys(TEXT_LIMITS) as TextKey[]).map((k) => c[k]);
+export const caseTexts = (c: CaseInput): string[] => [...(Object.keys(TEXT_LIMITS) as TextKey[]).map((k) => c[k]), c.structured];
 
 const indent = (s: string) => s.replace(/\n/g, "\n  ");
 
@@ -99,6 +114,7 @@ export function renderCase(c: CaseInput): string {
     row("身体所見・検査・画像・心電図", c.findings),
     row("既往・内服", c.history),
   ];
+  if (c.structured) lines.push(row("場面・症候の質問への答え（先生が選んだ・入力したもの。未入力は未確認）", c.structured));
   if (c.own) lines.push(row("先生自身のアセスメント（先生の案）", c.own));
   return lines.join("\n");
 }

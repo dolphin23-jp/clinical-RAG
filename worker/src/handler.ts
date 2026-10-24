@@ -257,7 +257,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
             web: !!body.web,
             bookIds,
             model,
-            ...(kase && mode && mode !== "create" ? { caseBlock: renderCase(kase), modeSystem: caseSystem(mode, !!kase.own), hint: `${kase.complaint} ${kase.findings}`.slice(0, 400) } : {}),
+            ...(kase && mode && mode !== "create" ? { caseBlock: renderCase(kase), modeSystem: caseSystem(mode, !!kase.own), hint: caseHint(kase) } : {}),
             ...(create ? { caseBlock: renderCreate(create), modeSystem: createSystem(create), hint: create.theme, checkOverlap: true } : {}),
           },
           emit,
@@ -268,6 +268,12 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
   } catch (e) {
     return json({ error: (e as Error).message }, 500);
   }
+}
+
+/** The words a search can start from when the model does not search itself: the typed complaint and findings, then the answered flow questions. */
+function caseHint(k: CaseInput): string {
+  const answers = k.structured.split("\n").slice(1).filter((l) => !l.startsWith("［") && !l.startsWith("未入力の中核項目")).join(" ");
+  return `${k.complaint} ${k.findings} ${answers}`.trim().slice(0, 400);
 }
 
 async function convRoutes(req: Request, url: URL, deps: AppDeps): Promise<Response> {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { before, test } from "node:test";
 import type { Db } from "../src/db.ts";
 import { runAsk, type StreamEvent } from "../src/anthropic.ts";
-import { AGES, CaseInputError, MODE_LABELS, MODES, SETTINGS, SEXES, TEXT_LIMITS, caseTexts, isEmptyCase, parseCase, parseMode, renderCase } from "../src/casemode.ts";
+import { AGES, CaseInputError, MODE_LABELS, MODES, SETTINGS, SEXES, STRUCTURED_LIMIT, TEXT_LIMITS, caseTexts, isEmptyCase, parseCase, parseMode, renderCase } from "../src/casemode.ts";
 import { ConvInputError, convStore } from "../src/convstore.ts";
 import { handle, type AppDeps } from "../src/handler.ts";
 import { CASE_RULES, MODE_HEADINGS, OWN_SECTION_ASSESS, OWN_SECTION_DDX, SYSTEM_PROMPT, caseSystem } from "../src/prompt.ts";
@@ -71,8 +71,8 @@ test("parseCase: trims, normalises line ends, drops unknown keys, keeps unfilled
   assert.equal(c.complaint, "経過\n続き");
   assert.equal(c.own, "");
   assert.ok(!("extra" in c));
-  assert.deepEqual(Object.keys(c).sort(), ["age", "complaint", "findings", "history", "own", "setting", "sex", "vitals"]);
-  assert.deepEqual(caseTexts(c), [c.complaint, c.vitals, c.findings, c.history, c.own]);
+  assert.deepEqual(Object.keys(c).sort(), ["age", "complaint", "findings", "history", "own", "setting", "sex", "structured", "vitals"]);
+  assert.deepEqual(caseTexts(c), [c.complaint, c.vitals, c.findings, c.history, c.own, c.structured]);
 });
 
 test("parseCase: refuses non-objects, wrong types, unknown choices, over-long text and an empty case", () => {
@@ -98,7 +98,7 @@ test("parseCase: refuses non-objects, wrong types, unknown choices, over-long te
   assert.equal(code({ complaint: "   ", own: "見立てだけ" }), "empty_case");
   assert.ok(isEmptyCase(parseCaseLoose({ age: "70代" })));
 });
-const parseCaseLoose = (o: object) => ({ age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", ...o });
+const parseCaseLoose = (o: object) => ({ age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", structured: "", ...o });
 
 test("parseMode: the six modes; anything else is refused; absent is undefined", () => {
   assert.deepEqual([...MODES], ["assess", "ddx", "miss", "consult", "ask", "create"]);
@@ -306,6 +306,7 @@ test("web/case-model.js equals worker/src/casemode.ts: choices, limits and mode 
   assert.deepEqual(web.SETTINGS, [...SETTINGS]);
   assert.deepEqual(Object.fromEntries(web.FIELDS.map((f: any) => [f.key, f.max])), TEXT_LIMITS);
   assert.deepEqual(web.TEXT_KEYS, Object.keys(TEXT_LIMITS));
+  assert.equal(web.STRUCTURED_LIMIT, STRUCTURED_LIMIT);
   // the four buttons: not the free question, and not case creation (which has its own dialog)
   assert.deepEqual(web.MODES.map((m: any) => [m.id, m.label]), MODES.filter((m) => m !== "ask" && m !== "create").map((m) => [m, MODE_LABELS[m]]));
   assert.equal(web.CREATE_LABEL, MODE_LABELS.create);
@@ -324,4 +325,111 @@ test("web/case-model.js: cleanCase keeps only known keys and choices, cuts to th
   assert.deepEqual(web.caseRows({ ...web.emptyCase(), complaint: "発熱", sex: "女性" }), [["年代・性別", "女性"], ["主訴と経過", "発熱"]]);
   assert.equal(web.caseKey(CASE), web.caseKey({ ...CASE, extra: "ignored" }));
   assert.notEqual(web.caseKey(CASE), web.caseKey({ ...CASE, vitals: "BP 80/50" }));
+});
+
+// ---------------------------------------------------------------------------------- structured intake (docs/clinical-use.md 1e)
+const STRUCTURED = "場面・症候: 救急外来 × 腹痛（clinical-modules のフローの質問への答え。未入力の項目は未確認で、陰性ではありません）\n［受け入れ］\n救急隊の事前情報：バイタルは安定\n未入力の中核項目（2件。未確認）: 気道、呼吸の評価";
+
+test("structured: the flow's answers are one more text of the case; alone it is enough; it is shown as typed and an absent one adds no row", () => {
+  const c = parseCase({ age: "70代", structured: `  ${STRUCTURED}\r\n` });
+  assert.equal(c.structured, STRUCTURED);
+  assert.ok(!isEmptyCase(c)); // the flow's answers alone are a case
+  assert.ok(caseTexts(c).includes(STRUCTURED));
+  const text = renderCase(c);
+  assert.match(text, /- 場面・症候の質問への答え（先生が選んだ・入力したもの。未入力は未確認）: 場面・症候: 救急外来 × 腹痛/);
+  assert.match(text, /- 主訴と経過: （未入力）/); // the other fields still say unknown, not negative
+  assert.ok(!renderCase(parseCase(CASE)).includes("場面・症候の質問への答え")); // nothing added when the flow is not used
+  assert.equal(parseCase({ ...CASE, structured: "" }).structured, "");
+  assert.equal(parseCase({ ...CASE, structured: null }).structured, "");
+  // limits and types
+  const bad = (raw: unknown) => {
+    try {
+      parseCase(raw);
+      return "";
+    } catch (e) {
+      return (e as CaseInputError).code;
+    }
+  };
+  assert.equal(bad({ ...CASE, structured: 5 }), "bad_case");
+  assert.equal(bad({ ...CASE, structured: "あ".repeat(STRUCTURED_LIMIT + 1) }), "bad_case");
+  assert.equal(bad({ ...CASE, structured: "あ".repeat(STRUCTURED_LIMIT) }), "");
+  // the form's own answers (`intake`) stay on the screen: the Worker drops them
+  assert.ok(!("intake" in parseCase({ ...CASE, structured: STRUCTURED, intake: { flow: "x", answers: { a: "b" } } })));
+});
+
+test("structured: the model gets the answers and the unknown-is-not-negative wording; the form's own answers are not sent on; the search starts from the answered lines", async () => {
+  const api = fakeModel();
+  const res = await handle(post("/api/ask", { mode: "ddx", case: { ...CASE, structured: STRUCTURED, intake: { flow: "emergency-department.abdominal-pain", answers: { ems_state: "stable" } } } }), app({ fetchImpl: api.fetchImpl }));
+  assert.equal(res.status, 200);
+  await res.text();
+  const first = JSON.stringify(api.calls[0].messages);
+  assert.ok(first.includes("救急隊の事前情報：バイタルは安定"));
+  assert.ok(first.includes("未入力の項目は未確認で、陰性ではありません"));
+  assert.ok(!first.includes("ems_state"), "the screen's own answers are not forwarded");
+});
+
+test("structured: an identifier-like text in the flow's answers is refused before the model is called; kinds only", async () => {
+  const api = fakeModel();
+  const res = await handle(post("/api/ask", { mode: "assess", case: { ...CASE, structured: `${STRUCTURED}\n既往：カルテ番号 12345678` } }), app({ fetchImpl: api.fetchImpl }));
+  assert.equal(res.status, 400);
+  const j: any = await res.json();
+  assert.equal(j.code, "possible_identifier");
+  assert.ok(j.labels.includes("「カルテ番号」の語"));
+  assert.ok(!JSON.stringify(j).includes("12345678"));
+  assert.equal(api.calls.length, 0);
+});
+
+test("structured: the doctor's own numbers in the flow's answers are not flagged by the number check", async () => {
+  const api = fakeModel("- 腹痛は 36 時間前から。 [推論]\n- 架空薬Xを 888 mg 投与する。 [推論]");
+  const evs: StreamEvent[] = [];
+  const kase = parseCase({ ...CASE, structured: "場面・症候: 救急外来 × 腹痛（x）\n［病歴・診察］\n発症からの時間：36 時間" });
+  await runAsk({ db, apiKey: "k", model: "m", fetchImpl: api.fetchImpl }, { question: MODE_LABELS.ddx, caseBlock: renderCase(kase), modeSystem: caseSystem("ddx", false) }, (e) => evs.push(e));
+  const fin = evs.at(-1) as Extract<StreamEvent, { t: "final" }>;
+  assert.deepEqual(fin.numbers.map((n) => [n.text, n.status]), [["888 mg", "not_found"]]);
+});
+
+test("conversation: the form's answers kept with a turn (payload.case.intake) come back, and are checked at any depth", async () => {
+  const s = convStore(openRw(), { retentionDays: 30 });
+  const id = "conv-intake-001";
+  const kase = { ...CASE, structured: STRUCTURED, intake: { flow: "emergency-department.abdominal-pain", answers: { ems_state: "stable", assoc: ["nausea", "fever"], note: "経過メモ" } } };
+  const payload = { kind: "final", blocks: [{ text: "草案", citations: [] }], mode: "ddx", case: kase };
+  assert.equal(await s.append(id, { question: MODE_LABELS.ddx, answer: "草案", payload }, "2026-10-24T00:00:00Z"), 1);
+  assert.deepEqual((await s.get(id))!.turns[0].payload, payload);
+
+  const s2 = convStore(openRw(), { retentionDays: 30 });
+  for (const where of ["structured", "text answer", "list answer"]) {
+    const bad =
+      where === "structured"
+        ? { ...kase, structured: `${STRUCTURED}\n患者ID 12345 の件` }
+        : where === "text answer"
+          ? { ...kase, intake: { ...kase.intake, answers: { note: "カルテ番号 12345678" } } }
+          : { ...kase, intake: { ...kase.intake, answers: { assoc: ["ok", "電話 090-1234-5678"] } } };
+    await assert.rejects(
+      s2.append(id, { question: MODE_LABELS.ddx, answer: "a", payload: { ...payload, case: bad } }, "2026-10-24T00:00:00Z"),
+      (e: any) => e instanceof ConvInputError && e.code === "possible_identifier" && !/12345|090/.test(e.message),
+      where,
+    );
+  }
+  assert.deepEqual(await s2.list("2026-10-24T00:00:00Z"), []);
+});
+
+test("web/case-model.js: structured and intake — kept when well-formed, dropped when not; the server copy has no intake; rows show the answers before the doctor's own plan", () => {
+  const raw = { ...CASE, structured: STRUCTURED, intake: { flow: "emergency-department.abdominal-pain", answers: { ems_state: "stable", assoc: ["nausea", 7, "fever"], n: 36, bad: { x: 1 } } } };
+  const c = web.cleanCase(raw);
+  assert.equal(c.structured, STRUCTURED);
+  assert.deepEqual(c.intake, { flow: "emergency-department.abdominal-pain", answers: { ems_state: "stable", assoc: ["nausea", "fever"], n: 36 } });
+  // answers without their text mean nothing (the text is what is sent): the form is not restored
+  assert.equal(web.cleanCase({ ...CASE, intake: raw.intake }).intake, null);
+  assert.equal(web.cleanCase({ ...raw, intake: "x" }).intake, null);
+  assert.equal(web.cleanCase({ ...raw, intake: { flow: 3, answers: {} } }).intake, null);
+  assert.equal(web.cleanCase({ ...raw, intake: { flow: "f", answers: [] } }).intake, null);
+  assert.equal(web.cleanCase({ ...raw, structured: "あ".repeat(STRUCTURED_LIMIT + 50) }).structured.length, STRUCTURED_LIMIT);
+  assert.ok(!("intake" in web.caseForServer(c)));
+  assert.equal(web.caseForServer(c).structured, STRUCTURED);
+  assert.ok(!web.isEmptyCase({ ...web.emptyCase(), structured: "x" }));
+  assert.ok(web.caseTexts(c).includes(STRUCTURED));
+  const rows = web.caseRows({ ...web.emptyCase(), complaint: "発熱", structured: "答え", own: "見立て" }).map((r: string[]) => r[0]);
+  assert.deepEqual(rows, ["主訴と経過", "場面・症候の入力", "先生自身のアセスメント（任意）"]);
+  // the same case with and without the form's answers is not the same case for the identifier acknowledgement
+  assert.notEqual(web.caseKey(raw), web.caseKey({ ...raw, structured: `${STRUCTURED}\n追加` }));
 });

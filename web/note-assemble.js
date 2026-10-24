@@ -22,6 +22,7 @@ export const SOURCE_LABELS = {
   complaint: "主訴と経過",
   vitals: "バイタル",
   findings: "身体所見・検査・画像・心電図",
+  structured: "場面・症候の入力（フローの質問への答え）",
   history: "既往・内服",
   own: "先生のアセスメント（入力）",
 };
@@ -52,18 +53,33 @@ export function headingRole(heading) {
  * Each draft role appears once per type, so an item is never written twice.
  */
 export const FILL = {
-  A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
-  A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
-  A05: { admission: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals", "findings"], problem_list: ["d:problems"], problem_ap: ["own", "d:assessment", "d:plan"], outlook: ["d:contingency"] },
-  A06: { context: ["ctx"], interval: ["complaint"], objective: ["vitals", "findings"], problem_ap: ["own", "d:problems", "d:assessment", "d:plan"], handover: ["d:contingency"] },
-  A08: { context: ["ctx"], hpi: ["complaint"], initial: ["vitals", "findings"] },
-  B02: { summary: ["ctx", "complaint"], findings: ["vitals", "findings"] },
-  B06: { situation: ["ctx", "complaint", "own", "d:problems"], background: ["history", "vitals", "findings"], tasks: ["d:plan"], contingency: ["d:contingency"] },
+  A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
+  A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
+  A05: { admission: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals", "findings", "structured"], problem_list: ["d:problems"], problem_ap: ["own", "d:assessment", "d:plan"], outlook: ["d:contingency"] },
+  A06: { context: ["ctx"], interval: ["complaint"], objective: ["vitals", "findings", "structured"], problem_ap: ["own", "d:problems", "d:assessment", "d:plan"], handover: ["d:contingency"] },
+  A08: { context: ["ctx"], hpi: ["complaint"], initial: ["vitals", "findings", "structured"] },
+  B02: { summary: ["ctx", "complaint"], findings: ["vitals", "findings", "structured"] },
+  B06: { situation: ["ctx", "complaint", "own", "d:problems"], background: ["history", "vitals", "findings", "structured"], tasks: ["d:plan"], contingency: ["d:contingency"] },
 };
 /** Fields whose line says something is still to be filled by hand (not an AI statement): shown after the adopted items. */
 export const FIELD_NOTES = {
   "B06.tasks": "（担当・期限は入力していません）",
 };
+
+/**
+ * The flow's answers for the note: the answered lines only.  The first line (a note to the model) becomes the scene and symptom, and the
+ * list of unanswered core questions (also a note to the model) is left out: a note holds what was entered, not what was not.
+ */
+export function structuredForNote(text) {
+  const lines = String(text ?? "").split("\n");
+  const out = [];
+  for (const l of lines) {
+    if (l.startsWith("未入力の中核項目")) continue;
+    const m = /^場面・症候: (.+?)（/.exec(l);
+    out.push(m ? `【${m[1]}】` : l);
+  }
+  return out.join("\n").trim();
+}
 
 const ctxText = (c) => [[c.age, c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
 
@@ -74,7 +90,8 @@ function sectionsOf(type) {
 }
 
 /**
- * kase: the typed case ({age, sex, setting, complaint, vitals, findings, history, own}).
+ * kase: the typed case ({age, sex, setting, complaint, vitals, findings, history, own, structured}).
+ * `structured` (the flow's answered questions, web/intake.js) is placed beside the findings until the scene-by-scene routing (docs/enhancement-plan.md 8) exists.
  * items: adopted draft items [{ role, heading, text, cites: [{kind, title, page, url}] }] (anything else is ignored).
  * Returns { type, sections: [{ key, label, requirement, blocks, empty }], adopted, unfilled, omitted }.
  */
@@ -99,7 +116,7 @@ export function assemble(typeId, { kase = {}, items = [] } = {}) {
           for (const i of mine) used.add(i);
         }
       } else {
-        const text = src === "ctx" ? ctxText(kase) : String(kase[src] ?? "").trim();
+        const text = src === "ctx" ? ctxText(kase) : src === "structured" ? structuredForNote(kase.structured) : String(kase[src] ?? "").trim();
         if (text) blocks.push({ kind: src === "own" ? "own" : "case", source: src, label: SOURCE_LABELS[src], text });
       }
     }

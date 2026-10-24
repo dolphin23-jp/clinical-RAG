@@ -155,9 +155,11 @@ export function convStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
 }
 
 /** The string values of a saved case or creation request (one level: a flat object whose other values are not text). */
-function caseStrings(c: unknown): string[] {
-  if (!c || typeof c !== "object" || Array.isArray(c)) return [];
-  return Object.values(c as Record<string, unknown>).filter((v): v is string => typeof v === "string");
+/** Every string in a saved case or creation request, however deep (the intake keeps its answers one level down). */
+function caseStrings(c: unknown, depth = 0): string[] {
+  if (typeof c === "string") return [c];
+  if (!c || typeof c !== "object" || depth > 4) return [];
+  return Object.values(c as Record<string, unknown>).flatMap((v) => caseStrings(v, depth + 1));
 }
 
 function safeParse(s: unknown): unknown {
