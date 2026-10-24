@@ -7,7 +7,7 @@
 // "（未入力）" (unknown, not negative), and nothing here derives a finding, a score or a threshold.
 // Twin of web/case-model.js: the option lists and limits are pinned equal by worker/test/casemode.test.ts.
 
-export const MODES = ["assess", "ddx", "miss", "consult", "ask"] as const;
+export const MODES = ["assess", "ddx", "miss", "consult", "ask", "create"] as const;
 export type Mode = (typeof MODES)[number];
 
 /** The question sent for a mode when the caller gives none; also the label of the screen's buttons. */
@@ -17,6 +17,7 @@ export const MODE_LABELS: Record<Mode, string> = {
   miss: "見落としチェック",
   consult: "コンサルト・医師コールの基準",
   ask: "症例を踏まえた質問",
+  create: "架空症例を作る",
 };
 
 export const AGES = ["乳児", "幼児", "学童", "10代", "20代", "30代", "40代", "50代", "60代", "70代", "80代", "90代以上"] as const;
@@ -100,4 +101,60 @@ export function renderCase(c: CaseInput): string {
   ];
   if (c.own) lines.push(row("先生自身のアセスメント（先生の案）", c.own));
   return lines.join("\n");
+}
+
+// ------------------------------------------------------------------------------------------------ creating a fictional case
+// Stage 4 (docs/enhancement-plan.md 7.4): the doctor asks for a NEW fictional case built on what the books say is typical.
+// The request carries a theme and wishes, never a case; the output is checked for copied book text (overlap.ts) and for
+// dose/threshold/date/identifier-like text on the screen (web/case-create.js).  Twin of the lists in web/case-model.js.
+
+export const LEVELS = ["標準", "紛らわしい鑑別あり", "複合問題"] as const;
+export const CREATE_LIMITS = { theme: 100, goal: 300 } as const;
+
+export interface CreateInput {
+  /** a disease or a symptom, never a patient */
+  theme: string;
+  setting: string;
+  level: string;
+  goal: string;
+  /** whether the case is to carry a pitfall */
+  pitfall: boolean;
+}
+
+export function parseCreate(raw: unknown): CreateInput {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new CaseInputError("create must be an object", "bad_create");
+  const o = raw as Record<string, unknown>;
+  const text = (k: "theme" | "goal"): string => {
+    const v = o[k];
+    if (v === undefined || v === null) return "";
+    if (typeof v !== "string") throw new CaseInputError(`create.${k} must be a string`, "bad_create");
+    const s = v.replace(/\r\n?/g, "\n").trim();
+    if (s.length > CREATE_LIMITS[k]) throw new CaseInputError(`create.${k} is longer than ${CREATE_LIMITS[k]} characters`, "bad_create");
+    return s;
+  };
+  const theme = text("theme");
+  if (!theme) throw new CaseInputError("テーマ（病名・症候）を入力してください。", "bad_create");
+  const choice = (k: "setting" | "level", list: readonly string[], dflt: string): string => {
+    const v = o[k];
+    if (v === undefined || v === null || v === "") return dflt;
+    if (typeof v !== "string" || !list.includes(v)) throw new CaseInputError(`create.${k} is not one of the choices`, "bad_create");
+    return v;
+  };
+  if (o.pitfall !== undefined && typeof o.pitfall !== "boolean") throw new CaseInputError("create.pitfall must be true or false", "bad_create");
+  return { theme, setting: choice("setting", SETTINGS, ""), level: choice("level", LEVELS, LEVELS[0]), goal: text("goal"), pitfall: o.pitfall !== false };
+}
+
+/** The free-text values, for the identifier check. */
+export const createTexts = (c: CreateInput): string[] => [c.theme, c.goal];
+
+/** The request as the model sees it (the final user message, before 【依頼】). */
+export function renderCreate(c: CreateInput): string {
+  return [
+    "【症例作成の依頼】先生が入力した依頼です。患者の情報ではありません。",
+    `- テーマ: ${c.theme}`,
+    `- 場面: ${c.setting || "（指定なし）"}`,
+    `- 難しさ: ${c.level}`,
+    `- 学ばせたいこと: ${c.goal ? c.goal.replace(/\n/g, "\n  ") : "（指定なし）"}`,
+    `- 落とし穴: ${c.pitfall ? "入れる" : "入れない"}`,
+  ].join("\n");
 }

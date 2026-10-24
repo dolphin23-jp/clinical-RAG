@@ -9,6 +9,7 @@ import { pageLabel as pageLabelOf, resolveCitation, toSearchResult, type SourceM
 import { DEFAULT_WEB_DOMAINS, SEARCH_TOOL, SYSTEM_PROMPT } from "./prompt.ts";
 import { searchParents } from "./search.ts";
 import { checkNumbers, type NumFinding } from "./numcheck.ts";
+import { findOverlaps, type OverlapFinding } from "./overlap.ts";
 import { contentTerms } from "./tokenize.ts";
 
 export interface Usage {
@@ -35,7 +36,7 @@ export type StreamEvent =
   | { t: "sources"; items: SourceCard[] }
   | { t: "delta"; text: string }
   | { t: "reset" } // drop the answer text streamed so far (it was commentary before a tool call)
-  | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string; searched_books: boolean; numbers: NumFinding[] }
+  | { t: "final"; blocks: { text: string; citations: UiCitation[] }[]; usage: Usage; turns: number; stop_reason: string; searched_books: boolean; numbers: NumFinding[]; overlap?: OverlapFinding[] }
   // the answer could not be completed, but the library still could be searched: show the sections instead of nothing.
   // Text already streamed stays on screen as an unfinished answer (doctor's decision, 2026-10-24).
   | { t: "degraded"; message: string; items: SourceCard[] }
@@ -67,6 +68,9 @@ export interface AskInput {
   modeSystem?: string;
   /** case mode: words to search when the answer fails before any search (the request itself is only a button label) */
   hint?: string;
+  /** case creation: the answer is a new fictional case, so check it for runs copied from the sections it drew on (overlap.ts);
+   *  its example numbers are not claims from a book, so the number check is skipped */
+  checkOverlap?: boolean;
 }
 
 const API_VERSION = "2023-06-01";
@@ -389,13 +393,15 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
       await degrade("モデルが回答を拒否しました（stop_reason=refusal）。質問を言い換えてください。");
       return;
     }
-    const numbers = checkNumbers({
-      answer: blocks.map((b) => b.text).join("\n"),
+    const answerText = blocks.map((b) => b.text).join("\n");
+    const overlap = input.checkOverlap ? findOverlaps(answerText, [...retrieved.values()]) : undefined;
+    const numbers = input.checkOverlap ? [] : checkNumbers({
+      answer: answerText,
       cited: blocks.flatMap((b) => b.citations.map((c) => ({ cited_text: c.cited_text, page: c.page, kind: c.kind }))),
       retrieved: [...retrieved.values()],
       inputs: [input.question, ...(input.caseBlock ? [input.caseBlock] : []), ...(input.history ?? []).filter((h) => h.role === "user").map((h) => h.text)],
     });
-    emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0, numbers });
+    emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0, numbers, ...(overlap ? { overlap } : {}) });
   } catch (e) {
     await degrade((e as Error).message);
   }

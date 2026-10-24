@@ -34,7 +34,7 @@ with sync_playwright() as pw:
     page.goto(BASE + "/")
     page.evaluate(f"localStorage.setItem('mb.token','{TOKEN}')")
     page.reload()
-    page.wait_for_function("document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
 
     def api(method, path, body=None):
         return page.evaluate(
@@ -80,7 +80,7 @@ with sync_playwright() as pw:
 
     # 3. reload: the screen is empty, the conversation comes back from the server with its chips
     page.reload()
-    page.wait_for_function("document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
     check(page.locator(".turn").count() == 0, "after a reload the screen starts empty")
     page.click("#btn-convs")
     page.click("#tab-saved")
@@ -144,7 +144,7 @@ with sync_playwright() as pw:
 
     # 8. the number card and marks survive a restore
     page.reload()
-    page.wait_for_function("document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
     page.click("#btn-convs")
     page.click("#tab-saved")
     page.wait_for_selector("#pane-saved .conv")

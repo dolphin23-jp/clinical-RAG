@@ -48,7 +48,7 @@ with sync_playwright() as pw:
     page.goto(BASE + "/")
     page.evaluate(f"localStorage.setItem('mb.token','{TOKEN}')")
     page.reload()
-    page.wait_for_function("document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
 
     def api(method, path, body=None):
         return page.evaluate(
@@ -194,7 +194,7 @@ with sync_playwright() as pw:
     page2 = ctx.new_page()
     page2.on("dialog", lambda d: d.accept())
     page2.goto(BASE + "/")
-    page2.wait_for_function("document.querySelector('#chip-books').textContent.includes('(1)')")
+    page2.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
     page2.click("#btn-convs")
     page2.click("#tab-saved")
     page2.wait_for_selector(".conv-open")

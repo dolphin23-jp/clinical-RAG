@@ -1,13 +1,13 @@
 import { dbBackend, evalRetrieval, parseQuestions } from "../../eval/lib.ts";
 import { runAsk, type StreamEvent } from "./anthropic.ts";
-import { CaseInputError, caseTexts, MODE_LABELS, parseCase, parseMode, renderCase, type CaseInput, type Mode } from "./casemode.ts";
+import { CaseInputError, caseTexts, createTexts, MODE_LABELS, parseCase, parseCreate, parseMode, renderCase, renderCreate, type CaseInput, type CreateInput, type Mode } from "./casemode.ts";
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
 import { ConvInputError, convStore } from "./convstore.ts";
 import { EvalInputError, evalStore, ID_RE, type D1Rw } from "./evalstore.ts";
 import { scanAll } from "./idguard.ts";
 import { numericWorksheet } from "./numsample.ts";
-import { caseSystem } from "./prompt.ts";
+import { caseSystem, createSystem } from "./prompt.ts";
 import { getParent, searchParents } from "./search.ts";
 import { expandQueries } from "./synonyms.ts";
 import { jstDay, type AskCounter } from "./usage.ts";
@@ -217,17 +217,21 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       // case mode: `case` (the typed case) with an optional `mode`; a case without a mode is a free question about the case
       let mode: Mode | undefined;
       let kase: CaseInput | null = null;
+      let create: CreateInput | null = null; // mode "create": a request for a new fictional case, which carries no case
       try {
         mode = parseMode(body?.mode);
-        if (body?.case !== undefined && body?.case !== null) kase = parseCase(body.case);
+        if (mode === "create") {
+          if (body?.case !== undefined && body?.case !== null) return json({ error: "creating a case takes a request, not a case", code: "bad_create" }, 400);
+          create = parseCreate(body?.create);
+        } else if (body?.case !== undefined && body?.case !== null) kase = parseCase(body.case);
       } catch (e) {
         if (e instanceof CaseInputError) return json({ error: e.message, code: e.code }, 400);
         throw e;
       }
-      if (mode && !kase) return json({ error: "mode needs a case", code: "case_required" }, 400);
+      if (mode && mode !== "create" && !kase) return json({ error: "mode needs a case", code: "case_required" }, 400);
       if (kase) mode ??= "ask";
       let question = typeof body?.question === "string" ? body.question.trim() : "";
-      if (!question && mode && mode !== "ask") question = MODE_LABELS[mode]; // a mode button sends no text of its own
+      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
       if (!question || question.length > 4000) return json({ error: "question must be 1-4000 characters" }, 400);
       const history = Array.isArray(body.history)
         ? body.history
@@ -236,8 +240,8 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
             .map((h: any) => ({ role: h.role, text: String(h.text).slice(0, 8000) }))
         : [];
       // assistant turns are the model's own text (they may quote PMIDs etc.); only what the user typed is checked
-      // every free-text field of the case is checked like the question (docs/enhancement-plan.md 7.1)
-      const refused = identifierRefusal([question, ...history.filter((h: any) => h.role === "user").map((h: any) => h.text), ...(kase ? caseTexts(kase) : [])], body.ack_identifier);
+      // every free-text field of the case (or of a creation request) is checked like the question (docs/enhancement-plan.md 7.1)
+      const refused = identifierRefusal([question, ...history.filter((h: any) => h.role === "user").map((h: any) => h.text), ...(kase ? caseTexts(kase) : []), ...(create ? createTexts(create) : [])], body.ack_identifier);
       if (refused) return refused;
       const capped = await overDailyLimit(deps);
       if (capped) return capped;
@@ -253,7 +257,8 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
             web: !!body.web,
             bookIds,
             model,
-            ...(kase && mode ? { caseBlock: renderCase(kase), modeSystem: caseSystem(mode, !!kase.own), hint: `${kase.complaint} ${kase.findings}`.slice(0, 400) } : {}),
+            ...(kase && mode && mode !== "create" ? { caseBlock: renderCase(kase), modeSystem: caseSystem(mode, !!kase.own), hint: `${kase.complaint} ${kase.findings}`.slice(0, 400) } : {}),
+            ...(create ? { caseBlock: renderCreate(create), modeSystem: createSystem(create), hint: create.theme, checkOverlap: true } : {}),
           },
           emit,
         );

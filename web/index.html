@@ -55,6 +55,7 @@
       <li>「Web検索」をオンにすると、書籍に無い点をガイドライン等で補います。</li>
       <li>用量・閾値など数値は、必ず原本の頁で再確認してください。</li>
       <li>施設プロトコルは入っていません。施設の運用は別途確認してください。</li>
+      <li>「症例」の中の「書籍から架空症例を作る」で、書籍の典型をもとに新しい架空症例を作れます（診断は畳まれます）。作った症例は、そのまま症例モードで練習に使えます。</li>
       <li>ヘッダーの「症例」に年代・所見・検査値を入れると、アセスメントとプランの草案、鑑別と反証、見落としチェック、コンサルトの基準を作れます（草案です。最終判断は医師）。</li>
     </ul>
     <p class="try-title">例</p>
@@ -142,6 +143,35 @@
     <div class="btn-row">
       <button type="button" id="case-pin" class="btn primary">この症例を固定する</button>
       <button type="button" id="case-clear" class="btn">症例を外す</button>
+      <button type="button" id="case-create" class="btn">書籍から架空症例を作る…</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="create" aria-labelledby="create-title">
+  <p class="band" role="note">参考情報・患者を特定する情報は入れない・最終判断は医師</p>
+  <div class="sheet-head">
+    <h2 id="create-title">架空症例を作る</h2>
+    <button type="button" class="icon-btn" data-close aria-label="閉じる">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sheet-body">
+    <p class="help">手元の書籍が示す典型的な所見・検査値の動き・経過をもとに、<b>新しい架空症例</b>を作ります。実在の患者・症例ではありません。書籍の症例文は写さず（重なりを検査します）、数値は例示で、閾値・用量は書きません。テーマは病名・症候で書き、患者の情報は入れないでください。</p>
+    <p class="help">診断名は「見立て」の節にだけ書かれ、最初は畳まれます。作った症例は、そのまま症例モードに入れて、自分のアセスメントと草案を見比べられます。出力は草案で、最終判断は医師です。</p>
+    <p id="create-msg" class="msg err" hidden></p>
+    <label class="field" for="create-theme">テーマ（病名・症候）</label>
+    <input id="create-theme" type="text" autocomplete="off" placeholder="例: 腎前性AKI／高K血症／ネフローゼ症候群">
+    <label class="field" for="create-setting">場面</label>
+    <select id="create-setting"></select>
+    <label class="field" for="create-level">難しさ</label>
+    <select id="create-level"></select>
+    <label class="field" for="create-goal">学ばせたいこと（任意）</label>
+    <textarea id="create-goal" class="case-text" rows="3" placeholder="例: 利尿薬とNSAIDsの関与を見落とさない"></textarea>
+    <label class="check"><input id="create-pitfall" type="checkbox" checked> <span>落とし穴を入れる</span></label>
+    <div class="btn-row">
+      <button type="button" id="create-run" class="btn primary">症例を作る</button>
+      <button type="button" class="btn" data-close>閉じる</button>
     </div>
   </div>
 </dialog>

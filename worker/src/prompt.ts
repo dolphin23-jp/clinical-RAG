@@ -1,7 +1,10 @@
 // System prompt.  It encodes (1) the retrieval discipline that makes citations trustworthy and
 // (2) the answering style of a discussion partner for a young physician.  Edit freely: this file is
 // the single place where "how the assistant behaves" lives.
-import type { Mode } from "./casemode.ts";
+import type { CreateInput, Mode } from "./casemode.ts";
+
+/** The modes that work from a typed case and have a fixed set of headings (not the free question, not case creation). */
+type DraftMode = Exclude<Mode, "ask" | "create">;
 
 export const SYSTEM_PROMPT = `あなたは、腎臓内科を志し、内科一般と救急も診る若手医師の「指導医・ディスカッションパートナー」です。初歩的すぎる説明は不要で、一緒に臨床推論をする立場で答えます。回答は日本語で、質問の複雑さに応じて十分に詳しく書いてください（単純な事実確認は短くてかまいません）。
 
@@ -56,7 +59,7 @@ export const CASE_RULES = `## 症例が添えられているとき（症例モ�
 - 指定された見出しはそのまま使い、順序を変えません。該当がない見出しにも「該当なし」と理由を1行で書きます（見出しを黙って省かない）。`;
 
 /** The `##` headings each mode must produce, in order.  Exported so the tests can pin them. */
-export const MODE_HEADINGS: Record<Exclude<Mode, "ask">, string[]> = {
+export const MODE_HEADINGS: Record<DraftMode, string[]> = {
   assess: ["問題リスト", "各問題の評価（根拠と反証）", "初期プラン（検査・治療・モニタリング・再評価）", "コンサルト・医師コールの基準", "確認すべき数値（原本の頁で確認）", "書籍に見つからなかった点"],
   ddx: ["見逃せない鑑別", "可能性の高い鑑別", "鑑別ごとの支持と反証", "判断を変える追加情報"],
   miss: ["入力にない所見・検査（未確認）", "見落としやすい病態と落とし穴", "検査・治療の落とし穴", "再評価で見ること"],
@@ -67,7 +70,7 @@ export const MODE_HEADINGS: Record<Exclude<Mode, "ask">, string[]> = {
 export const OWN_SECTION_ASSESS = "先生の案との差";
 export const OWN_SECTION_DDX = "先生の見立てへの反証";
 
-const MODE_BODY: Record<Exclude<Mode, "ask">, string> = {
+const MODE_BODY: Record<DraftMode, string> = {
   assess: `## この依頼の型: アセスメントとプラン（草案）
 次の見出しを、この順に、そのまま使って書きます。
 ## ${MODE_HEADINGS.assess[0]}
@@ -131,11 +134,73 @@ const OWN_BODY: Partial<Record<Mode, string>> = {
 };
 
 /** The second system block for a request that carries a case.  `hasOwn`: the case includes the doctor's own assessment. */
-export function caseSystem(mode: Mode, hasOwn: boolean): string {
+export function caseSystem(mode: Exclude<Mode, "create">, hasOwn: boolean): string {
   const body = mode === "ask" ? MODE_ASK : MODE_BODY[mode];
   const own = hasOwn ? OWN_BODY[mode] : undefined;
   return [CASE_RULES, body, ...(own ? [own] : [])].join("\n\n");
 }
+
+// ------------------------------------------------------------------------------------------------ creating a fictional case
+// Stage 4 (docs/enhancement-plan.md 7.4).  A NEW fictional case built on what the books say is typical; never a book's own case.
+
+export const CREATE_RULES = `## 架空症例を作るとき
+- 質問の冒頭の【症例作成の依頼】に沿って、訓練用の**新しい架空症例**を作ります。実在の患者や、実際の症例を思い出して組み立て直したものではありません。依頼のテーマは病名・症候で、患者の情報ではありません。
+- 手元の書籍は、その病態の**典型的な所見・検査値の動き・経過・鑑別・落とし穴**を確かめる根拠にだけ使います。書く前に search_books で調べます。
+- **書籍の症例（症例提示・症例報告・事例のコラム）を写したり、言い換えて焼き直したりしません。** 書籍の文を、そのまま、あるいは語尾や語順を変えただけで書かないでください。症例は、自分の言葉で、新しく組み立てます（書籍の文と30字以上続けて一致すると、画面で警告されます）。
+- 数値は例示です。この症例の検査値・バイタルは、典型的な動きに沿う値を例として書いてかまいません。**診断基準の閾値、薬の用量・投与速度は書きません。**「〜以上で〜」のような閾値の言い方もしません。
+- 実在の患者を思わせる固有の細部（地名・施設名・職業の特定・年月日・氏名・ID）は入れません。日付は経過日数で書きます（「3日前から」）。
+- 「導入文」と「症例の入力用」には、診断名や見立てを書きません（先生がこの症例で自分のアセスメントを考えるためです）。診断は「見立て」の節にだけ書きます。
+- 所見の表の「根拠」には、その所見の典型を書籍で確かめられたものだけ、引用を付けて書きます（頁は引用が示します。頁を自分で書かない）。確かめられなかったものは「[推論]」と書きます。
+- 症例の所見は、決めた診断で説明できるようにし、一貫させます（検査値どうし、経過と所見が食い違わないように）。
+- 指定された見出しはそのまま使い、順序を変えません。該当がない見出しにも「該当なし」と理由を1行で書きます。`;
+
+/** The `##` headings a created case must have, in order (web/case-create.js reads the case by these). */
+export const CREATE_HEADINGS = ["導入文", "症例の入力用", "所見の表", "見立て", "落とし穴", "教訓", "書籍に見つからなかった点"];
+
+/** The seven lines under "症例の入力用", whose names the screen reads to fill the case dialog. */
+export const CREATE_INPUT_LABELS = ["年代", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
+
+const LEVEL_TEXT: Record<string, string> = {
+  標準: "典型的な経過の症例にします。所見が、想定する診断を素直に指すようにします。",
+  紛らわしい鑑別あり: "似た所見を示す鑑別が1つあり、両者を分ける所見が症例のどこかに含まれるようにします（その所見は、聞かれなければ出てこない位置に置きます）。",
+  複合問題: "2つ以上の問題が同時にある症例にします。片方に注意が向くと、もう片方を見逃しやすい作りにします。",
+};
+
+/** The second system block for a case-creation request. */
+export function createSystem(c: CreateInput): string {
+  return [
+    CREATE_RULES,
+    `## この依頼の型: 架空症例の作成
+次の見出しを、この順に、そのまま使って書きます。
+## ${CREATE_HEADINGS[0]}
+- 3〜5文。場面、年代、性別、主訴、来院時の様子。診断名・見立てを書かない。
+## ${CREATE_HEADINGS[1]}
+次の7項目を、1行ずつ「- 項目名: 内容」の形で、この順に書きます（項目名はそのまま。診断名・見立てを含めない）。
+${CREATE_INPUT_LABELS.map((l) => `- ${l}: ${INPUT_HINT[l]}`).join("\n")}
+## ${CREATE_HEADINGS[2]}
+- 表（項目 | 値 | 根拠）。この症例の所見（バイタル・身体所見・検査値・画像・心電図）を、1行に1つ。値は例示です。
+## ${CREATE_HEADINGS[3]}
+- 想定する診断、鑑別、その鑑別を分けた所見。この節は画面で最初は畳まれます。
+## ${CREATE_HEADINGS[4]}
+- ${c.pitfall ? "見逃しやすい点・思い込みやすい点を1〜2つ。どの所見で気づけるか。" : "「なし」と書く。"}
+## ${CREATE_HEADINGS[5]}
+- 1〜3文。
+## ${CREATE_HEADINGS[6]}
+- 検索して手元の書籍に見つからなかった論点。なければ「該当なし」。
+
+難しさ「${c.level}」: ${LEVEL_TEXT[c.level] ?? LEVEL_TEXT["標準"]}`,
+  ].join("\n\n");
+}
+
+const INPUT_HINT: Record<string, string> = {
+  年代: "乳児・幼児・学童・10代・20代・30代・40代・50代・60代・70代・80代・90代以上のいずれか1つ",
+  性別: "男性・女性・その他・不明のいずれか1つ（その他と不明は「その他・不明」）",
+  場面: "外来・救急・病棟のいずれか1つ",
+  主訴と経過: "主訴と、経過（日数・時間で）",
+  バイタル: "数値（単位つき）",
+  "所見・検査": "身体所見・検査値・画像・心電図（数値は例示）",
+  "既往・内服": "既往と、内服（一般名）",
+};
 
 export const SEARCH_TOOL = {
   name: "search_books",
