@@ -5,7 +5,7 @@
 export const NOTE_TYPES_SOURCE = {
   "repository": "clinical-modules",
   "path": "note-types/*.toml",
-  "commit": "80227c6db32a",
+  "commit": "192d936b15dc",
   "count": 16,
   "routes_path": "scripts/note_expanded.py (ROUTES)"
 };
