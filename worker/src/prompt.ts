@@ -294,7 +294,7 @@ export const CREATE_RULES = `## 架空症例を作るとき
 export const CREATE_HEADINGS = ["導入文", "症例の入力用", "所見の表", "見立て", "落とし穴", "教訓", "書籍に見つからなかった点"];
 
 /** The seven lines under "症例の入力用", whose names the screen reads to fill the case dialog. */
-export const CREATE_INPUT_LABELS = ["年代", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
+export const CREATE_INPUT_LABELS = ["年齢", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
 
 const LEVEL_TEXT: Record<string, string> = {
   標準: "典型的な経過の症例にします。所見が、想定する診断を素直に指すようにします。",
@@ -309,7 +309,7 @@ export function createSystem(c: CreateInput): string {
     `## この依頼の型: 架空症例の作成
 次の見出しを、この順に、そのまま使って書きます。
 ## ${CREATE_HEADINGS[0]}
-- 3〜5文。場面、年代、性別、主訴、来院時の様子。診断名・見立てを書かない。
+- 3〜5文。場面、年齢、性別、主訴、来院時の様子。診断名・見立てを書かない。
 ## ${CREATE_HEADINGS[1]}
 次の7項目を、1行ずつ「- 項目名: 内容」の形で、この順に書きます（項目名はそのまま。診断名・見立てを含めない）。
 ${CREATE_INPUT_LABELS.map((l) => `- ${l}: ${INPUT_HINT[l]}`).join("\n")}
@@ -329,7 +329,7 @@ ${CREATE_INPUT_LABELS.map((l) => `- ${l}: ${INPUT_HINT[l]}`).join("\n")}
 }
 
 const INPUT_HINT: Record<string, string> = {
-  年代: "乳児・幼児・学童・10代・20代・30代・40代・50代・60代・70代・80代・90代以上のいずれか1つ",
+  年齢: "歳の整数1つ（0〜130。乳児は 0。「70代」のような年代でなく、72 のような数字で。単位の「歳」は付けてもよい）",
   性別: "男性・女性・その他・不明のいずれか1つ（その他と不明は「その他・不明」）",
   場面: "外来・救急・病棟のいずれか1つ",
   主訴と経過: "主訴と、経過（日数・時間で）",

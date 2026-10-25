@@ -299,7 +299,7 @@ input[type="number"].n-input { width: 72px; min-height: 44px; padding: 0 8px; fo
 .chip.mode { flex: none; color: var(--ink); border-color: var(--accent); }
 .chip.mode:disabled { opacity: 0.45; }
 .case-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.case-choice select { width: 100%; }
+.case-choice select, .case-choice input { width: 100%; }
 textarea.case-text { display: block; width: 100%; max-height: 36dvh; resize: vertical; }
 .draftmark { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 12.5px; line-height: 1.6; }
 .casebox { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; font-size: 13px; }

@@ -2,7 +2,7 @@
 // thread, and the four mode buttons over the composer.  The case lives in the tab's memory only; it is saved on the server
 // together with each turn asked with it (conv.js, payload.case) and comes back when that conversation is reopened.
 // Every string reaches the DOM through textContent / .value.
-import { AGES, FIELDS, MODES, SETTINGS, SEXES, TEXT_KEYS, caseSummary, caseTexts, cleanCase, emptyCase, isEmptyCase } from "./case-model.js";
+import { AGE_MAX, FIELDS, MODES, SETTINGS, SEXES, TEXT_KEYS, caseSummary, caseTexts, cleanCase, emptyCase, isEmptyCase, readAge } from "./case-model.js";
 import { relativizeDates } from "./date-relative.js";
 import { SCENES, SCENE_LABELS, briefNeed } from "./draft-scenes.js";
 import { scan } from "./id-guard.js";
@@ -42,8 +42,25 @@ export function initCase(ctx) {
     inputs[key] = sel;
     return wrap;
   };
+  // the age is whole years, typed (the doctor's decision of 2026-10-25: the Casebook packet needs the age in years); an infant under one year is 0
+  const ageField = () => {
+    const wrap = el("div", "case-choice");
+    const lab = el("label", "field", "年齢（歳）");
+    lab.htmlFor = "case-age";
+    const inp = el("input");
+    inp.id = "case-age";
+    inp.type = "text";
+    inp.inputMode = "numeric";
+    inp.maxLength = 8;
+    inp.size = 6;
+    inp.placeholder = "例: 72（乳児は 0）";
+    inp.setAttribute("autocomplete", "off");
+    wrap.append(lab, inp);
+    inputs.age = inp;
+    return wrap;
+  };
   const row = el("div", "case-row");
-  row.append(choice("age", "年代", AGES), choice("sex", "性別", SEXES), choice("setting", "場面", SETTINGS));
+  row.append(ageField(), choice("sex", "性別", SEXES), choice("setting", "場面", SETTINGS));
   host.append(row);
   // the scene x symptom questions (web/intake-ui.js); the sex in the select above decides which sex-specific questions show
   const intake = initIntake({ el, host, context: () => ({ sex: inputs.sex.value }), onChange: () => showWarn(), api });
@@ -96,6 +113,12 @@ export function initCase(ctx) {
 
   // ---------------------------------------------------------------- pin / clear
   $("#case-pin").addEventListener("click", () => {
+    if (!readAge(inputs.age.value).ok) {
+      msg.hidden = false;
+      msg.textContent = `年齢は 0〜${AGE_MAX} の整数（歳）で入れてください。乳児は 0 です。`;
+      inputs.age.focus();
+      return;
+    }
     const c = read();
     if (isEmptyCase(c)) {
       msg.hidden = false;

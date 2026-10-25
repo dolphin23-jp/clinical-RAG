@@ -20,7 +20,16 @@ export const MODE_LABELS: Record<Mode, string> = {
   create: "架空症例を作る",
 };
 
-export const AGES = ["乳児", "幼児", "学童", "10代", "20代", "30代", "40代", "50代", "60代", "70代", "80代", "90代以上"] as const;
+/**
+ * The age is whole years, 0-130 (an infant under one year is 0): the doctor's decision of 2026-10-25 (the Casebook packet needs the age in years).
+ * The bands the field had before ("70代") are still accepted, because older saved conversations and records carry them: LEGACY_AGES.
+ * Twin of AGE_MAX / LEGACY_AGES / isAgeYears / ageText in web/case-model.js (pinned equal by worker/test/casemode.test.ts).
+ */
+export const AGE_MAX = 130;
+export const LEGACY_AGES = ["乳児", "幼児", "学童", "10代", "20代", "30代", "40代", "50代", "60代", "70代", "80代", "90代以上"] as const;
+export const isAgeYears = (v: string): boolean => /^(0|[1-9]\d{0,2})$/.test(v) && Number(v) <= AGE_MAX;
+/** The age for a line: "72歳", or an old band as it was ("70代"). */
+export const ageText = (age: string): string => (isAgeYears(age) ? `${age}歳` : age);
 export const SEXES = ["男性", "女性", "その他・不明"] as const;
 export const SETTINGS = ["外来", "救急", "病棟"] as const;
 
@@ -62,14 +71,18 @@ export function parseMode(raw: unknown): Mode | undefined {
   throw new CaseInputError(`mode must be one of ${MODES.join(", ")}`, "bad_mode");
 }
 
-const ENUMS: Record<"age" | "sex" | "setting", readonly string[]> = { age: AGES, sex: SEXES, setting: SETTINGS };
+const ENUMS: Record<"sex" | "setting", readonly string[]> = { sex: SEXES, setting: SETTINGS };
 
 /** Validates and normalises the case object from a request.  Unknown keys are dropped; numbers and objects in a text field are refused. */
 export function parseCase(raw: unknown): CaseInput {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new CaseInputError("case must be an object");
   const o = raw as Record<string, unknown>;
   const out: CaseInput = { age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", structured: "" };
-  for (const k of ["age", "sex", "setting"] as const) {
+  if (o.age !== undefined && o.age !== null && o.age !== "") {
+    if (typeof o.age !== "string" || !(isAgeYears(o.age) || (LEGACY_AGES as readonly string[]).includes(o.age))) throw new CaseInputError(`case.age must be whole years (0-${AGE_MAX})`);
+    out.age = o.age;
+  }
+  for (const k of ["sex", "setting"] as const) {
     const v = o[k];
     if (v === undefined || v === null || v === "") continue;
     if (typeof v !== "string" || !ENUMS[k].includes(v)) throw new CaseInputError(`case.${k} is not one of the choices`);
@@ -161,7 +174,7 @@ export function renderCase(c: CaseInput): string {
   const row = (label: string, v: string) => `- ${label}: ${v ? indent(v) : "（未入力）"}`;
   const lines = [
     "【症例（入力）】先生が入力した事実だけです。「（未入力）」は未確認という意味で、陰性・正常ではありません。",
-    row("年代・性別", [c.age, c.sex].filter(Boolean).join("・")),
+    row("年齢・性別", [c.age ? ageText(c.age) : "", c.sex].filter(Boolean).join("・")),
     row("場面", c.setting),
     row("主訴と経過", c.complaint),
     row("バイタル", c.vitals),

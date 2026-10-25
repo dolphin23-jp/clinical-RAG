@@ -154,13 +154,13 @@ with sync_playwright() as pw:
     # 6. the free-text fields of the case convert too, and pinning converts what was typed
     page.fill("#case-complaint", "腹痛。10/21 に受診した。")
     page.fill("#case-history", "高血圧")
-    page.select_option("#case-age", "50代")
+    page.fill("#case-age", "52")
     page.select_option("#case-setting", "救急")
     page.click("#case-pin")
     expect(page.locator("#case")).not_to_be_visible()
     check("10/21" not in page.evaluate("() => document.querySelector('#casebar-text').textContent"), "the bar shows no date")
     bar = page.locator("#casebar-text").inner_text()
-    check("50代・男性・救急" in bar and "腹痛" in bar, f"the bar summarises the case ({bar})")
+    check("52歳・男性・救急" in bar and "腹痛" in bar, f"the bar summarises the case ({bar})")
 
     # 7. the request: the rendered answers (not the form's own answers); no calendar date; unanswered core questions named as such
     page.click("#case-modes button[data-mode=ddx]")
@@ -260,7 +260,7 @@ with sync_playwright() as pw:
     page2.wait_for_selector(".conv-open")
     page2.click(".conv-open")
     page2.wait_for_selector(".turn .foot button")
-    check(page2.locator("#casebar").is_visible() and "50代・男性・救急" in page2.locator("#casebar-text").inner_text(), "reopening pins the case")
+    check(page2.locator("#casebar").is_visible() and "52歳・男性・救急" in page2.locator("#casebar-text").inner_text(), "reopening pins the case")
     page2.click("#casebar-open")
     expect(page2.locator("#intake-flow")).to_have_value(FLOW)
     page2.evaluate("() => document.querySelectorAll('details.intake-phase, details.intake-more').forEach((d) => { d.open = true; })")

@@ -413,7 +413,7 @@ export function initTools(ctx) {
       sev.append(o);
     }
     add("重要度", sev);
-    const iQ = add("質問（ふだん打つ形の文。年代・所見・検査値まで。氏名・ID は書かない）", area("ef-question", q.question || ""));
+    const iQ = add("質問（ふだん打つ形の文。年齢・所見・検査値まで。氏名・ID は書かない）", area("ef-question", q.question || ""));
     const iQs = add("検索の語（1行に1つ。短いキーワード）", area("ef-queries", (q.queries || []).join("\n")));
     const neg = el("label", "check");
     const cbNeg = el("input");

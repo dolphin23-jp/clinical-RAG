@@ -2,7 +2,27 @@
 // limits and the mode labels are pinned equal by worker/test/casemode.test.ts.  Nothing here derives a finding, a score or a
 // threshold from the case: it is what the doctor typed, passed on as typed.
 
-export const AGES = ["乳児", "幼児", "学童", "10代", "20代", "30代", "40代", "50代", "60代", "70代", "80代", "90代以上"];
+/**
+ * The age is whole years (0-130; an infant under one year is 0), typed as a number (the doctor's decision of 2026-10-25: the Casebook packet needs
+ * the age in years).  The bands this field had before ("70代") are still read back from older saves and old conversations: LEGACY_AGES.
+ * Twin of AGE_MAX / LEGACY_AGES / isAgeYears in worker/src/casemode.ts (pinned equal by worker/test/casemode.test.ts).
+ */
+export const AGE_MAX = 130;
+export const LEGACY_AGES = ["乳児", "幼児", "学童", "10代", "20代", "30代", "40代", "50代", "60代", "70代", "80代", "90代以上"];
+export const isAgeYears = (v) => typeof v === "string" && /^(0|[1-9]\d{0,2})$/.test(v) && Number(v) <= AGE_MAX;
+/**
+ * What the age field holds, read from what was typed: whole years ("72", "７２", "72歳" -> "72"), an old band as it was, or "" when it is neither
+ * (`ok`: false when something was typed that is not an age, so the screen can say so).
+ */
+export function readAge(text) {
+  const t = String(text ?? "").normalize("NFKC").replace(/\s+/g, "").replace(/[歳才]$/u, "");
+  if (t === "") return { age: "", ok: true };
+  if (isAgeYears(t)) return { age: t, ok: true };
+  const band = String(text).normalize("NFKC").replace(/\s+/g, "");
+  return LEGACY_AGES.includes(band) ? { age: band, ok: true } : { age: "", ok: false };
+}
+/** The age for a line: "72歳", or the old band as it was ("70代"); "" when there is none. */
+export const ageText = (age) => (isAgeYears(age) ? `${age}歳` : String(age ?? ""));
 export const SEXES = ["男性", "女性", "その他・不明"];
 export const SETTINGS = ["外来", "救急", "病棟"];
 
@@ -59,7 +79,8 @@ export function cleanIntake(raw) {
 export function cleanCase(raw) {
   const out = emptyCase();
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [k, list] of [["age", AGES], ["sex", SEXES], ["setting", SETTINGS]]) if (typeof raw[k] === "string" && list.includes(raw[k])) out[k] = raw[k];
+  if (typeof raw.age === "string") out.age = readAge(raw.age).age;
+  for (const [k, list] of [["sex", SEXES], ["setting", SETTINGS]]) if (typeof raw[k] === "string" && list.includes(raw[k])) out[k] = raw[k];
   for (const k of TEXT_KEYS) if (typeof raw[k] === "string") out[k] = raw[k].trim().slice(0, LIMITS[k]);
   if (typeof raw.structured === "string") out.structured = raw.structured.trim().slice(0, STRUCTURED_LIMIT);
   out.intake = out.structured ? cleanIntake(raw.intake) : null;
@@ -85,7 +106,7 @@ export const structuredTitle = (c) => /^場面・症候: (.+?)（/.exec(c.struct
 
 /** One line for the bar over the thread: 70代・男性・救急｜主訴の冒頭 */
 export function caseSummary(c) {
-  const who = [[c.age, c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
+  const who = [[ageText(c.age), c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
   const body = oneLine(c.complaint || c.findings || c.vitals || c.history || structuredTitle(c), 48);
   return [who, body].filter(Boolean).join("｜");
 }
@@ -93,8 +114,8 @@ export function caseSummary(c) {
 /** Rows to show a case read-only: [label, value] for the filled fields only. */
 export function caseRows(c) {
   const rows = [];
-  const who = [c.age, c.sex].filter(Boolean).join("・");
-  if (who) rows.push(["年代・性別", who]);
+  const who = [ageText(c.age), c.sex].filter(Boolean).join("・");
+  if (who) rows.push(["年齢・性別", who]);
   if (c.setting) rows.push(["場面", c.setting]);
   for (const f of FIELDS) {
     if (f.key === "own" && c.structured) rows.push(["場面・症候の入力", c.structured]);

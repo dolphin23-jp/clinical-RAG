@@ -365,7 +365,7 @@ export function initRecords(ctx) {
   // ------------------------------------------- the list
   function renderList() {
     body.append(
-      el("p", "help", `症例の記録は、診察をまたいで残る症例のデータです。サーバーに保存され、最後の更新から${S.retention ?? "一定の"}日で自動的に消えます。「終える」で消せます。入れてよいのは、年代・主要所見・検査値の数値までで、氏名・ID・日付は入れません（時間は「4日前」「入院3日目」の形で）。`),
+      el("p", "help", `症例の記録は、診察をまたいで残る症例のデータです。サーバーに保存され、最後の更新から${S.retention ?? "一定の"}日で自動的に消えます。「終える」で消せます。入れてよいのは、年齢（歳）・主要所見・検査値の数値までで、氏名・ID・日付は入れません（時間は「4日前」「入院3日目」の形で）。`),
     );
     const pinned = caseCtl.pinned();
     if (pinned) {
@@ -1168,7 +1168,7 @@ export function initRecords(ctx) {
     onCasePinned(kase) {
       if (!S.rec || !S.id || S.unlinking) return;
       const cur = S.rec.ed.case;
-      if ((kase.age !== cur.age || kase.sex !== cur.sex) && !confirm("年代・性別が、この記録の症例と違います。同じ患者の症例を直したのなら［OK］（この記録の症例を更新します）、別の患者なら［キャンセル］（この記録との連動を外します。記録はそのまま残ります）。")) {
+      if ((kase.age !== cur.age || kase.sex !== cur.sex) && !confirm("年齢・性別が、この記録の症例と違います。同じ患者の症例を直したのなら［OK］（この記録の症例を更新します）、別の患者なら［キャンセル］（この記録との連動を外します。記録はそのまま残ります）。")) {
         this.onCaseCleared();
         return;
       }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { before, test } from "node:test";
 import type { Db } from "../src/db.ts";
 import { runAsk, type StreamEvent } from "../src/anthropic.ts";
-import { AGES, CaseInputError, MODE_LABELS, MODES, SETTINGS, SEXES, STRUCTURED_LIMIT, TEXT_LIMITS, caseTexts, isEmptyCase, parseCase, parseMode, renderCase } from "../src/casemode.ts";
+import { AGE_MAX, CaseInputError, LEGACY_AGES, MODE_LABELS, MODES, SETTINGS, SEXES, STRUCTURED_LIMIT, TEXT_LIMITS, ageText, caseTexts, isAgeYears, isEmptyCase, parseCase, parseMode, renderCase } from "../src/casemode.ts";
 import { ConvInputError, convStore } from "../src/convstore.ts";
 import { handle, type AppDeps } from "../src/handler.ts";
 import { CASE_RULES, MODE_HEADINGS, OWN_SECTION_ASSESS, OWN_SECTION_DDX, SYSTEM_PROMPT, caseSystem } from "../src/prompt.ts";
@@ -55,7 +55,7 @@ const events = async (res: Response): Promise<any[]> =>
   (await res.text()).split("\n\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
 
 const CASE = {
-  age: "70代",
+  age: "72",
   sex: "男性",
   setting: "救急",
   complaint: "3日前から発熱と咳。昨日から尿量が減った。",
@@ -88,15 +88,17 @@ test("parseCase: refuses non-objects, wrong types, unknown choices, over-long te
   assert.equal(code("text"), "bad_case");
   assert.equal(code([CASE]), "bad_case");
   assert.equal(code({ ...CASE, complaint: 5 }), "bad_case");
-  assert.equal(code({ ...CASE, age: "75歳" }), "bad_case");
+  // the age is whole years, 0..130, as digits (the screen reads "７２歳" into "72" before it sends)
+  for (const bad of ["75歳", "131", "72.5", "-3", "072", "７２", "七十二", "70代前半", " 72", "1e2"]) assert.equal(code({ ...CASE, age: bad }), "bad_case", bad);
+  for (const ok of ["0", "1", "72", "130", "70代", "乳児", "90代以上"]) assert.equal(code({ ...CASE, age: ok }), "", ok); // the old bands still come back from saved conversations
   assert.equal(code({ ...CASE, sex: "男" }), "bad_case");
   assert.equal(code({ ...CASE, setting: "ICU" }), "bad_case");
   assert.equal(code({ ...CASE, own: "あ".repeat(TEXT_LIMITS.own + 1) }), "bad_case");
   assert.equal(code({ ...CASE, findings: "あ".repeat(TEXT_LIMITS.findings) }), ""); // exactly the limit is fine
   // age / sex / setting alone give the model nothing to work from
-  assert.equal(code({ age: "70代", sex: "男性", setting: "救急" }), "empty_case");
+  assert.equal(code({ age: "72", sex: "男性", setting: "救急" }), "empty_case");
   assert.equal(code({ complaint: "   ", own: "見立てだけ" }), "empty_case");
-  assert.ok(isEmptyCase(parseCaseLoose({ age: "70代" })));
+  assert.ok(isEmptyCase(parseCaseLoose({ age: "72" })));
 });
 const parseCaseLoose = (o: object) => ({ age: "", sex: "", setting: "", complaint: "", vitals: "", findings: "", history: "", own: "", structured: "", ...o });
 
@@ -113,7 +115,7 @@ test("renderCase: an unfilled field says 未入力 (not negative); the doctor's 
   const text = renderCase(parseCase({ ...CASE, history: "" }));
   assert.match(text, /^【症例（入力）】/);
   assert.match(text, /陰性・正常ではありません/);
-  assert.match(text, /- 年代・性別: 70代・男性/);
+  assert.match(text, /- 年齢・性別: 72歳・男性/);
   assert.match(text, /- 既往・内服: （未入力）/);
   assert.match(text, /- 身体所見・検査・画像・心電図: Cr 2\.4 mg\/dL/);
   assert.ok(!text.includes("先生自身のアセスメント"));
@@ -203,7 +205,7 @@ test("HTTP: a case without a mode is a free question about the case; a mode with
   assert.equal(((await noCase.json()) as any).code, "case_required");
   const badMode = await handle(post("/api/ask", { question: "q", mode: "treat", case: CASE }), app({ fetchImpl: none.fetchImpl }));
   assert.equal(((await badMode.json()) as any).code, "bad_mode");
-  const empty = await handle(post("/api/ask", { question: "q", mode: "ddx", case: { age: "70代" } }), app({ fetchImpl: none.fetchImpl }));
+  const empty = await handle(post("/api/ask", { question: "q", mode: "ddx", case: { age: "72" } }), app({ fetchImpl: none.fetchImpl }));
   assert.equal(((await empty.json()) as any).code, "empty_case");
   // a typed question is required in "ask"; the buttons need none
   assert.equal((await handle(post("/api/ask", { case: CASE }), app({ fetchImpl: none.fetchImpl }))).status, 400);
@@ -262,7 +264,7 @@ test("daily cap: a case-mode ask is counted like any other ask", async () => {
   assert.equal(n, 1);
   // a refused request (identifier / bad case) is not counted
   await handle(post("/api/ask", { mode: "ddx", case: { ...CASE, vitals: "患者ID 99" } }), app({ fetchImpl: api.fetchImpl, dailyAskLimit: 5, counter }));
-  await handle(post("/api/ask", { mode: "ddx", case: { age: "70代" } }), app({ fetchImpl: api.fetchImpl, dailyAskLimit: 5, counter }));
+  await handle(post("/api/ask", { mode: "ddx", case: { age: "72" } }), app({ fetchImpl: api.fetchImpl, dailyAskLimit: 5, counter }));
   assert.equal(n, 1);
 });
 
@@ -301,7 +303,10 @@ test("case rules: the source tags, unknown-is-not-negative, no patient-specific 
 
 // ---------------------------------------------------------------------------------- the screen's lists are the Worker's
 test("web/case-model.js equals worker/src/casemode.ts: choices, limits and mode labels", () => {
-  assert.deepEqual(web.AGES, [...AGES]);
+  assert.equal(web.AGE_MAX, AGE_MAX);
+  assert.deepEqual(web.LEGACY_AGES, [...LEGACY_AGES]);
+  for (const v of ["0", "5", "72", "130", "131", "072", "7.5", "", "70代", "-1"]) assert.equal(web.isAgeYears(v), isAgeYears(v), String(v));
+  for (const v of ["72", "0", "70代", "", "x"]) assert.equal(web.ageText(v), ageText(v), v);
   assert.deepEqual(web.SEXES, [...SEXES]);
   assert.deepEqual(web.SETTINGS, [...SETTINGS]);
   assert.deepEqual(Object.fromEntries(web.FIELDS.map((f: any) => [f.key, f.max])), TEXT_LIMITS);
@@ -314,15 +319,15 @@ test("web/case-model.js equals worker/src/casemode.ts: choices, limits and mode 
 
 test("web/case-model.js: cleanCase keeps only known keys and choices, cuts to the limit; summary and rows show what was typed", () => {
   const c = web.cleanCase({ ...CASE, age: "75歳", sex: "女性", extra: "x", complaint: "あ".repeat(2000), history: 7 });
-  assert.equal(c.age, "");
+  assert.equal(c.age, "75"); // typed as "75歳": read as whole years
   assert.equal(c.sex, "女性");
   assert.equal(c.complaint.length, TEXT_LIMITS.complaint);
   assert.equal(c.history, "");
   assert.ok(!("extra" in c));
   assert.deepEqual(web.cleanCase(null), web.emptyCase());
-  assert.ok(web.isEmptyCase({ ...web.emptyCase(), age: "70代", own: "x" }));
-  assert.equal(web.caseSummary(parseCase(CASE)), "70代・男性・救急｜3日前から発熱と咳。昨日から尿量が減った。");
-  assert.deepEqual(web.caseRows({ ...web.emptyCase(), complaint: "発熱", sex: "女性" }), [["年代・性別", "女性"], ["主訴と経過", "発熱"]]);
+  assert.ok(web.isEmptyCase({ ...web.emptyCase(), age: "72", own: "x" }));
+  assert.equal(web.caseSummary(parseCase(CASE)), "72歳・男性・救急｜3日前から発熱と咳。昨日から尿量が減った。");
+  assert.deepEqual(web.caseRows({ ...web.emptyCase(), complaint: "発熱", sex: "女性" }), [["年齢・性別", "女性"], ["主訴と経過", "発熱"]]);
   assert.equal(web.caseKey(CASE), web.caseKey({ ...CASE, extra: "ignored" }));
   assert.notEqual(web.caseKey(CASE), web.caseKey({ ...CASE, vitals: "BP 80/50" }));
 });
@@ -331,7 +336,7 @@ test("web/case-model.js: cleanCase keeps only known keys and choices, cuts to th
 const STRUCTURED = "場面・症候: 救急外来 × 腹痛（clinical-modules のフローの質問への答え。未入力の項目は未確認で、陰性ではありません）\n［受け入れ］\n救急隊の事前情報：バイタルは安定\n未入力の中核項目（2件。未確認）: 気道、呼吸の評価";
 
 test("structured: the flow's answers are one more text of the case; alone it is enough; it is shown as typed and an absent one adds no row", () => {
-  const c = parseCase({ age: "70代", structured: `  ${STRUCTURED}\r\n` });
+  const c = parseCase({ age: "72", structured: `  ${STRUCTURED}\r\n` });
   assert.equal(c.structured, STRUCTURED);
   assert.ok(!isEmptyCase(c)); // the flow's answers alone are a case
   assert.ok(caseTexts(c).includes(STRUCTURED));
