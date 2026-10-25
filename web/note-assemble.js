@@ -69,7 +69,7 @@ export function headingRole(heading) {
  */
 export const FILL = {
   A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
-  A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
+  A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
   A05: { admission: ["ctx", "b:route"], hpi: ["complaint"], background: ["history"], baseline: ["b:baseline"], initial: ["vitals", "findings", "structured"], summary: ["b:summary"], problem_list: ["d:problems", "b:list"], problem_ap: ["own", "d:assessment", "d:plan", "b:ap"], general: ["b:general"], outlook: ["d:contingency", "b:outlook"] },
   A06: { context: ["ctx"], interval: ["complaint"], objective: ["vitals", "findings", "structured"], problem_ap: ["own", "d:problems", "d:assessment", "d:plan"], handover: ["d:contingency"] },
   A08: { context: ["ctx"], hpi: ["complaint"], initial: ["vitals", "findings", "structured"] },
@@ -86,9 +86,9 @@ export const RECORD_FILL = {
   A08: { context: ["b:dc_context"], diagnoses: ["b:dc_dx"], hpi: ["complaint", "b:route"], initial: ["vitals", "findings", "structured"], course: ["b:dc_course"], procedures: ["b:dc_procedures"], condition: ["b:dc_state"], medications: ["b:dc_meds"], followup: ["b:dc_followup"], unresolved: ["b:dc_tasks"] },
 };
 /**
- * The flow's answers (kase.structured / kase.intake, web/intake.js) for the types in ROUTED (web/note-route.js: A04): each answer goes to the field
- * that clinical-modules' ROUTES gives its question's category (docs/enhancement-plan.md 8.18).  What cannot be placed is kept, in a block of its own
- * after the fields (`extras`), and counted.  The other types still place the answers beside the findings (FILL), as before: A01 waits for its upstream.
+ * The flow's answers (kase.structured / kase.intake, web/intake.js) for the types in ROUTED (web/note-route.js: A04 and A01): each answer goes to the
+ * field that clinical-modules' ROUTES gives its question's category (docs/enhancement-plan.md 8.18).  What cannot be placed is kept, in a block of its
+ * own after the fields (`extras`), and counted.  The other types still place the answers beside the findings (FILL), as before.
  */
 /** Fields whose line says something is still to be filled by hand (not an AI statement): shown after the adopted items. */
 export const FIELD_NOTES = {
@@ -111,7 +111,7 @@ function sectionsOf(type) {
 
 /**
  * kase: the typed case ({age, sex, setting, complaint, vitals, findings, history, own, structured}).
- * `structured` (the flow's answered questions as text, web/intake.js) and `intake` ({flow, answers}): for a type in ROUTED (A04) the answers are
+ * `structured` (the flow's answered questions as text, web/intake.js) and `intake` ({flow, answers}): for a type in ROUTED (A04, A01) the answers are
  * routed to the fields by their questions' categories (web/note-route.js, needs `flow`: the flow's structure from web/flow-schema.js); for the
  * others `structured` is placed beside the findings until a declared routing exists (docs/enhancement-plan.md 8.18).
  * items: adopted draft items [{ role, heading, text, cites: [{kind, title, page, url}] }] (anything else is ignored).

@@ -13,8 +13,11 @@
 import { byPhase, contextOf, isAnswered, isVisible, lineText, renderStructured } from "./intake.js";
 import { NOTE_ROUTES } from "./note-types.js";
 
-/** The types whose flow answers are routed.  A01 (outpatient first visit) is not: its output fields are provisional upstream and it waits for them. */
-export const ROUTED = ["A04"];
+/**
+ * The types whose flow answers are routed: A04 (emergency) and A01 (outpatient first visit).  A01 joined on 2026-10-25, when the doctor treated its ten
+ * output frames as confirmed and clinical-modules gave its flow a `cat` for each question.  A type is routed only when the flow's `cat.note` names it.
+ */
+export const ROUTED = ["A04", "A01"];
 
 export const ROUTED_LABEL = "場面・症候の入力（フローの質問への答え）";
 export const REST_LABEL = "欄に結びつかなかった場面・症候の入力";

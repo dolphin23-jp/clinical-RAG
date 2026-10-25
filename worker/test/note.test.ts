@@ -124,23 +124,32 @@ const askedLines = (flow: any, answers: any, kase: any = {}) => {
   const ctx = I.contextOf(answers, kase);
   return I.byPhase(flow).flatMap(({ questions }: any) => questions.filter((q: any) => I.isVisible(flow, q, ctx) && I.isAnswered(answers[q.id])).map((q: any) => I.lineText(q, answers[q.id])));
 };
+/** Outpatient first visit (A01): the same idea, for its flow and its fields. */
+const OP_FLOW = S.FLOWS["outpatient-first-visit.fever"];
+const OP_ANSWERS = { cc_text: "発熱と咳", referral: "none", first: "sick", temp: 38.6, duration: "acute", pmh_text: "高血圧", allergy: "なし", meds: ["abx_recent"], host: ["dm"], living: "alone", exam_head: ["pharynx_red"], labs: ["neutropenia"], problem_line: "急性の発熱", antipyretic_tx: "acetaminophen", tests_done: ["cbc"] };
 const textLines = (t: string) => t.split("\n").filter((l) => l.trim() && !/^【.*】$/.test(l) && !/^［.*］$/.test(l));
 const sorted = (a: string[]) => [...a].sort();
-const ROUTED_INITIAL = ["呼吸数：18 回/分", "SpO2：96 %", "酸素条件：室内気", "SpO2の評価：SpO2は問題なし", "呼吸の評価：問題なし", "血糖：110 mg/dL", "血糖の評価：低血糖なし"];
+const ROUTED_INITIAL = ["第一印象：sick", "呼吸数：18 回/分", "SpO2：96 %", "酸素条件：室内気", "SpO2の評価：SpO2は問題なし", "呼吸の評価：問題なし", "血糖：110 mg/dL", "血糖の評価：低血糖なし"];
 
 test("A04: each answer goes to the field ROUTES gives its question's category; the findings and every other field stay as they were", () => {
   const note = A.assemble("A04", { kase: withFlow(), flow: FLOW });
   const field = (k: string) => note.sections.find((s: any) => s.key === k);
   assert.deepEqual(field("exam").blocks.map((b: any) => b.source), ["findings"]); // the physical-exam field is not where the answers go
   assert.deepEqual(field("initial").blocks.map((b: any) => b.source), ["vitals", "routed"]);
-  assert.equal(field("initial").blocks[1].text, ROUTED_INITIAL.join("\n"));
+  assert.equal(field("initial").blocks[1].text, ROUTED_INITIAL.join("\n")); // the first impression is O: the initial assessment (doctor's decision 2026-10-25)
   assert.equal(field("reassessment").blocks[0].text, "経過：悪化"); // a conditional field with something in it appears
-  // all other fields are exactly as without the flow's answers
+  // the pre-arrival information is S (history of the present illness); the history that is not about the complaint is the past history
+  assert.deepEqual(field("hpi").blocks.map((b: any) => b.source), ["complaint", "routed"]);
+  assert.equal(field("hpi").blocks[1].text, "救急隊の事前情報：バイタルは不安定・悪化\n発症時の体位：立位");
+  assert.deepEqual(field("background").blocks.map((b: any) => b.source), ["history", "routed"]);
+  assert.equal(field("background").blocks[1].text, "既往：高血圧");
+  // all other fields are exactly as without the flow's answers, and what was typed in hpi / background comes first, unchanged
   const plain = A.assemble("A04", { kase: KASE });
-  for (const k of ["arrival", "hpi", "background", "exam", "assessment", "disposition"]) assert.deepEqual(field(k), plain.sections.find((s: any) => s.key === k), k);
+  for (const k of ["arrival", "exam", "assessment", "disposition"]) assert.deepEqual(field(k), plain.sections.find((s: any) => s.key === k), k);
+  for (const k of ["hpi", "background"]) assert.deepEqual(field(k).blocks[0], plain.sections.find((s: any) => s.key === k).blocks[0], k);
   assert.deepEqual(note.sections.map((s: any) => s.key), ["arrival", "hpi", "background", "initial", "exam", "assessment", "reassessment", "disposition"]);
   const text = A.toText(note);
-  assert.match(text, /■初期評価・ABCDE\n\［バイタル\］\nBP 92\/54, HR 108\n［場面・症候の入力（フローの質問への答え）］\n呼吸数：18 回\/分\nSpO2：96 %\n酸素条件：室内気\nSpO2の評価：SpO2は問題なし/);
+  assert.match(text, /■初期評価・ABCDE\n\［バイタル\］\nBP 92\/54, HR 108\n［場面・症候の入力（フローの質問への答え）］\n第一印象：sick\n呼吸数：18 回\/分\nSpO2：96 %\n酸素条件：室内気\nSpO2の評価：SpO2は問題なし/);
   assert.match(text, /■身体診察\n\［身体所見・検査・画像・心電図\］\nCr 2\.4 mg\/dL, K 5\.8 mEq\/L\n\n■重症度/);
   assert.match(text, /■再評価・治療反応\n\［場面・症候の入力（フローの質問への答え）\］\n経過：悪化\n/);
   const order = [...text.matchAll(/^■(.+)$/gm)].map((m) => m[1]);
@@ -148,24 +157,30 @@ test("A04: each answer goes to the field ROUTES gives its question's category; t
 });
 
 test("A04: the answers no field took are kept, after the fields, in the order the flow asked, and counted by why", () => {
-  const note = A.assemble("A04", { kase: withFlow(), flow: FLOW });
+  // the medicines and the family history are patient-background facts that the flow declares as observations: the background field cannot take them
+  const answers = { ...ANSWERS, meds: ["antiht", "alcohol"], fhx: "pos" };
+  const note = A.assemble("A04", { kase: withFlow(KASE, answers), flow: FLOW });
   assert.equal(note.extras.length, 1);
-  assert.equal(note.extras[0].label, "場面・症候の入力のうち、欄に結びつかなかったもの".replace("場面・症候の入力のうち、欄に結びつかなかったもの", R.REST_LABEL));
+  assert.equal(note.extras[0].label, R.REST_LABEL);
   assert.match(
     A.toText(note),
-    /■欄に結びつかなかった場面・症候の入力\n（フローの質問への答えのうち、記載の欄に振り分けられなかったものです。ここにない項目は未確認で、陰性・正常を意味しません）\n【救急外来 × 失神】\n［受け入れ］\n救急隊の事前情報：バイタルは不安定・悪化\n受け入れ準備：モニター・12誘導ECG・除細動器\n第一印象：sick\n病着：21:40\n［病歴・診察］\n発症時の体位：立位\n既往：高血圧\n［方針・記録］\nDisposition：帰宅$/,
+    /■欄に結びつかなかった場面・症候の入力\n（フローの質問への答えのうち、記載の欄に振り分けられなかったものです。ここにない項目は未確認で、陰性・正常を意味しません）\n【救急外来 × 失神】\n［受け入れ］\n受け入れ準備：モニター・12誘導ECG・除細動器\n病着：21:40\n［病歴・診察］\n家族歴：家族歴あり\n内服：降圧薬・利尿薬・血管拡張薬、飲酒\n［方針・記録］\nDisposition：帰宅$/,
   );
-  // pending (not classified yet): 4; not a chart item: 2 (the preparation and the disposition); a time no question declares: 1 (the arrival time)
-  assert.deepEqual(note.routing.reasons, { pending: 4, none: 2, aux: 1 });
-  assert.equal(note.routing.answered, 15);
-  assert.equal(note.routing.placed, 8);
-  assert.equal(note.routing.rest.length, 7);
+  // pending (left unclassified with a reason): 2; not a chart item: 2 (the preparation and the disposition); a time no question declares: 1 (the arrival time)
+  assert.deepEqual(note.routing.reasons, { pending: 2, none: 2, aux: 1 });
+  assert.equal(note.routing.answered, 17);
+  assert.equal(note.routing.placed, 12);
+  assert.equal(note.routing.rest.length, 5);
   const summary = R.routingSummary(note.routing);
-  assert.match(summary, /15 件のうち、8 件を ROUTES の欄に振り分けました。7 件は欄に結びつかず（カテゴリ未分類 4・記載の項目にしない質問 2・どの質問にも付かない時刻・測定条件・理由 1）/);
+  assert.match(summary, /17 件のうち、12 件を ROUTES の欄に振り分けました。5 件は欄に結びつかず（.*カテゴリ未分類 2.*）、末尾のブロックに残しています。/);
+  assert.match(summary, /記載の項目にしない質問 2/);
+  assert.match(summary, /どの質問にも付かない時刻・測定条件・理由 1/);
+  // without those two answers nothing is left over but the preparation, the disposition and the arrival time
+  assert.deepEqual(A.assemble("A04", { kase: withFlow(), flow: FLOW }).routing.reasons, { none: 2, aux: 1 });
 });
 
 test("A04: a time or measurement condition follows the question that declares it, to the same place (the SpO2 and 'on room air' stay together)", () => {
-  const route = (answers: any) => R.routeAnswers("A04", { flow: FLOW, kase: withFlow(KASE, answers) });
+  const route = (answers: any, flow: any = FLOW) => R.routeAnswers("A04", { flow, kase: withFlow(KASE, answers, flow) });
   // spo2 is routed: its condition is written right after it in the same field
   assert.deepEqual(route({ spo2: 94, o2: "oxygen" }).routed.initial, ["SpO2：94 %", "酸素条件：酸素投与下"]);
   // the ECG's time is declared by the ECG question: it follows that question
@@ -175,8 +190,12 @@ test("A04: a time or measurement condition follows the question that declares it
   assert.equal(both.filter((l: string) => l === "12誘導ECG（22:05）").length, 1);
   assert.equal(both.indexOf("12誘導ECG（22:05）"), 1);
   assert.equal(both.length, 3);
-  // a question that is not classified takes its time with it, to the same block and for the same reason
-  const pend = route({ tx: ["fluid"], t_tx: "21:50" });
+  // a performed treatment and its time go together to the management field
+  assert.deepEqual(route({ tx: ["fluid"], t_tx: "21:50" }).routed.management, ["処置：輸液", "処置の実施（21:50）"]);
+  // a question that is not classified takes its time with it, to the same block and for the same reason (a schema where the treatment is still pending)
+  const stale = structuredClone(FLOW);
+  stale.questions.find((q: any) => q.id === "tx").br.cat = "pending";
+  const pend = route({ tx: ["fluid"], t_tx: "21:50" }, stale);
   assert.equal(pend.placed, 0);
   assert.deepEqual(pend.rest.map((r: any) => [r.line, r.why]), [["処置：輸液", "pending"], ["処置の実施（21:50）", "pending"]]);
   // an answered time / condition that no answered question declares is kept as one no question declares
@@ -187,29 +206,31 @@ test("A04: a time or measurement condition follows the question that declares it
   assert.deepEqual(arrival.reasons, { aux: 1 }); // the arrival time (the origin of the time axis) has no question that declares it
 });
 
-test("ROUTES decides: every question of every emergency flow lands where its category and the table say, recomputed here", () => {
+test("ROUTES decides: every question of every flow with categories lands where its category and the table say, recomputed here", () => {
   const ENT: any = { observation: "observation", context: "patient_context", assessment: "assessment", action: "action" };
-  const index = new Map<string, string>();
-  for (const [field, rules] of Object.entries<any>(T.NOTE_ROUTES.A04)) for (const [entity, cats] of Object.entries<string[]>(rules)) for (const c of cats) if (c !== "*") index.set(`${entity}:${c}`, field);
-  let placed = 0;
-  let pending = 0;
+  const counts: Record<string, { placed: number; pending: number }> = {};
   for (const flow of Object.values<any>(S.FLOWS)) {
     if (!flow.cat) continue;
-    assert.equal(flow.cat.note, "A04");
+    const note = flow.cat.note;
+    const index = new Map<string, string>();
+    for (const [field, rules] of Object.entries<any>(T.NOTE_ROUTES[note])) for (const [entity, cats] of Object.entries<string[]>(rules)) for (const c of cats) if (c !== "*") index.set(`${entity}:${c}`, field);
+    const n = (counts[note] ??= { placed: 0, pending: 0 });
     for (const q of flow.questions) {
       const want = ENT[q.br.ent] ? (q.br.cat === "pending" ? { why: "pending" } : index.has(`${ENT[q.br.ent]}:${q.br.cat}`) ? { field: index.get(`${ENT[q.br.ent]}:${q.br.cat}`) } : { why: "stale" }) : { why: q.br.ent === "none" ? "none" : "aux" };
-      assert.deepEqual(R.placeOf(flow, q, "A04"), want, `${flow.id}.${q.id}`);
-      if (want.field) placed++;
-      if (want.why === "pending") pending++;
-      assert.notEqual(want.why, "stale", `${flow.id}.${q.id}: the category is not one ROUTES takes: re-import`);
+      assert.deepEqual(R.placeOf(flow, q, note), want, `${flow.id}.${q.id}`);
+      if ((want as any).field) n.placed++;
+      if ((want as any).why === "pending") n.pending++;
+      assert.notEqual((want as any).why, "stale", `${flow.id}.${q.id}: the category is not one ROUTES takes: re-import`);
     }
   }
-  // the shipped declarations place some questions and leave the rest pending (docs/flow-cat-pending.md in clinical-modules)
-  assert.equal(placed + pending, 708);
-  assert.ok(placed > 200 && pending > 300);
+  // the shipped declarations place most questions; what is left carries a reason in clinical-modules (docs/flow-cat-pending.md there)
+  assert.deepEqual(Object.keys(counts).sort(), ["A01", "A04"]);
+  assert.equal(counts.A04.placed + counts.A04.pending, 708);
+  assert.equal(counts.A01.placed + counts.A01.pending, 61);
+  for (const n of Object.values(counts)) assert.ok(n.placed > 10 * n.pending, JSON.stringify(n));
 });
 
-test("nothing is lost, nothing is made up: for every emergency flow with every question answered, the placed lines and the rest are exactly the answered lines", () => {
+test("nothing is lost, nothing is made up: for every flow with categories and every question answered, the placed lines and the rest are exactly the answered lines", () => {
   for (const flow of Object.values<any>(S.FLOWS)) {
     if (!flow.cat) continue;
     const answers: any = {};
@@ -220,7 +241,7 @@ test("nothing is lost, nothing is made up: for every emergency flow with every q
     const kase = { ...KASE, sex: "女性", structured: "", intake: null as any };
     kase.intake = { flow: flow.id, answers };
     kase.structured = I.renderStructured(flow, answers, kase);
-    const r = R.routeAnswers("A04", { flow, kase });
+    const r = R.routeAnswers(flow.cat.note, { flow, kase });
     assert.equal(r.fromText, false, flow.id);
     const got = [...Object.values<string[]>(r.routed).flat(), ...r.rest.map((x: any) => x.line)];
     assert.deepEqual(sorted(got), sorted(askedLines(flow, answers, kase)), flow.id); // each answered line once, none added
@@ -228,7 +249,7 @@ test("nothing is lost, nothing is made up: for every emergency flow with every q
     assert.equal(r.placed + r.rest.length, r.answered);
     assert.equal(Object.values<number>(r.reasons).reduce((a, b) => a + b, 0), r.rest.length);
     // a routed line sits in a field of the type, and only there
-    for (const f of Object.keys(r.routed)) assert.ok(T.NOTE_TYPES.A04.sections.some((s: any) => s.key === f), f);
+    for (const f of Object.keys(r.routed)) assert.ok(T.NOTE_TYPES[flow.cat.note].sections.some((s: any) => s.key === f), f);
   }
 });
 
@@ -282,7 +303,7 @@ test("A04: dropping the AI mark and the source marks does not touch the answers 
   const note = A.assemble("A04", { kase: withFlow(), flow: FLOW, items: [item("plan", "輸液の反応を見る [標準・出典未確認]", [BOOK])] });
   for (const opts of [{}, { aiMark: false }, { sourceMarks: false }, { aiMark: false, sourceMarks: false }]) {
     const t = A.toText(note, opts);
-    assert.match(t, /\［場面・症候の入力（フローの質問への答え）\］\n呼吸数：18 回\/分/, JSON.stringify(opts));
+    assert.match(t, /\［場面・症候の入力（フローの質問への答え）\］\n第一印象：sick\n呼吸数：18 回\/分/, JSON.stringify(opts));
     assert.match(t, /■欄に結びつかなかった場面・症候の入力/, JSON.stringify(opts));
     assert.ok(!t.includes("AI草案〕呼吸数") && !t.includes("［書籍］"), JSON.stringify(opts));
   }
@@ -290,41 +311,89 @@ test("A04: dropping the AI mark and the source marks does not touch the answers 
   assert.ok(full.indexOf("■欄に結びつかなかった場面・症候の入力") < full.indexOf("■AI草案の出典（採用した項目）"));
 });
 
-test("scope: only A04 routes; A01 and the other types place the answers beside the findings as before (A01 waits for its upstream)", () => {
-  assert.deepEqual(R.ROUTED, ["A04"]);
-  for (const [field, parts] of Object.entries<string[]>(A.FILL.A04)) assert.ok(!parts.includes("structured"), `A04.${field} still names the flow's answers`);
-  assert.deepEqual(A.FILL.A01.exam, ["findings", "structured"]);
-  for (const id of A.ENABLED.filter((t: string) => t !== "A04")) {
+test("scope: A04 and A01 route; the other types place the answers beside the findings as before", () => {
+  assert.deepEqual(R.ROUTED, ["A04", "A01"]);
+  for (const id of R.ROUTED) for (const [field, parts] of Object.entries<string[]>(A.FILL[id])) assert.ok(!parts.includes("structured"), `${id}.${field} still names the flow's answers`);
+  for (const id of A.ENABLED.filter((t: string) => !R.ROUTED.includes(t))) {
     const note = A.assemble(id, { kase: withFlow(), flow: FLOW });
     assert.equal(note.routing, null, id);
     assert.deepEqual(note.extras, [], id);
     assert.ok(JSON.stringify(note.sections).includes("第一印象：sick"), `${id} still carries the answers in a field`);
     assert.ok(!A.toText(note).includes("■欄に結びつかなかった"), id);
   }
-  assert.match(A.toText(A.assemble("A01", { kase: withFlow(), flow: FLOW })), /■身体診察\n\［身体所見・検査・画像・心電図\］\nCr 2\.4 mg\/dL, K 5\.8 mEq\/L\n\［場面・症候の入力（フローの質問への答え）\］\n【救急外来 × 失神】\n\［受け入れ\］/);
   // no answers: nothing is routed, no block, no heading made up
-  assert.equal(A.assemble("A04", { kase: KASE, flow: FLOW }).routing, null);
-  assert.ok(!A.toText(A.assemble("A04", { kase: KASE, flow: FLOW })).includes("場面・症候の入力"));
+  for (const id of R.ROUTED) {
+    assert.equal(A.assemble(id, { kase: KASE, flow: FLOW }).routing, null);
+    assert.ok(!A.toText(A.assemble(id, { kase: KASE, flow: FLOW })).includes("場面・症候の入力"));
+  }
+  // a flow of another scene is not routed into a type it does not name: the emergency answers do not go into A01's fields (and the reverse)
+  const emergencyInA01 = A.assemble("A01", { kase: withFlow(), flow: FLOW });
+  assert.equal(emergencyInA01.routing.fromText, true);
+  assert.equal(emergencyInA01.routing.placed, 0);
+  const outpatientInA04 = A.assemble("A04", { kase: withFlow(KASE, OP_ANSWERS, OP_FLOW), flow: OP_FLOW });
+  assert.equal(outpatientInA04.routing.fromText, true);
+  assert.equal(outpatientInA04.routing.placed, 0);
 });
 
-test("the table and the declarations the routing reads are consistent: ROUTES' fields are the type's own, one (entity, category) goes to one field, the outpatient flow has none", () => {
+test("A01: each answer of the outpatient flow goes to the field ROUTES gives its question's category; what is typed stays as it was; patient-background facts declared as observations are kept, counted", () => {
+  const note = A.assemble("A01", { kase: withFlow(KASE, OP_ANSWERS, OP_FLOW), flow: OP_FLOW });
+  const by = Object.fromEntries(note.sections.map((s: any) => [s.key, s.blocks.map((b: any) => b.source)]));
+  assert.deepEqual(by, {
+    visit: ["ctx", "routed"],
+    hpi: ["complaint", "routed"],
+    background: ["history", "routed"],
+    initial: ["vitals", "routed"],
+    exam: ["findings", "routed"],
+    tests: ["routed"],
+    reasoning: ["own", "routed"],
+    plan: ["routed"],
+    followup: [],
+  });
+  const text = (key: string) => note.sections.find((s: any) => s.key === key).blocks.find((b: any) => b.source === "routed").text;
+  assert.equal(text("visit"), "紹介状：なし");
+  assert.equal(text("hpi"), "主訴：発熱と咳\n期間：急性");
+  assert.equal(text("background"), "既往・ベースライン：高血圧\nアレルギー：なし\n居住：独居");
+  assert.equal(text("initial"), "第一印象：sick\n体温：38.6 ℃");
+  assert.equal(text("exam"), "口腔・咽頭・耳・副鼻腔：咽頭発赤・扁桃腫大");
+  assert.equal(text("tests"), "血液・生化学の異常：好中球減少");
+  assert.equal(text("reasoning"), "問題の要約：急性の発熱");
+  assert.equal(text("plan"), "実施した検査：血算・白血球分画\n解熱薬の処方：アセトアミノフェン");
+  // the typed findings are no longer mixed with the flow's answers in the physical-exam field
+  assert.equal(note.sections.find((s: any) => s.key === "exam").blocks[0].text, "Cr 2.4 mg/dL, K 5.8 mEq/L");
+  // the medicines and the host factors are history, declared as observations: the background field takes only patient context, so they are kept after the fields
+  assert.deepEqual(note.routing.reasons, { pending: 2 });
+  assert.deepEqual(note.extras.map((e: any) => e.key), ["scene_rest"]);
+  assert.match(note.extras[0].text, /宿主：糖尿病\n薬剤：最近の抗菌薬/);
+  assert.match(R.routingSummary(note.routing), /15 件のうち、13 件を ROUTES の欄に振り分けました。2 件は欄に結びつかず（カテゴリ未分類 2）/);
+  // an unanswered question adds nothing: the follow-up field says （未入力）, nothing is made normal or negative
+  assert.deepEqual(note.unfilled, ["followup"]);
+  const fields = A.toText(note).split("■欄に結びつかなかった")[0];
+  assert.ok(!fields.includes("陰性") && !fields.includes("正常"), "the assembly adds no word of its own about findings in the fields (the one sentence under the rest block says they are not negative)");
+});
+
+test("the table and the declarations the routing reads are consistent: ROUTES' fields are the type's own, one (entity, category) goes to one field, only the scenes with a note type have categories", () => {
   assert.deepEqual(Object.keys(T.NOTE_ROUTES.A04), T.NOTE_TYPES.A04.sections.map((s: any) => s.key));
   for (const [note, fields] of Object.entries<any>(T.NOTE_ROUTES)) assert.deepEqual(new Set(Object.keys(fields)), new Set(T.NOTE_TYPES[note].sections.map((s: any) => s.key)), note);
-  const seen = new Map<string, string>();
-  for (const [field, rules] of Object.entries<any>(T.NOTE_ROUTES.A04)) {
-    for (const [entity, cats] of Object.entries<string[]>(rules)) for (const c of cats) {
-      if (c === "*") continue;
-      assert.ok(!seen.has(`${entity}:${c}`), `${entity}:${c} goes to ${seen.get(`${entity}:${c}`)} and ${field}`);
-      seen.set(`${entity}:${c}`, field);
+  for (const note of R.ROUTED) {
+    const seen = new Map<string, string>();
+    for (const [field, rules] of Object.entries<any>(T.NOTE_ROUTES[note])) {
+      for (const [entity, cats] of Object.entries<string[]>(rules)) for (const c of cats) {
+        if (c === "*") continue;
+        assert.ok(!seen.has(`${entity}:${c}`), `${note}: ${entity}:${c} goes to ${seen.get(`${entity}:${c}`)} and ${field}`);
+        seen.set(`${entity}:${c}`, field);
+      }
     }
   }
   assert.equal(T.NOTE_TYPES_SOURCE.routes_path, "scripts/note_expanded.py (ROUTES)");
   assert.equal(S.FLOW_SCHEMA_SOURCE.commit, T.NOTE_TYPES_SOURCE.commit, "both were read from the same commit of clinical-modules");
+  const NOTE_OF: any = { "emergency-department": "A04", "outpatient-first-visit": "A01" };
   for (const flow of Object.values<any>(S.FLOWS)) {
-    const emergency = flow.scene === "emergency-department";
-    assert.equal(!!flow.cat, emergency, flow.id);
-    for (const q of flow.questions) assert.equal(q.br && "cat" in q.br, emergency && !!flow.cat.entity[q.br.ent], `${flow.id}.${q.id}`);
+    const note = NOTE_OF[flow.scene];
+    assert.equal(!!flow.cat, !!note, flow.id);
+    if (note) assert.equal(flow.cat.note, note, flow.id);
+    for (const q of flow.questions) assert.equal(q.br && "cat" in q.br, !!note && !!flow.cat.entity[q.br.ent], `${flow.id}.${q.id}`);
   }
+  assert.deepEqual(R.ROUTED, Object.values(NOTE_OF).sort().reverse());
 });
 
 test("adopted items: only the ticked ones enter, grouped by the draft section they came from; the doctor's own words carry no AI mark", () => {

@@ -418,7 +418,7 @@ class CategoryTest(unittest.TestCase):
         other = CAT_FLOW.replace('scene = "er-demo"', 'scene = "op-demo"')
         with self.assertRaisesRegex(SystemExit, r"scene op-demo takes no cat"):
             imp.load_all(make_cat(other))
-        # the same flow without any cat is fine in such a scene (the outpatient first visit today)
+        # the same flow without any cat is fine in such a scene (a scene that has no note type yet)
         bare = re.sub(r', cat = "[a-z_]+"', "", other)
         f = self.flow(bare)
         self.assertNotIn("cat", f)
@@ -488,15 +488,16 @@ class CommittedFileTest(unittest.TestCase):
             words = [q["br"]["cat"] for q in f["questions"] if "cat" in q.get("br", {})]
             self.assertTrue(all(re.fullmatch(r"[a-z][a-z_]{0,30}", w) for w in words), f["id"])
             if "cat" in f:
-                self.assertEqual(f["scene"], "emergency-department")
+                # the emergency scene (A04) and, since 2026-10-25, the outpatient first visit (A01)
+                self.assertEqual((f["scene"], f["cat"]["note"]), {"emergency-department": ("emergency-department", "A04"), "outpatient-first-visit": ("outpatient-first-visit", "A01")}[f["scene"]])
                 for q in f["questions"]:
                     if q["br"]["ent"] in f["cat"]["entity"]:
                         self.assertIn("cat", q["br"], (f["id"], q["id"]))
                     else:
                         self.assertNotIn("cat", q["br"], (f["id"], q["id"]))
             else:
-                self.assertEqual(words, [], f["id"])  # the outpatient first visit (A01) takes none: its output fields are provisional upstream
-        self.assertEqual(sorted(f["id"] for f in flows.values() if "cat" in f), sorted(i for i in flows if i.startswith("emergency-department.")))
+                self.assertEqual(words, [], f["id"])  # a scene without a note type in CAT_SCENE_NOTE takes none
+        self.assertEqual(sorted(f["id"] for f in flows.values() if "cat" in f), sorted(i for i in flows if i.startswith(("emergency-department.", "outpatient-first-visit."))))
         # the keys are checked above, structurally; the toml tables of the judgement never appear as text either
         for banned in ("[[rule]]", "[[ddx]]", "[[axis]]", "[[fact]]", "[[mark]]", "[[bridge]]", "ddx_slot"):
             self.assertNotIn(banned, text)
