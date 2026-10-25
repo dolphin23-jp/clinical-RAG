@@ -193,6 +193,8 @@ export function renderCase(c: CaseInput): string {
 
 export const LEVELS = ["標準", "紛らわしい鑑別あり", "複合問題"] as const;
 export const CREATE_LIMITS = { theme: 100, goal: 300 } as const;
+/** How many days of the course after the admission a created case can come with (0 = the case only).  Twin of web/case-model.js COURSE_DAYS. */
+export const COURSE_DAYS = [0, 3, 5, 7, 10, 14] as const;
 
 export interface CreateInput {
   /** a disease or a symptom, never a patient */
@@ -202,6 +204,8 @@ export interface CreateInput {
   goal: string;
   /** whether the case is to carry a pitfall */
   pitfall: boolean;
+  /** days of the fictional course after the admission to write too (0 = none; docs/enhancement-plan.md 8.20) */
+  days: number;
 }
 
 export function parseCreate(raw: unknown): CreateInput {
@@ -224,7 +228,12 @@ export function parseCreate(raw: unknown): CreateInput {
     return v;
   };
   if (o.pitfall !== undefined && typeof o.pitfall !== "boolean") throw new CaseInputError("create.pitfall must be true or false", "bad_create");
-  return { theme, setting: choice("setting", SETTINGS, ""), level: choice("level", LEVELS, LEVELS[0]), goal: text("goal"), pitfall: o.pitfall !== false };
+  let days = 0;
+  if (o.days !== undefined && o.days !== null) {
+    if (typeof o.days !== "number" || !(COURSE_DAYS as readonly number[]).includes(o.days)) throw new CaseInputError(`create.days must be one of ${COURSE_DAYS.join(", ")}`, "bad_create");
+    days = o.days;
+  }
+  return { theme, setting: choice("setting", SETTINGS, ""), level: choice("level", LEVELS, LEVELS[0]), goal: text("goal"), pitfall: o.pitfall !== false, days };
 }
 
 /** The free-text values, for the identifier check. */
@@ -239,5 +248,6 @@ export function renderCreate(c: CreateInput): string {
     `- 難しさ: ${c.level}`,
     `- 学ばせたいこと: ${c.goal ? c.goal.replace(/\n/g, "\n  ") : "（指定なし）"}`,
     `- 落とし穴: ${c.pitfall ? "入れる" : "入れない"}`,
+    ...(c.days ? [`- 入院後の経過: 入院${c.days}日目まで、日ごとに作る`] : []),
   ].join("\n");
 }

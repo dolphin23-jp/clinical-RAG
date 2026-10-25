@@ -309,7 +309,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       if (brief && !(kase && scene && BRIEF_SCENES.includes(scene))) return json({ error: "the record's summary goes with a case and a scene that follows a record", code: "brief_needs_scene" }, 400);
       if (scene && RECORD_SCENES.includes(scene) && !brief) return json({ error: `${SCENE_LABELS[scene]}の草案には、症例の記録の要約が要ります。記録を開いてから依頼してください。`, code: "record_required" }, 400);
       let question = typeof body?.question === "string" ? body.question.trim() : "";
-      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}）` : scene ? `${MODE_LABELS[mode]}（${SCENE_LABELS[scene]}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
+      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}${create.days ? `・入院後${create.days}日の経過` : ""}）` : scene ? `${MODE_LABELS[mode]}（${SCENE_LABELS[scene]}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
       if (!question || question.length > 4000) return json({ error: "question must be 1-4000 characters" }, 400);
       const history = Array.isArray(body.history)
         ? body.history

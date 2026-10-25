@@ -131,9 +131,11 @@ export function caseRows(c) {
 
 export const LEVELS = ["標準", "紛らわしい鑑別あり", "複合問題"];
 export const CREATE_LIMITS = { theme: 100, goal: 300 };
+/** The days of course after the admission a created case can come with (0 = the case only; docs/enhancement-plan.md 8.20).  Twin of worker/src/casemode.ts COURSE_DAYS. */
+export const COURSE_DAYS = [0, 3, 5, 7, 10, 14];
 export const CREATE_LABEL = "架空症例を作る";
 
-export const emptyCreate = () => ({ theme: "", setting: "", level: LEVELS[0], goal: "", pitfall: true });
+export const emptyCreate = () => ({ theme: "", setting: "", level: LEVELS[0], goal: "", pitfall: true, days: 0 });
 
 /** A creation request read back from a saved conversation (or any untrusted shape): known keys, choices checked, texts cut. */
 export function cleanCreate(raw) {
@@ -144,6 +146,7 @@ export function cleanCreate(raw) {
   if (typeof raw.setting === "string" && SETTINGS.includes(raw.setting)) out.setting = raw.setting;
   if (typeof raw.level === "string" && LEVELS.includes(raw.level)) out.level = raw.level;
   if (typeof raw.pitfall === "boolean") out.pitfall = raw.pitfall;
+  if (typeof raw.days === "number" && COURSE_DAYS.includes(raw.days)) out.days = raw.days;
   return out;
 }
 
@@ -154,5 +157,6 @@ export const createRows = (c) => [
   ["難しさ", c.level],
   ["学ばせたいこと", c.goal || "（指定なし）"],
   ["落とし穴", c.pitfall ? "入れる" : "入れない"],
+  ...(c.days ? [["入院後の経過", `入院${c.days}日目まで、日ごとに作る`]] : []),
 ];
 

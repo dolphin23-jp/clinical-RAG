@@ -10,6 +10,13 @@ import { scan } from "./id-guard.js";
 
 /** The `##` headings a created case has, in order.  Twin of worker/src/prompt.ts CREATE_HEADINGS (pinned equal by the tests). */
 export const CREATE_HEADINGS = ["導入文", "症例の入力用", "所見の表", "見立て", "落とし穴", "教訓", "書籍に見つからなかった点"];
+/**
+ * The course after the admission (docs/enhancement-plan.md 8.20), written only when the request asks for days: a `##` heading of its own, and under it
+ * one `### 入院N日目` per day with these parts.  Twins of worker/src/prompt.ts COURSE_HEADING / COURSE_PARTS / COURSE_LAST_PART.
+ */
+export const COURSE_HEADING = "入院後の経過";
+export const COURSE_PARTS = ["できごと", "症状", "所見・検査（数値は例示）", "治療・処置（用量は書かない）"];
+export const COURSE_LAST_PART = "転帰";
 /** The lines under 症例の入力用.  Twin of CREATE_INPUT_LABELS. */
 export const INPUT_LABELS = ["年齢", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
 /** The first line's old name, still read from a saved conversation (the case was created before the age became whole years). */
@@ -34,10 +41,11 @@ export function splitSections(text) {
   const out = {};
   let cur = null;
   for (const line of String(text ?? "").replace(/\r\n?/g, "\n").split("\n")) {
-    const m = /^#{1,6}\s*(.+?)\s*$/.exec(line);
-    if (m) {
-      const base = baseOf(m[1]);
-      cur = CREATE_HEADINGS.includes(base) && !(base in out) ? base : null;
+    const m = /^(#{1,6})\s*(.+?)\s*$/.exec(line);
+    // a `###` line is a day of the course (or any sub-heading): part of the section it is in, not the start of another
+    if (m && m[1].length <= 2) {
+      const base = baseOf(m[2]);
+      cur = (CREATE_HEADINGS.includes(base) || base === COURSE_HEADING) && !(base in out) ? base : null;
       if (cur) out[cur] = [];
       continue;
     }
@@ -62,6 +70,32 @@ function readInput(body) {
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, plain(v)]));
 }
 
+/**
+ * The days of the course: [{ day, heading, parts: [{ label, text }] }], from the lines under `### 入院N日目`.  A part is "- label: text" (a following
+ * line continues it); a day without its heading is not a day.  Whatever else is there is ignored.
+ */
+export function readCourse(body) {
+  const days = [];
+  let day = null;
+  let part = null;
+  for (const line of String(body ?? "").replace(/\r\n?/g, "\n").split("\n")) {
+    const h = /^#{3,6}\s*入院\s*(\d{1,3})\s*日目\s*$/.exec(line);
+    if (h) {
+      day = { day: Number(h[1]), heading: `入院${Number(h[1])}日目`, parts: [] };
+      days.push(day);
+      part = null;
+      continue;
+    }
+    if (!day) continue;
+    const m = /^\s*[-*・]\s*([^:：]{1,40})\s*[:：]\s*(.*)$/.exec(line);
+    if (m) {
+      part = { label: m[1].trim(), text: plain(m[2]) };
+      day.parts.push(part);
+    } else if (part && line.trim()) part.text = plain(`${part.text}\n${line.trim()}`);
+  }
+  return days;
+}
+
 /** The rows of the findings table: [{ item, value, basis }].  The header and the separator row are skipped. */
 function readTable(body) {
   const rows = [];
@@ -78,12 +112,16 @@ function readTable(body) {
  * text: the answer, with the cited pages written in as ［書籍 p.N］ marks (app.js adds them: pages come from the citation metadata,
  * never from the model's own text).  Returns the parts, and the headings the answer lacks.
  */
-export function parseCreated(text) {
+export function parseCreated(text, { days = 0 } = {}) {
   const sec = splitSections(text);
   const bullets = (b) => String(b ?? "").split("\n").map((l) => l.replace(/^\s*[-*・]\s*/, "")).filter((l) => l.trim());
+  const course = days ? readCourse(sec[COURSE_HEADING]) : [];
   return {
     sections: sec,
-    absent: CREATE_HEADINGS.filter((h) => !(h in sec)),
+    absent: [...CREATE_HEADINGS, ...(days ? [COURSE_HEADING] : [])].filter((h) => !(h in sec)),
+    course,
+    // the days asked for that the answer does not have (in order: 入院1日目 … 入院N日目)
+    missingDays: days ? Array.from({ length: days }, (_, i) => i + 1).filter((n) => !course.some((d) => d.day === n)) : [],
     intro: plain(sec["導入文"]?.replace(/\n+/g, " ")),
     input: readInput(sec["症例の入力用"]),
     table: readTable(sec["所見の表"]),
