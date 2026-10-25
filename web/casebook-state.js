@@ -9,13 +9,14 @@
 //   count  how many packets were marked as taken in.
 // None of it is a date: the marks carry no time.
 
-export const SENT_LIMIT = 300;
+export const SENT_LIMIT = 1000;
 export const SEED_RE = /^[a-z]{10}$/;
 /** Casebook's case code (packages/core/src/ids/case-code.ts CASE_CODE_PATTERN): six letters/digits without 0 O 1 I L U. */
 export const CODE_RE = /^[2-9A-HJKMNP-TV-Z]{6}$/;
 /** An item key: plain letters, digits, "." and "-" (a record's keys are checked by the Worker, which allows only these; no run of 5 digits). */
 export const KEY_RE = /^[a-z][a-z0-9.-]{0,62}$/;
-const HASH_RE = /^[0-9a-z]{1,8}$/;
+// eight letters a-p (casebook-packet.js hashOf): no digit, so the Worker's identifier check can never match a mark
+const HASH_RE = /^[a-p]{8}$/;
 
 const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 

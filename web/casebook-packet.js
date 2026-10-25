@@ -15,11 +15,10 @@
 //  - A text longer than Casebook's limit is split at sentence ends and numbered (1/2, 2/2); it is never cut silently.
 //  - The ids of the items are derived from the record's seed, so sending the same item again never makes a second one in Casebook.
 import { isAgeYears } from "./case-model.js";
-import { CODE_RE, KEY_RE } from "./casebook-state.js";
+import { CODE_RE, KEY_RE, SENT_LIMIT } from "./casebook-state.js";
 import { DAY_FIELDS, TREND } from "./case-course.js";
 import { ADM_FIELDS, CERTAINTY, PLAN_STATES } from "./case-record.js";
-import { relativizeDates } from "./date-relative.js";
-import { scan } from "./id-guard.js";
+import { blockersOf } from "./casebook-guard.js";
 
 export const MAGIC = "CBH1";
 export const SCHEMA_VERSION = 1;
@@ -27,6 +26,8 @@ export const PACKET_PREFIX = "CBH1:";
 /** Casebook's limits (contract 3): items per packet, characters per text. */
 export const MAX_ITEMS = 100;
 export const MAX_TEXT = 500;
+/** The most times a changed item is sent again as a new item (the revision is one digit in the mark). */
+export const MAX_REV = 9;
 export const SEX_OUT = { 男性: "M", 女性: "F", "その他・不明": "other" };
 /** The settings a packet can carry from here.  An outpatient case needs the visit's calendar date, which this app never holds. */
 export const SETTING_OUT = [
@@ -244,21 +245,13 @@ const hashOf = (c) => {
     h ^= ch.codePointAt(0);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  return h.toString(36).slice(0, 8);
+  // eight letters (a-p), one per four bits: no digit, so the Worker's identifier check (a run of digits, "ID" / "MRN" and digits) can never match a mark
+  let out = "";
+  for (let i = 0; i < 8; i++) out += String.fromCharCode(97 + ((h >>> (28 - 4 * i)) & 15));
+  return out;
 };
 
-const ERA_DATE = /(^|[^A-Za-z])[MTSHR]\s?\d{1,2}\s*[./]\s*\d{1,2}\s*[./]\s*\d{1,2}(?!\d)/;
-
-/** Why a text can not be sent as it is (kinds only; the matched text is never repeated). */
-export function blockersOf(text) {
-  const out = [];
-  if (!String(text).trim()) out.push("中身がありません");
-  const kinds = [...new Set(scan(text).map((h) => h.label))];
-  if (kinds.length) out.push(`患者を特定できる情報の可能性（${kinds.join("、")}）`);
-  // a calendar date (the screen's own reader, which also takes "10月24日" and "2025-10-24"), or the era-abbreviated shape ("R7.10.24") it does not read
-  if (relativizeDates(text).changes.length || ERA_DATE.test(text)) out.push("日付が含まれています（「3日前」などの経過に直してください）");
-  return out;
-}
+export { blockersOf };
 
 const RULED_OUT = "除外した問題です（Casebook に「除外」を表す種類がないため、この問題と、その下の評価・計画は送れません）";
 const DX_STATUS = { suspected: "suspected", likely: "suspected", confirmed: "confirmed" };
@@ -281,7 +274,12 @@ export function candidates(rec) {
   const out = [];
   const add = (c) => out.push({ ...c, blockers: c.blockers ?? blockersOf(c.text) });
   const texts = (base, group, tag, kind, label, content, extra) => {
-    pieces(label, content).forEach((text, i) => add({ key: `${base}.c${i + 1}`, group, tag, kind, text, ...extra }));
+    // the whole text is checked, not only each piece: a date or a number cut in two by the split is in neither piece whole
+    const whole = blockersOf(oneLine(content));
+    pieces(label, content).forEach((text, i) => {
+      const mine = extra?.blockers ?? [...new Set([...blockersOf(text), ...whole])];
+      add({ key: `${base}.c${i + 1}`, group, tag, kind, text, ...extra, blockers: mine });
+    });
   };
 
   // 1. the case as typed (the arrival day)
@@ -316,7 +314,9 @@ export function candidates(rec) {
     for (const e of p.plan) {
       const state = e.state ?? "planned";
       const body = e.reason ? `${oneLine(e.text)}（理由: ${oneLine(e.reason)}）` : e.text;
-      texts(`p.${p.id}.plan.${e.id}`, "problems", PLAN_LABEL[state] ?? PLAN_LABEL.planned, "note", PLAN_LABEL[state] ?? PLAN_LABEL.planned, body, { day: e.added ?? 1, source: e.from === "ai" ? "ai" : "user", problem: p.id, ...under });
+      // the day is the day the doctor recorded the state (a plan marked "done" on day 5 is not a fact of day 1)
+      const recorded = e.log?.length ? e.log.at(-1).day : e.added ?? 1;
+      texts(`p.${p.id}.plan.${e.id}`, "problems", PLAN_LABEL[state] ?? PLAN_LABEL.planned, "note", PLAN_LABEL[state] ?? PLAN_LABEL.planned, body, { day: recorded, source: e.from === "ai" ? "ai" : "user", problem: p.id, ...under });
     }
     for (const d of rec.course.days) {
       const t = d.trend?.[p.id];
@@ -337,7 +337,16 @@ export function candidates(rec) {
     for (const f of DAY_FIELDS) texts(`day.d${d.day}.${f.key}`, "course", f.label, "course", f.label, d[f.key], { day: d.day, source: "user" });
   }
   for (const c of out) if (!KEY_RE.test(c.key)) c.blockers = [...c.blockers, "項目の名前の形が合いません"];
-  return out.map((c) => ({ ...c, h: hashOf(c) }));
+  // the marks and the revisions have limits; at the limit an item is said to be unsendable rather than sent in a way Casebook would skip
+  const marked = Object.keys(rec.casebook?.sent ?? {}).length;
+  return out.map((c) => {
+    const h = hashOf(c);
+    const m = rec.casebook?.sent?.[c.key];
+    const more = [];
+    if (m && m.h !== h && m.r >= MAX_REV) more.push(`直して送り直した回数が上限（${MAX_REV}回）です。Casebook で直してください`);
+    if (!m && marked >= SENT_LIMIT - MAX_ITEMS) more.push("送信済みの印の上限に近づいています（症例コードと印を消して、新しい症例として送り直してください）");
+    return { ...c, h, blockers: more.length ? [...c.blockers, ...more] : c.blockers };
+  });
 }
 
 // ---------------------------------------------------------------- what was sent, what changed since
@@ -351,7 +360,7 @@ export function stateOf(rec, c) {
 export function revOf(rec, c, resend = false) {
   const m = rec.casebook?.sent?.[c.key];
   if (!m) return 0;
-  return resend && m.h !== c.h ? Math.min(9, m.r + 1) : m.r;
+  return resend && m.h !== c.h ? Math.min(MAX_REV, m.r + 1) : m.r;
 }
 /** What is ticked when the screen opens: not sent yet, nothing stops it, not from the AI (those are ticked by the doctor). */
 export const ticked = (rec, c) => c.blockers.length === 0 && stateOf(rec, c) === "new" && c.source !== "ai";
@@ -387,6 +396,7 @@ export function buildPacket(rec, opts) {
     if (!SETTING_OUT.some((s) => s.id === patient.setting)) errors.push("場面（救急・入院）を選んでください。外来の症例は受診日が要るため送れません");
     if (opts.synthetic !== true && opts.synthetic !== false) errors.push("実症例か架空症例かを選んでください");
   } else if (!CODE_RE.test(String(opts.code ?? ""))) errors.push("Casebook の症例コード（6文字）を入れてください");
+  if (rec.ed?.case?.setting === "外来") errors.push("症例の場面が外来です。外来の症例は受診日（暦日）が要るため送れません（症例の場面を直してください）");
   if (!ULID_RE.test(String(opts.packetId ?? ""))) errors.push("パケットの ID がありません");
 
   const keys = new Set(opts.keys ?? []);

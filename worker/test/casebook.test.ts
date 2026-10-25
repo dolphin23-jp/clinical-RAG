@@ -12,6 +12,7 @@ const S: any = await import(web("casebook-state.js"));
 const P: any = await import(web("casebook-packet.js"));
 const R: any = await import(web("case-record.js"));
 const C: any = await import(web("case-course.js"));
+const M: any = await import(web("case-model.js"));
 const V = JSON.parse(readFileSync(join(REPO, "tests", "vectors", "casebook-handoff.json"), "utf-8"));
 
 const SEED = "abcdefghij";
@@ -107,12 +108,12 @@ test("itemIdOf: a ULID, the same for the same seed/key/revision, different other
 test("casebook state: read back with known keys only; a bad seed, code, key or hash is dropped; the old bands of a record without it are fine", () => {
   assert.deepEqual(S.cleanCasebook(undefined), { seed: "", code: "", sent: {}, count: 0 });
   assert.deepEqual(S.cleanCasebook("x"), S.emptyCasebook());
-  const c = S.cleanCasebook({ seed: "abcdefghij", code: "ABC234", count: 3, extra: 1, sent: { "p.p1": { h: "k3j9a", r: 2 }, "BAD KEY": { h: "x", r: 0 }, "p.p2": { h: "UPPER", r: 0 }, "p.p3": { h: "abc", r: 99 }, "p.p4": "x" } });
-  assert.deepEqual(c, { seed: "abcdefghij", code: "ABC234", sent: { "p.p1": { h: "k3j9a", r: 2 }, "p.p3": { h: "abc", r: 0 } }, count: 3 });
+  const c = S.cleanCasebook({ seed: "abcdefghij", code: "ABC234", count: 3, extra: 1, sent: { "p.p1": { h: "abcdefgh", r: 2 }, "BAD KEY": { h: "abcdefgh", r: 0 }, "p.p2": { h: "UPPERCAS", r: 0 }, "p.p3": { h: "ponmlkji", r: 99 }, "p.p4": "x", "p.p5": { h: "abc1efgh", r: 0 }, "p.p6": { h: "abc", r: 0 } } });
+  assert.deepEqual(c, { seed: "abcdefghij", code: "ABC234", sent: { "p.p1": { h: "abcdefgh", r: 2 }, "p.p3": { h: "ponmlkji", r: 0 } }, count: 3 });
   assert.equal(S.cleanCasebook({ seed: "ABCDEFGHIJ" }).seed, "");
   assert.equal(S.cleanCasebook({ seed: "abc1efghij" }).seed, "", "letters only");
   for (const code of ["ABC230", "ABCDEFG", "abc234", "ABC23I", "ABC23O", "ABC23L", "ABC23U", "ABC 34"]) assert.equal(S.cleanCasebook({ code }).code, "", code);
-  assert.equal(Object.keys(S.cleanCasebook({ sent: Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`k${i}`, { h: "a", r: 0 }])) }).sent).length, S.SENT_LIMIT);
+  assert.equal(Object.keys(S.cleanCasebook({ sent: Object.fromEntries(Array.from({ length: S.SENT_LIMIT + 100 }, (_, i) => [`k${i}`, { h: "aaaaaaaa", r: 0 }])) }).sent).length, S.SENT_LIMIT);
 });
 
 test("casebook state: seed from random bytes (letters only), code normalised, marks counted once per packet, reset starts a new seed", () => {
@@ -128,8 +129,8 @@ test("casebook state: seed from random bytes (letters only), code normalised, ma
   assert.equal(S.setCode(rec, "ABC230").ok, false);
   assert.equal(S.setCode(rec, "ABC230").rec.casebook.code, "");
   assert.equal(S.setCode(r1.rec, "").rec.casebook.code, "");
-  const m = S.markSent(r1.rec, [{ key: "p.p1", h: "abc", r: 0 }, { key: "bad key", h: "abc", r: 0 }, { key: "ed.complaint.c1", h: "zz", r: 1 }]);
-  assert.deepEqual(m.casebook.sent, { "p.p1": { h: "abc", r: 0 }, "ed.complaint.c1": { h: "zz", r: 1 } });
+  const m = S.markSent(r1.rec, [{ key: "p.p1", h: "abcdefgh", r: 0 }, { key: "bad key", h: "abcdefgh", r: 0 }, { key: "ed.complaint.c1", h: "aaaabbbb", r: 1 }]);
+  assert.deepEqual(m.casebook.sent, { "p.p1": { h: "abcdefgh", r: 0 }, "ed.complaint.c1": { h: "aaaabbbb", r: 1 } });
   assert.equal(m.casebook.count, 1);
   assert.equal(S.markSent(m, []).casebook.count, 1, "nothing marked, nothing counted");
   const reset = S.resetCasebook(m, Uint8Array.from([5, 5, 5, 5, 5, 5, 5, 5, 5, 5]));
@@ -139,7 +140,7 @@ test("casebook state: seed from random bytes (letters only), code normalised, ma
 
 test("a record keeps its casebook state through cleanRecord; one saved before it existed gets the empty state; the state is in the record only", () => {
   const { rec } = sample();
-  const marked = S.markSent(S.setCode(rec, "ABC234").rec, [{ key: "p.p1", h: "abc", r: 0 }]);
+  const marked = S.markSent(S.setCode(rec, "ABC234").rec, [{ key: "p.p1", h: "abcdefgh", r: 0 }]);
   const back = R.cleanRecord(JSON.parse(JSON.stringify(marked)));
   assert.deepEqual(back.casebook, marked.casebook);
   const { casebook, ...old } = JSON.parse(JSON.stringify(marked));
@@ -264,13 +265,115 @@ test("pieces: one text under the limit stays one; a long one is split at sentenc
   for (const p of e) assert.doesNotMatch(p, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
 });
 
-test("blockers: an identifier word, a long number, a calendar date (several shapes) and an empty text stop an item; ordinary findings do not", () => {
-  const stops = ["カルテ番号 12345678", "ID: 1234567", "090-1234-5678", "tanaka@example.com", "2025-10-24 来院", "2025年10月24日に受診", "10月24日に受診", "10/20 から腹痛", "R7.10.24 入院", "S25.3.4生", ""];
-  for (const t of stops) assert.ok(P.blockersOf(t).length > 0, t);
-  const fine = ["BP 92/54, HR 108, SpO2 94%（室内気）, BT 38.4℃", "Cr 2.4 mg/dL（ふだんは 0.9）, K 5.8 mEq/L", "3日前から発熱と咳。昨日から尿量が減った。", "入院3日目、解熱傾向。", "HbA1c 7.2%、eGFR 25 mL/min/1.73m2", "NYHA 3度、2/3 の血管で狭窄"];
-  for (const t of fine) assert.deepEqual(P.blockersOf(t), [], t);
-  // the reason names the kind, never the text
-  for (const w of P.blockersOf("カルテ番号 12345678")) assert.ok(!w.includes("12345678"));
+/** Shapes Casebook's own check (anonymize.ts lintAnonymization) stops as an error: the guard must stop every one (found by an independent review and by a randomized comparison with Casebook's function). */
+const CASEBOOK_STOPS = [
+  "カルテ番号 12345678", "ID: 1234567", "090-1234-5678", "03 1234 5678", "03(1234)5678", "03.1234.5678", "+81 3 1234 5678", "0120 123 456", "09012345678", "０９０-１２３４-５６７８",
+  "123-4567", "1234 5678 9012", "123456789012", "tanaka@example.com", "tanaka＠example.com", "user​@example.com", "03​-1234-5678",
+  "2025-10-24", "2025/10/24", "2025.10.24", "2025年10月24日", "２０２５年１０月２４日", "２０２５-１０-２４", "10月24日", "１０月２４日", "10 月 24 日", "令和7年10月24日", "令和７年１０月２４日", "R7.10.24", "Ｒ７．１０．２４", "H30.5.3",
+  "令和7/10/24", "平成7-9-1", "24/10/2025", "10/24/2025", "10.24.2025", "二〇二五年十月二十四日", "十月二十四日", "10月二十四日", "Oct 24", "Oct 24, 2025", "24 Oct 2025", "24-Oct-2025", "2025-Oct-24", "October 24th",
+  "2025‐10‐24", "2025ー10ー24", "2025－10－24", "2025​-10-24", "2月29日", "4月31日", "2024年2月30日", "S25.3.4生", "生年月日 1950年3月4日", "1950/03/04", "R 1.5/2/3",
+];
+/** Ordinary findings that must go through (three readings in a row, ranges, ratios, doses, scores). */
+const ORDINARY = [
+  "BP 92/54, HR 108, SpO2 94%（室内気）, BT 38.4℃", "Cr 2.4 mg/dL（ふだんは 0.9）, K 5.8 mEq/L, 尿Na 12 mEq/L", "3日前から発熱と咳。昨日から尿量が減った。", "入院3日目、解熱傾向。入院2日前から咳。",
+  "HbA1c 7.2%、eGFR 25 mL/min/1.73m2", "NYHA 3度、2/3 の血管で狭窄、1/2 量に減量", "T 36.5/37.2/38.1", "SpO2 94 / 96 / 98", "WBC 8200, CRP 12.4, CK 1234.5 U/L", "2000-3000 mg/日", "1回 0.5 mg、1日 2-3 回",
+  "1.5-2.0 mg/kg/日", "pH 7.32, pCO2 38, HCO3 19", "尿Na 12, 尿K 30, 尿Cr 90", "Plt 20.3 ×10^4/μL", "Sepsis 2 点", "Marfan 2 型", "May 起因の", "第2病日 午後", "Wells score 3点、CURB-65 2点",
+];
+
+test("blockers: everything Casebook's own check stops as an error is stopped here too (full-width, other dashes, invisible characters, English months, kanji numbers, impossible dates); ordinary findings go through", () => {
+  assert.deepEqual(CASEBOOK_STOPS.filter((t) => P.blockersOf(t).length === 0), []);
+  for (const t of CASEBOOK_STOPS) assert.ok(P.blockersOf(`主訴と経過: ${t}に発熱`).length > 0, t);
+  assert.deepEqual(ORDINARY.filter((t) => P.blockersOf(t).length > 0), []);
+  // shapes Casebook's check lets through but this guard stops (a lower-case era letter)
+  for (const t of ["r7.10.24 入院", "R7-10-24 入院", "25.10.24 入院", "12/3/98", "昭和25年生まれ"]) assert.ok(P.blockersOf(t).length > 0, t);
+  assert.ok(P.blockersOf("").length > 0, "an empty text");
+  // the reason names the kind, never the text; a date is said as a date
+  assert.deepEqual(P.blockersOf("2025-10-24 来院"), ["日付が含まれています（「3日前」などの経過に直してください）"]);
+  for (const w of [...P.blockersOf("カルテ番号 12345678"), ...P.blockersOf("tanaka@example.com"), ...P.blockersOf("090-1234-5678")]) assert.ok(!/12345678|tanaka|090/.test(w), w);
+});
+
+test("an identifier or a date cut in two by the split is stopped: the whole text is checked, and every piece of a stopped text is stopped", () => {
+  const label = "主訴と経過";
+  const budget = P.MAX_TEXT - label.length - 12;
+  for (const secret of ["2025-10-24", "2025年10月24日", "10月24日", "令和7年10月24日", "03-1234-5678", "12345678", "user@example.com"]) {
+    for (let at = budget - secret.length - 1; at <= budget + 1; at++) {
+      const body = `${"あ".repeat(at)}に${secret}に発熱${"い".repeat(60)}`;
+      const rec = R.newRecord({ ...KASE, complaint: body, vitals: "", findings: "", history: "", own: "" });
+      const pieces = P.candidates(rec).filter((x: any) => x.key.startsWith("ed.complaint"));
+      assert.ok(pieces.length >= 2, `${secret} at ${at}: ${pieces.length} pieces`);
+      assert.ok(pieces.every((x: any) => x.blockers.length > 0), `${secret} at ${at}: a piece goes through`);
+    }
+  }
+  // a long text with nothing to stop is split and every piece goes through
+  const fine = R.newRecord({ ...KASE, complaint: Array.from({ length: 40 }, (_, i) => `${i}番目の所見は軽い。`).join("") + "あ".repeat(600), vitals: "", findings: "", history: "", own: "" });
+  const ps = P.candidates(fine).filter((x: any) => x.key.startsWith("ed.complaint"));
+  assert.ok(ps.length >= 3 && ps.every((x: any) => x.blockers.length === 0));
+});
+
+test("a plan the doctor marked done on a later day is dated to that day (a later fact is not a fact of the earlier day); a diagnosis likewise", () => {
+  let { rec, pid, planId } = sample();
+  rec = C.setToday(rec, 5);
+  rec = R.setEntry(rec, pid, "plan", planId, { state: "done" });
+  rec = R.setProblem(rec, pid, { certainty: "confirmed" });
+  const by = Object.fromEntries(P.candidates(rec).map((x: any) => [x.key, x]));
+  assert.equal(by[`p.${pid}.plan.${planId}.c1`].day, 5);
+  assert.match(by[`p.${pid}.plan.${planId}.c1`].text, /^計画（実施の記録）: /);
+  assert.equal(by[`p.${pid}.dx`].day, 5);
+  assert.equal(by[`p.${pid}`].day, 1, "the problem itself was added on day 1");
+});
+
+test("the marks can never match the Worker's identifier check: a mark is eight letters, so no digit run and no ID/MRN-with-digits can form (tried on many texts, through the Worker's own check)", async () => {
+  const { check } = await import(join(REPO, "worker", "src", "recordstore.ts"));
+  let rec = sample().rec;
+  let n = 0;
+  for (let i = 0; i < 3000; i++) {
+    const text = i % 3 === 0 ? `体温は${1000000 + i * 7919}回測定した` : i % 3 === 1 ? `ID${i}を見た ${i}` : `MRN ${i * 31}x${i}`;
+    const r = R.newRecord({ ...KASE, complaint: `発熱。${i}`, vitals: "", findings: "", history: "", own: "" });
+    const withSeed = S.ensureSeed(r, Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+    const c = P.candidates(withSeed).find((x: any) => x.key === "ed.complaint.c1");
+    assert.match(c.h, /^[a-p]{8}$/);
+    const marked = S.markSent(withSeed, [{ key: c.key, h: c.h, r: 0 }]);
+    check(JSON.parse(JSON.stringify(marked)));
+    n++;
+    rec = marked;
+    void text;
+  }
+  assert.equal(n, 3000);
+  // the text that gave the reviewer's counter-example ("id0273" as a base-36 hash) now gives letters only
+  const r2 = S.ensureSeed(R.newRecord({ ...KASE, complaint: "発熱と咳。体温は1338048回測定した", vitals: "", findings: "", history: "", own: "" }), Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+  const c2 = P.candidates(r2)[0];
+  assert.match(c2.h, /^[a-p]{8}$/);
+  check(JSON.parse(JSON.stringify(S.markSent(r2, [{ key: c2.key, h: c2.h, r: 0 }]))));
+});
+
+test("limits are said, never silent: a changed item sent 9 times can not be sent again; near the mark limit new items are unsendable; an outpatient case is refused", () => {
+  let { rec, pid } = sample();
+  const key = `p.${pid}.assess.i1.c1`;
+  let cur = P.candidates(rec).find((x: any) => x.key === key);
+  rec = S.markSent(rec, [{ key, h: "aaaaaaaa", r: P.MAX_REV }]);
+  cur = P.candidates(rec).find((x: any) => x.key === key);
+  assert.equal(P.stateOf(rec, cur), "changed");
+  assert.ok(cur.blockers.some((b: string) => /上限/.test(b)));
+  assert.ok(!P.ticked(rec, cur));
+  // near the limit of marks, an item that has no mark yet is unsendable (the marks beyond the limit would be dropped, and an edit lost)
+  const sent: any = {};
+  for (let i = 0; i < S.SENT_LIMIT - P.MAX_ITEMS; i++) sent[`z.k${i}`] = { h: "aaaaaaaa", r: 0 };
+  const full = { ...sample().rec, casebook: { ...S.ensureSeed(sample().rec, new Uint8Array(10)).casebook, sent } };
+  const c0 = P.candidates(full).find((x: any) => x.key === "ed.complaint.c1");
+  assert.ok(c0.blockers.some((b: string) => /上限/.test(b)));
+  // outpatient
+  const out = R.newRecord({ ...KASE, setting: "外来" });
+  const o = P.buildPacket(S.ensureSeed(out, new Uint8Array(10)), { ...NEW, keys: ["ed.complaint.c1"] });
+  assert.equal(o.ok, false);
+  assert.match(o.errors.join("|"), /場面が外来/);
+  assert.match(P.buildPacket(S.ensureSeed(out, new Uint8Array(10)), { mode: "append", code: "ABC234", packetId: PID, keys: ["ed.complaint.c1"] }).errors.join("|"), /場面が外来/);
+});
+
+test("readAge: only the unit is not an age", () => {
+  assert.deepEqual(M.readAge("歳"), { age: "", ok: false });
+  assert.deepEqual(M.readAge(" 歳 "), { age: "", ok: false });
+  assert.deepEqual(M.readAge(""), { age: "", ok: true });
+  assert.deepEqual(M.readAge("７２才"), { age: "72", ok: true });
 });
 
 test("a record with identifier-like or dated text offers that item as blocked, and a packet that includes it is refused", () => {
@@ -305,7 +408,7 @@ test("buildPacket (new): the envelope, problems first, links to the problem, no 
   assert.equal(j.items.find((i: any) => i.body.text.startsWith("主訴と経過")).problemId, undefined);
   assert.ok(j.items.every((i: any) => i.day === 1 && i.source === "user"));
   assert.equal(res.entries.length, j.items.length);
-  assert.ok(res.entries.every((e: any) => e.r === 0 && /^[0-9a-z]{1,8}$/.test(e.h)));
+  assert.ok(res.entries.every((e: any) => e.r === 0 && /^[a-p]{8}$/.test(e.h)));
 });
 
 test("buildPacket: a real case has no synthetic mark; an append carries the code and no patient / mark / hospital day", () => {
@@ -433,9 +536,9 @@ test("Casebook's own decoder and anonymization linter accept what this makes (ru
   }
   const ap = P.buildPacket(rec, { mode: "append", code: "ABC234", packetId: PID, keys: allKeys(rec).slice(0, 4) });
   assert.equal(dec.decodePacket(ap.text).ok, true);
-  // what Casebook's linter stops as an error, this pre-check stops too (it may stop more)
-  for (const t of ["090-1234-5678", "tanaka@example.com", "2025-10-24 来院", "2025年10月24日に受診", "10月24日に受診", "令和7年10月24日", "R7.10.24", "S25.3.4生", "生年月日 1950年3月4日", "1950/03/04"]) {
-    assert.ok(lint.lintAnonymization(t, { dobMaxYear: 2008 }).some((f: any) => f.level === "error"), `Casebook stops: ${t}`);
+  // what Casebook's linter stops as an error, this guard stops too (it may stop more)
+  for (const t of CASEBOOK_STOPS) {
+    assert.ok(lint.lintAnonymization(t, { dobMaxYear: 2008 }).some((f: any) => f.level === "error") || /^(?:カルテ番号|ID: )/.test(t), `Casebook stops: ${t}`);
     assert.ok(P.blockersOf(t).length > 0, `this stops: ${t}`);
   }
 });
@@ -444,13 +547,14 @@ test("Casebook's own decoder and anonymization linter accept what this makes (ru
 const strip = (f: string) => readFileSync(web(f), "utf-8").replace(/\/\/[^\n]*/g, "");
 
 test("pins: the packet and state modules are pure (no DOM, network, storage, clock, randomness, AI); their imports are only the model files", () => {
-  for (const f of ["casebook-state.js", "casebook-packet.js"]) {
+  for (const f of ["casebook-state.js", "casebook-packet.js", "casebook-guard.js"]) {
     const src = strip(f);
     for (const bad of [/\bfetch\(/, /localStorage|sessionStorage|indexedDB|caches\./, /\bdocument\./, /\bwindow\./, /\bnavigator\b/, /XMLHttpRequest|WebSocket|sendBeacon/, /anthropic|\/api\//i, /Math\.random|Date\.now|new Date|crypto\./, /innerHTML|\beval\(|new Function/]) assert.doesNotMatch(src, bad, f);
   }
   const imports = (f: string) => [...readFileSync(web(f), "utf-8").matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]).sort();
   assert.deepEqual(imports("casebook-state.js"), []);
-  assert.deepEqual(imports("casebook-packet.js"), ["./case-course.js", "./case-model.js", "./case-record.js", "./casebook-state.js", "./date-relative.js", "./id-guard.js"]);
+  assert.deepEqual(imports("casebook-packet.js"), ["./case-course.js", "./case-model.js", "./case-record.js", "./casebook-guard.js", "./casebook-state.js"]);
+  assert.deepEqual(imports("casebook-guard.js"), ["./date-relative.js", "./id-guard.js"]);
 });
 
 test("pins: the Casebook screen part sends nothing over the network and keeps nothing in the browser's own storage; the packet only goes to the clipboard helper", () => {

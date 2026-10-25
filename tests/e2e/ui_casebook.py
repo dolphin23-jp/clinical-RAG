@@ -259,10 +259,25 @@ with sync_playwright() as pw:
     re_pk = decode(page.locator("#cb-packet").input_value())
     re_items = [i for i in re_pk["items"] if i["body"]["text"].startswith("評価: 感染と脱水")]
     check(len(re_items) == 1 and re_items[0]["itemId"] != first_assess["itemId"] and "中止済み" in re_items[0]["body"]["text"], f"sent again it is a second item with its own id ({[i['body']['text'][:20] for i in re_pk['items']]})")
+    # Casebook skipped that item: the doctor takes it out of the list of what was taken in, and it gets no mark
+    changed_key = ch.first.get_attribute("data-key")
+    old_mark = server_rec()["casebook"]["sent"][changed_key]
+    page.locator("#cb-which > summary").click()
+    which = page.locator(f"#cb-which input[data-key='{changed_key}']")
+    check(which.count() == 1 and which.is_checked(), "every item of the packet is listed, ticked, under 'Casebook が取り込まなかった項目があったとき'")
+    which.uncheck()
     page.click("#cb-imported")
     wait_saved()
     srv = server_rec()
-    check(any(v["r"] == 1 for v in srv["casebook"]["sent"].values()) and srv["casebook"]["count"] == 2, "its mark moved to revision 1")
+    check(srv["casebook"]["sent"][changed_key] == old_mark, "an item taken out is not marked (its mark stays what it was)")
+    check(row(changed_key).get_attribute("data-state") == "changed", "and it is still offered as changed")
+    row(changed_key).locator(".cb-check").check()
+    page.click("#cb-build")
+    expect(page.locator("#cb-out")).to_be_visible()
+    page.click("#cb-imported")
+    wait_saved()
+    srv = server_rec()
+    check(srv["casebook"]["sent"][changed_key]["r"] == 1 and srv["casebook"]["count"] >= 3, "sent and taken in, its mark moved to revision 1")
 
     # 7b. what is on the screen is what is sent: a record changed a moment ago is compared again when the button is pressed
     area = page.locator(".rec-problem").first.locator("textarea.rec-entry-text")
@@ -271,6 +286,23 @@ with sync_playwright() as pw:
     expect(page.locator("#cb-note")).to_be_visible()
     check("記録が変わっていた" in page.locator("#cb-note").inner_text() and page.locator("#cb-out").count() == 0, "a record changed a moment ago: the list is updated and no packet is made until the button is pressed again")
     page.click("#cb-discard") if page.locator("#cb-discard").count() else None
+    # a code that differs from the case this record was sent to asks first; declining makes no packet
+    policy["accept"] = False
+    policy["log"].clear()
+    page.fill("#cb-code", "XYZ234")
+    page.click("#cb-build")
+    page.wait_for_timeout(300)
+    check(any("違います" in m for m in policy["log"]) and page.locator("#cb-out").count() == 0, "a case code that differs from the saved one is asked about, and declining makes no packet")
+    policy["accept"] = True
+    page.fill("#cb-code", "ABC234")
+    # the clipboard fails both ways: the screen does not say it was copied
+    page.evaluate("() => { navigator.clipboard.writeText = () => Promise.reject(new Error('no')); document.execCommand = () => false; }")
+    page.locator(".cb-row[data-state=changed] .cb-check").first.check()
+    page.click("#cb-build")
+    expect(page.locator("#cb-out")).to_be_visible()
+    expect(page.locator("#cb-out-head")).to_contain_text("コピーできませんでした")
+    check("コピーしました" not in page.locator("#cb-out-head").inner_text(), "when the clipboard fails the screen says so and shows the text to copy by hand")
+    page.click("#cb-discard")
 
     # 8. a fresh page: the marks and the code are the record's
     page.reload()
@@ -278,7 +310,7 @@ with sync_playwright() as pw:
     page.click("#btn-records")
     page.locator("#record .rec-item button", has_text="開く").first.click()
     open_part()
-    check(page.locator(".cb-row[data-state=sent]").count() >= len(items) and page.locator("#cb-code").input_value() == "ABC234", "after a reload the marks and the code are still there")
+    check(page.locator(".cb-row[data-state=sent]").count() >= len(items) - 1 and page.locator("#cb-code").input_value() == "ABC234", "after a reload the marks and the code are still there")
     stored = page.evaluate("() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)])")
     check("CBH1" not in stored and "ABC234" not in stored and "casebook" not in stored.lower().replace("mb.", ""), "nothing of the packet, the code or the marks is in the browser's own storage")
 
@@ -292,6 +324,35 @@ with sync_playwright() as pw:
     check(page.locator("#cb-mode-new").is_checked() and page.locator(".cb-row[data-state=sent]").count() == 0, "the record is a new case again")
     check(not page.locator("#cb-syn-fiction").is_checked() and not page.locator("#cb-syn-real").is_checked(), "and real / fictional is unmade again (it is chosen for each new case)")
     page.screenshot(path=str(OUT / "03_reset.png"))
+
+    # 10. a slow clipboard: the seed is written to the record that was open when the button was pressed, and to no other
+    made_b = page.evaluate("""async () => {
+      const R = await import('/case-record.js');
+      let rec = R.newRecord({ age: '35', sex: '女性', setting: '救急', complaint: '別の症例の主訴。胸痛。', vitals: 'BP 110/70' });
+      return rec;
+    }""")
+    RID_B, RID_C = "rcasebooke2etest0000000000000002", "rcasebooke2etest0000000000000003"
+    made_c = page.evaluate(MAKE)
+    check(api("PUT", f"/api/records/{RID_C}", {"record": made_c["rec"]})["status"] == 200 and api("PUT", f"/api/records/{RID_B}", {"record": made_b})["status"] == 200, "two more records were saved (C will be sent, B is another patient's)")
+    page.reload()
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.click("#btn-records")
+    items_in_list = page.locator("#record .rec-item")
+    c_item = items_in_list.filter(has_text="72歳").first
+    c_item.locator("button", has_text="開く").click()
+    open_part()
+    page.evaluate("() => { navigator.clipboard.writeText = () => new Promise((resolve) => setTimeout(resolve, 2500)); }")
+    page.click("#cb-syn-fiction")
+    page.click("#cb-build")
+    page.wait_for_timeout(300)  # the clipboard has not answered yet (2.5 s)
+    page.click("#record button:has-text('記録の一覧')")
+    page.locator("#record .rec-item").filter(has_text="35歳").first.locator("button", has_text="開く").click()
+    page.wait_for_timeout(3500)
+    b_after = api("GET", f"/api/records/{RID_B}")["body"]["record"]
+    check(b_after["ed"]["case"]["age"] == "35" and "別の症例" in b_after["ed"]["case"]["complaint"] and not b_after["problems"], "the other patient's record is untouched after the slow clipboard answered")
+    c_after = api("GET", f"/api/records/{RID_C}")["body"]["record"]
+    check(len(c_after["casebook"]["seed"]) == 10 and c_after["ed"]["case"]["age"] == "72", "and the record that was sent has its seed")
+    check(len(b_after.get("casebook", {}).get("seed", "")) == 0, "no seed was written into the other record")
 
     check(not [l for l in logs if l[0] in ("error", "pageerror")], f"no console errors ({logs})")
     br.close()
