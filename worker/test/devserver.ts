@@ -42,9 +42,41 @@ const sseBody = (evs: Ev[], delay = 12): Response => {
 const ms = (usage: any) => ["message_start", { type: "message_start", message: { usage } }] as Ev;
 const md = (stop: string, out: number) => ["message_delta", { type: "message_delta", delta: { stop_reason: stop }, usage: { output_tokens: out } }] as Ev;
 
+/**
+ * A fake of the extraction call (the request has a json_schema output format): it reads the memo and the flow's questions from the request and
+ * answers like a careful extractor would, plus a few things a careless one could say, so the checks on the Worker and on the screen can be seen
+ * working: a proposal whose quote is not in the memo (__badquote__), a judgment the question list does not hold (__judgment__), a second answer for
+ * the same question (__twice__), and a failure (__apierror__).
+ */
+function fakeExtract(body: any): Response {
+  const memo: string = /<memo>\n([\s\S]*)\n<\/memo>/.exec(body.messages[0].content)?.[1] ?? "";
+  const ids = new Set<string>(body.output_config.format.schema.properties.proposals.items.properties.q.enum);
+  const flat = memo.normalize("NFKC");
+  const proposals: any[] = [];
+  const add = (q: string, v: string[], frag: string) => ids.has(q) && proposals.push({ q, v, frag });
+  let m: RegExpExecArray | null;
+  if ((m = /呼吸数\s*(\d+)/.exec(flat))) add("rr", [m[1]], m[0]);
+  if ((m = /SpO2\s*(\d+)/.exec(flat))) add("spo2", [m[1]], m[0]);
+  if ((m = /体温\s*(\d+(?:\.\d+)?)/.exec(flat))) add("temp", [m[1]], m[0]);
+  if ((m = /病着\s*(\d{1,2}:\d{2})/.exec(flat))) add("t_arrival", [m[1].padStart(5, "0")], m[0]);
+  if (/室内気/.test(flat)) add("o2", ["ra"], "室内気");
+  if (/crackles/.test(flat)) add("lung_exam", ["crackles"], flat.match(/[^。、]*crackles/)![0]);
+  if (/胸痛なし/.test(flat)) add("hx_chest", ["none"], "胸痛なし");
+  if (/既往は特になし/.test(flat)) add("pmh", ["none"], "既往は特になし");
+  if (/__badquote__/.test(flat)) add("jvd", ["distended"], "頸静脈の怒張を認める");
+  if (/__judgment__/.test(flat)) proposals.push({ q: "spo2_cat", v: ["low"], frag: "SpO2 88" });
+  if (/__twice__/.test(flat)) add("rr", ["30"], "呼吸数30");
+  const text = JSON.stringify({ proposals });
+  return new Response(JSON.stringify({ content: [{ type: "text", text }], stop_reason: "end_turn", usage: { input_tokens: 6000, output_tokens: 200, cache_read_input_tokens: 5900 } }), { headers: { "content-type": "application/json" } });
+}
+
 let mode = "normal";
 export const fakeAnthropic = (async (_url: any, init: any) => {
   const body = JSON.parse(init.body);
+  if (body.output_config?.format?.type === "json_schema") {
+    if (/__apierror__/.test(body.messages[0].content)) return new Response(JSON.stringify({ error: { type: "overloaded_error", message: "overloaded (fake)" } }), { status: 529 });
+    return fakeExtract(body);
+  }
   const web = (body.tools ?? []).some((t: any) => t.name === "web_search");
   const last = body.messages[body.messages.length - 1];
   const toolResult = Array.isArray(last.content) ? last.content.find((b: any) => b.type === "tool_result") : null;

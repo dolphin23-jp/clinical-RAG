@@ -910,7 +910,7 @@ async function showPage(bookId, n, host) {
 // ---------------------------------------------------------------- boot
 initTools({ api, el, $, openDialog, sheetOpen, showParent, showPage, pagesOf, books: () => S.books });
 const conv = initConversations({ api, el, $, openDialog, S, openConversation, scrollToTurn });
-const caseCtl = initCase({ el, $, openDialog, runMode });
+const caseCtl = initCase({ el, $, openDialog, runMode, api });
 const records = initRecords({ api, el, $, openDialog, copyText, caseCtl, hasThread: () => !!document.querySelector(".turn"), newConversation });
 caseCtl.onPinned((k) => records.onCasePinned(k));
 caseCtl.onCleared(() => records.onCaseCleared());

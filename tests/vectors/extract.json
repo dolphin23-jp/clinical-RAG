@@ -1,0 +1,45 @@
+{
+  "_doc": "Run against worker/src/extract.ts (norm, numberTokens, checkValue) and its twin web/extract-model.js by worker/test/extract.test.ts. norm: NFKC, no whitespace, lower case. numbers: the numbers written in a text. values: the value a proposal may hold for a question (null = refused).",
+  "norm": [
+    ["Ｓｐ Ｏ２ 88％", "spo288%"],
+    ["BP 92/54", "bp92/54"],
+    ["　両側で crackles ", "両側でcrackles"],
+    ["", ""]
+  ],
+  "numbers": [
+    ["SpO2 88%、BT 38.5℃", [2, 88, 38.5]],
+    ["Cr 1,200 mg", [1200]],
+    ["10時20分に病着", [10, 20]],
+    ["２０２４", [2024]],
+    ["3.5-4", [3.5, 4]],
+    ["数字なし", []]
+  ],
+  "values": [
+    { "name": "choice: an option id", "q": { "id": "o2", "type": "choice", "options": [["ra", "室内気"], ["o2", "酸素投与下"]] }, "v": ["ra"], "frag": "室内気", "memo": "室内気でSpO2 88%", "expect": "ra" },
+    { "name": "choice: an id that is not an option", "q": { "id": "o2", "type": "choice", "options": [["ra", "室内気"]] }, "v": ["niv"], "frag": "室内気", "memo": "室内気", "expect": null },
+    { "name": "choice: two values", "q": { "id": "o2", "type": "choice", "options": [["ra", "a"], ["o2", "b"]] }, "v": ["ra", "o2"], "frag": "x", "memo": "x", "expect": null },
+    { "name": "multi: option ids, repeated ones once", "q": { "id": "lung", "type": "multi", "options": [["crackles", "a"], ["wheeze", "b"]] }, "v": ["crackles", "crackles", "wheeze"], "frag": "crackles", "memo": "crackles", "expect": ["crackles", "wheeze"] },
+    { "name": "multi: an exclusive option with another", "q": { "id": "pmh", "type": "multi", "options": [["hf", "a"], ["none", "b"]], "exclusive": ["none"] }, "v": ["hf", "none"], "frag": "x", "memo": "x", "expect": null },
+    { "name": "multi: an exclusive option alone", "q": { "id": "pmh", "type": "multi", "options": [["hf", "a"], ["none", "b"]], "exclusive": ["none"] }, "v": ["none"], "frag": "既往なし", "memo": "既往なし", "expect": ["none"] },
+    { "name": "multi: an unknown id", "q": { "id": "lung", "type": "multi", "options": [["crackles", "a"]] }, "v": ["crackles", "rhonchi"], "frag": "x", "memo": "x", "expect": null },
+    { "name": "number: the digits are in the quote", "q": { "id": "spo2", "type": "number", "unit": "%" }, "v": ["88"], "frag": "SpO2 88%", "memo": "SpO2 88%", "expect": "88" },
+    { "name": "number: another digit than the quote's", "q": { "id": "spo2", "type": "number" }, "v": ["89"], "frag": "SpO2 88%", "memo": "SpO2 88%", "expect": null },
+    { "name": "number: part of a number is not the number", "q": { "id": "spo2", "type": "number" }, "v": ["8"], "frag": "SpO2 88%", "memo": "SpO2 88%", "expect": null },
+    { "name": "number: a decimal", "q": { "id": "temp", "type": "number" }, "v": ["38.5"], "frag": "体温38.5℃", "memo": "体温38.5℃", "expect": "38.5" },
+    { "name": "number: a thousands separator in the quote", "q": { "id": "cr", "type": "number" }, "v": ["1200"], "frag": "Cr 1,200", "memo": "Cr 1,200", "expect": "1200" },
+    { "name": "number: not digits", "q": { "id": "spo2", "type": "number" }, "v": ["八十八"], "frag": "SpO2 88%", "memo": "SpO2 88%", "expect": null },
+    { "name": "number: a sign", "q": { "id": "spo2", "type": "number" }, "v": ["-88"], "frag": "SpO2 88%", "memo": "SpO2 88%", "expect": null },
+    { "name": "time: HH:MM written in the quote", "q": { "id": "t_arrival", "type": "time" }, "v": ["10:20"], "frag": "病着 10:20", "memo": "病着 10:20", "expect": "10:20" },
+    { "name": "time: written as hours and minutes", "q": { "id": "t_arrival", "type": "time" }, "v": ["10:20"], "frag": "10時20分", "memo": "10時20分", "expect": "10:20" },
+    { "name": "time: an afternoon hour written in 12-hour form", "q": { "id": "t_arrival", "type": "time" }, "v": ["15:00"], "frag": "午後3時", "memo": "午後3時", "expect": "15:00" },
+    { "name": "time: an hour the quote does not have", "q": { "id": "t_arrival", "type": "time" }, "v": ["10:20"], "frag": "11:30", "memo": "11:30", "expect": null },
+    { "name": "time: not a time", "q": { "id": "t_arrival", "type": "time" }, "v": ["25:00"], "frag": "25時", "memo": "25時", "expect": null },
+    { "name": "text: the memo's own words", "q": { "id": "bp", "type": "text" }, "v": ["BP 92/54, HR 108"], "frag": "BP 92/54", "memo": "来院時 BP 92/54, HR 108 でした", "expect": "BP 92/54, HR 108" },
+    { "name": "text: reworded", "q": { "id": "bp", "type": "text" }, "v": ["血圧 92/54"], "frag": "BP 92/54", "memo": "来院時 BP 92/54, HR 108 でした", "expect": null },
+    { "name": "text: a number the memo does not have", "q": { "id": "bp", "type": "text" }, "v": ["BP 92/54, HR 180"], "frag": "BP 92/54", "memo": "BP 92/54, HR 108", "expect": null },
+    { "name": "text: empty", "q": { "id": "bp", "type": "text" }, "v": ["  "], "frag": "BP", "memo": "BP 92/54", "expect": null },
+    { "name": "shape: not an array", "q": { "id": "o2", "type": "choice", "options": [["ra", "a"]] }, "v": "ra", "frag": "x", "memo": "x", "expect": null },
+    { "name": "shape: not strings", "q": { "id": "o2", "type": "choice", "options": [["ra", "a"]] }, "v": [1], "frag": "x", "memo": "x", "expect": null },
+    { "name": "shape: empty", "q": { "id": "o2", "type": "choice", "options": [["ra", "a"]] }, "v": [], "frag": "x", "memo": "x", "expect": null }
+  ]
+}

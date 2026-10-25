@@ -82,7 +82,7 @@ with sync_playwright() as pw:
     page.click("#btn-case")
     expect(page.locator("#case")).to_be_visible()
     check(page.locator("#case .band").is_visible(), "band shown in the case dialog")
-    check(page.locator("#case-fields textarea").count() == 5, "five free-text fields (complaint, vitals, findings, history, own)")
+    check(page.locator("#case-fields textarea:not(.extract-memo)").count() == 5, "five free-text fields (complaint, vitals, findings, history, own)")
     check(page.locator("#case-age option").count() == 13, "age choices: unselected + 12 bands")
     check("日付は「3日前から」" in page.locator("#case").inner_text(), "the dialog tells to write dates as elapsed days")
     page.screenshot(path=str(OUT / "01_dialog_empty.png"))
