@@ -127,10 +127,23 @@ export function dbBackend(db: Db, opts: { dictionary?: TermGroup[] } = {}): Back
   };
 }
 
+/**
+ * Headers for a Worker behind Cloudflare Access (docs/enhancement-plan.md T1-2): an Access service token (CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET, from
+ * the environment only) makes Access add the Worker's second lock for a script.  Neither set = none.  Only one set is an error (a half token would be
+ * refused by Access without saying why).
+ */
+export function accessHeaders(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const id = env.CF_ACCESS_CLIENT_ID?.trim();
+  const secret = env.CF_ACCESS_CLIENT_SECRET?.trim();
+  if (!id && !secret) return {};
+  if (!id || !secret) throw new Error("set both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (or neither)");
+  return { "cf-access-client-id": id, "cf-access-client-secret": secret };
+}
+
 /** The deployed Worker: /api/search (no LLM, free, not counted in the daily cap) + /api/parent for text checks. */
 export function apiBackend(base: string, token: string, fetchImpl: typeof fetch = fetch): Backend {
   const root = base.replace(/\/+$/, "");
-  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json", ...accessHeaders() };
   const texts = new Map<string, string>();
   const fail = async (res: Response, what: string) => {
     const j: any = await res.json().catch(() => ({}));
@@ -254,7 +267,7 @@ export async function askOnce(
 ): Promise<AskOutcome> {
   const res = await fetchImpl(`${base.replace(/\/+$/, "")}/api/ask`, {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...accessHeaders() },
     body: JSON.stringify({ question: q.question ?? q.queries.join(" "), web: !!o.web, ...(o.model ? { model: o.model } : {}) }),
   });
   if (!res.ok || !res.body) {

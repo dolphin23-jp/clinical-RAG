@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { before, test } from "node:test";
 import {
+  accessHeaders,
   apiBackend,
   askOnce,
   dbBackend,
@@ -29,6 +30,20 @@ const TOKEN = "test-token-0123456789abcdef";
 const shim = (deps: Partial<AppDeps> = {}) =>
   (async (url: any, init?: any) => handle(new Request(url, init), { db, apiKey: "k", appToken: TOKEN, model: "m", ...deps })) as typeof fetch;
 const line = (o: object) => JSON.stringify(o);
+
+// ---------------------------------------------------------------------------------- Access service token (T1-2)
+test("accessHeaders: an Access service token from the environment makes a script pass the Worker's second lock; none means no headers; half is an error", () => {
+  assert.deepEqual(accessHeaders({}), {});
+  assert.deepEqual(accessHeaders({ CF_ACCESS_CLIENT_ID: " id.access ", CF_ACCESS_CLIENT_SECRET: "sec" }), { "cf-access-client-id": "id.access", "cf-access-client-secret": "sec" });
+  assert.throws(() => accessHeaders({ CF_ACCESS_CLIENT_ID: "id" }), /both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET/);
+  assert.throws(() => accessHeaders({ CF_ACCESS_CLIENT_SECRET: "s" }), /both/);
+  // the secret is never part of an error message
+  try {
+    accessHeaders({ CF_ACCESS_CLIENT_SECRET: "hunter2-secret" });
+  } catch (e) {
+    assert.doesNotMatch((e as Error).message, /hunter2/);
+  }
+});
 
 // ---------------------------------------------------------------------------------- questions file
 test("parseQuestions: comments and blank lines are skipped; defaults filled", () => {
