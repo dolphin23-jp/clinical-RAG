@@ -86,7 +86,10 @@ export const SCENE_ROLE_OF = Object.freeze(
 );
 
 /** The role of a scene's heading, or null (also null for a heading no scene has). */
-export const sceneHeadingRole = (heading) => SCENE_ROLE_OF[baseHeading(heading)] ?? null;
+export const sceneHeadingRole = (heading) => {
+  const b = baseHeading(heading);
+  return Object.hasOwn(SCENE_ROLE_OF, b) ? SCENE_ROLE_OF[b] : null; // (not "constructor", "toString" ...)
+};
 
 export const isScene = (v) => typeof v === "string" && SCENES.includes(v);
 

@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { before, test } from "node:test";
 import type { Db } from "../src/db.ts";
-import { BRIEF_LIMIT, BRIEF_SCENES, CaseInputError, RECORD_SCENES, SCENES, SCENE_LABELS, parseBrief, parseScene, renderBrief } from "../src/casemode.ts";
+import { AI_NOTE, BRIEF_LIMIT, BRIEF_SCENES, CaseInputError, RECORD_SCENES, SCENES, SCENE_LABELS, parseBrief, parseScene, renderBrief } from "../src/casemode.ts";
 import { handle, type AppDeps } from "../src/handler.ts";
 import { BRIEF_RULES, CASE_RULES, MODE_HEADINGS, SCENE_READERS, SCENE_SECTIONS, caseSystem } from "../src/prompt.ts";
 import { buildFixtureDb, openDb, REPO } from "./nodeDb.ts";
@@ -25,7 +25,7 @@ const post = (body: unknown) => new Request("http://x/api/ask", { method: "POST"
 
 type Ev = [string, any];
 /** A scripted fake of POST /v1/messages: a search first, then a plain answer.  Records every request body. */
-function fakeModel() {
+function fakeModel(answer = "整理です。 [推論]") {
   const calls: any[] = [];
   const sse = (evs: Ev[]) => new Response(evs.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
   const fetchImpl = (async (_url: any, init: any) => {
@@ -42,7 +42,7 @@ function fakeModel() {
     return sse([
       ["message_start", { type: "message_start", message: { usage: { input_tokens: 20 } } }],
       ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "整理です。 [推論]" } }],
+      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: answer } }],
       ["content_block_stop", { type: "content_block_stop", index: 0 }],
       ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } }],
     ]);
@@ -52,7 +52,7 @@ function fakeModel() {
 const events = async (res: Response): Promise<any[]> => (await res.text()).split("\n\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
 
 const CASE = { age: "70代", sex: "男性", setting: "病棟", complaint: "3日前から発熱と咳。昨日から尿量が減った。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧" };
-const BRIEF = "入院2日目の時点の記録（先生の記録。後日の事実は含みません）\n問題（優先順位順）:\n1. 腎前性AKI — 確度: 可能性が高い\n  計画: ・予定・検討: 細胞外液の輸液を検討";
+const BRIEF = "入院2日目の時点の記録（確度・計画の状態・推移・課題の完了は、その日までに先生が記録したもの。問題名・評価と計画の文・問題の順序は、いまの記録のまま）\n問題（優先順位順）:\n1. 腎前性AKI — 確度: 可能性が高い\n  計画: ・予定・検討: 細胞外液の輸液を検討";
 
 // ---------------------------------------------------------------------------------- the screen's lists equal the Worker's
 test("the scenes, their labels and the record scenes are the same on the screen and in the Worker", () => {
@@ -129,7 +129,8 @@ test("caseSystem: a scene puts its own headings in order; no scene is the common
 });
 
 test("the rules say what a summary is and is not: no later fact, no draft as evidence, no action done unless the doctor recorded it", () => {
-  assert.match(BRIEF_RULES, /後日の事実は含まれません/);
+  assert.match(BRIEF_RULES, /その日までに先生が記録したもので、後日の判断は含まれません/);
+  assert.match(BRIEF_RULES, /問題名・評価と計画の文・問題の順序は、いまの記録のままです/);
   assert.match(BRIEF_RULES, /未記入のまま|未記入として扱い/);
   assert.match(BRIEF_RULES, /AI草案を採用したもの/);
   assert.match(BRIEF_RULES, /新しい事実の根拠にしたり、書籍の記述として引用したりしません/);
@@ -162,7 +163,7 @@ test("parseScene / parseBrief: the six scenes; absent is empty; anything else is
   assert.equal(parseBrief("あ".repeat(BRIEF_LIMIT)).length, BRIEF_LIMIT);
   assert.throws(() => parseBrief("あ".repeat(BRIEF_LIMIT + 1)), (e: any) => e instanceof CaseInputError && e.code === "bad_brief");
   assert.throws(() => parseBrief({ a: 1 }), CaseInputError);
-  assert.match(renderBrief("本文"), /^【症例の記録（先生が記録したもの）】.*後日の事実は含みません.*\n本文$/s);
+  assert.match(renderBrief("本文"), /^【症例の記録（先生が記録したもの）】.*その日までに先生が記録したものです。問題名・評価と計画の文・問題の順序は、いまの記録のままです.*\n本文$/s);
 });
 
 // ---------------------------------------------------------------------------------- what the model is sent
@@ -262,4 +263,48 @@ test("pins: every module of the screen is in the service worker's shell list (a 
   const shell = sw.slice(sw.indexOf("const SHELL = ["), sw.indexOf("];", sw.indexOf("const SHELL = [")));
   for (const f of readdirSync(join(REPO, "web")).filter((x) => x.endsWith(".js") && x !== "sw.js")) assert.ok(shell.includes(`"${f}"`), `${f} is not in the shell list of web/sw.js`);
   assert.match(sw, /const V = "medbook-shell-v\d+"/);
+});
+
+// ---------------------------------------------------------------------------------- review follow-ups (PR #17)
+test("a number in a line the AI drafted is not the doctor's input: the number check still looks at it; the doctor's own lines are skipped as before", async () => {
+  const ai = "計画: ・予定・検討: ノルアドレナリン 0.5 μg/kg/min で開始（AI草案を採用したもの）";
+  const own = "計画: ・予定・検討: 補液量は 500 mL を検討";
+  const brief = `入院2日目の時点の記録\n1. 腎前性AKI — 確度: 疑い\n  ${ai}\n  ${own}`;
+  const answer = "昇圧薬は 0.5 μg/kg/min から始める。補液は 500 mL を検討する。";
+  const run = async (b: string) => {
+    const api = fakeModel(answer);
+    const res = await handle(post({ question: "", mode: "assess", scene: "prog", case: CASE, record_brief: b }), app({ fetchImpl: api.fetchImpl }));
+    assert.equal(res.status, 200);
+    return (await events(res)).at(-1).numbers as { text: string; status: string }[];
+  };
+  const withAi = await run(brief);
+  assert.deepEqual(withAi.map((n) => n.text), ["0.5 μg/kg/min"], "the AI's number is looked at (and is not in a book here), the doctor's 500 mL is not");
+  assert.equal(withAi[0].status, "not_found");
+  // without the mark the same line is the doctor's: nothing is flagged
+  assert.deepEqual(await run(brief.replace("（AI草案を採用したもの）", "")), []);
+});
+
+test("the mark of an AI-drafted line is the same text on the screen and in the Worker", async () => {
+  const rb: any = await import(join(REPO, "web", "record-brief.js"));
+  assert.equal(rb.AI_NOTE, AI_NOTE);
+});
+
+test("headingRole answers null for a name an object has (constructor, toString, __proto__), and a scene in a saved conversation must be one of the scenes", async () => {
+  for (const h of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    assert.equal(web.sceneHeadingRole(h), null, h);
+    assert.equal(assemble.headingRole(h), null, h);
+  }
+  const { convStore, ConvInputError } = await import("../src/convstore.ts");
+  const { openRw } = await import("./nodeDb.ts");
+  const store = convStore(openRw(), { retentionDays: 30 });
+  const id = "conv-scene-0001";
+  const turn = (scene: unknown) => ({ question: "q", answer: "a", payload: { kind: "final", mode: "assess", case: { complaint: "x" }, ...(scene === undefined ? {} : { scene }) } });
+  await store.append(id, turn("prog"), "2026-10-24T00:00:00Z");
+  await store.append(id, turn(undefined), "2026-10-24T00:00:00Z");
+  for (const bad of ["icu", 3, { a: 1 }, "患者ID 12345678"]) await assert.rejects(store.append(id, turn(bad), "2026-10-24T00:00:00Z"), (e: any) => e instanceof ConvInputError, String(bad));
+});
+
+test("a line that only says there is nothing to write (該当なし) gets no tick to adopt", () => {
+  for (const t of ["該当なし", "該当なし。", "該当なし（記録に新しい問題はない）", "・該当なし", "  該当なし：理由"]) assert.equal(assemble.isNoneLine(t), true, t);
+  for (const t of ["該当なしと言い切れない所見がある", "腎前性AKI", "", "新しい問題は該当なし以外にもある"]) assert.equal(assemble.isNoneLine(t), false, t);
 });

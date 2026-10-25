@@ -110,6 +110,8 @@ export function initCase(ctx) {
     refresh();
     dlg.close();
     hooks.pinned?.(current);
+    // the record follows the case only now (it takes this version of the case as its own): the scene choices are looked at again after that
+    refreshScene();
   });
   $("#case-clear").addEventListener("click", () => {
     clear();
@@ -157,7 +159,7 @@ export function initCase(ctx) {
     const brief = linked && need !== "none" ? briefFor(scene) : null;
     if (!scene) sceneHelp.textContent = "「アセスメントとプラン（草案）」だけに効きます。場面を選ぶと、その場面の読み手と目的に合わせた見出しで作ります（共通の見出しのままでも作れます）。";
     else if (need === "none") sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。症例の記録の要約は渡しません。`;
-    else if (brief) sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。開いている症例の記録（入院${brief.day}日目の時点）の要約を、症例に添えて送ります。送る内容は下で確認できます。${brief.truncated ? ` 長いため、${brief.omitted ? `優先順位の低い問題 ${brief.omitted} 件は渡さず、` : ""}文を短くしています。` : ""}`;
+    else if (brief) sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。開いている症例の記録（入院${brief.day}日目の時点）の要約を、症例に添えて送ります。送る内容は下で確認できます。${brief.truncated ? ` 長いため、${[brief.omitted ? `優先順位の低い問題 ${brief.omitted} 件は渡さず` : "", brief.omittedLines ? `末尾の ${brief.omittedLines} 行は渡さず` : ""].filter(Boolean).join("、")}${brief.omitted || brief.omittedLines ? "、" : ""}文を短くしています。` : ""}`;
     else if (need === "optional") sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。症例の記録を開いていないので、症例だけで作ります。`;
     else sceneHelp.textContent = `${SCENE_LABELS[scene]}の草案には、症例の記録が要ります。「記録」を開いてから選んでください。`;
     briefBox.hidden = !brief;
@@ -215,6 +217,11 @@ export function initCase(ctx) {
     },
     /** The open record changed (opened, made, let go, edited and closed): the scene choices and the summary shown follow it. */
     refreshScene,
+    /** Says why a request was not sent (the choices are brought up to date first, then the words stay in place of the help). */
+    notice(text) {
+      refreshScene();
+      sceneHelp.textContent = text;
+    },
     setBusy(b) {
       for (const x of modes.querySelectorAll("button")) x.disabled = b;
     },

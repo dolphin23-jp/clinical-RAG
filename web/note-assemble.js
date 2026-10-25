@@ -50,6 +50,9 @@ export const NOT_ADOPTABLE = ["確認すべき数値", "書籍に見つからな
 /** "## 初期プラン（検査・治療…）" -> "初期プラン": the part before the first bracket, without numbering. */
 const baseOf = (h) => String(h).replace(/^[\s#\d.)０-９・-]+/, "").split(/[（(]/)[0].trim();
 
+/** A line that only says there is nothing to write under its heading ("該当なし" and its reason): not an item to adopt (it would become a problem named 該当なし). */
+export const isNoneLine = (text) => /^[\s・\-–]*該当なし(?:[。．.、:：\s（(]|$)/.test(String(text ?? ""));
+
 /** The role of a draft section heading (the common draft's, or a scene's: web/draft-scenes.js), or null when it is not adoptable. */
 export function headingRole(heading) {
   const b = baseOf(heading);

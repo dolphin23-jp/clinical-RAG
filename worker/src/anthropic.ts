@@ -64,6 +64,8 @@ export interface AskInput {
   model?: string;
   /** case mode (casemode.ts): the rendered case, put before the request in the final user message only (never in the history) */
   caseBlock?: string;
+  /** case mode: the parts of `caseBlock` that are the doctor's own words; the numbers in them are the doctor's input and are not checked (default: all of it) */
+  caseInputs?: string[];
   /** case mode: the mode's rules and headings (prompt.ts caseSystem), sent as a second system block after the cached base prompt */
   modeSystem?: string;
   /** case mode: words to search when the answer fails before any search (the request itself is only a button label) */
@@ -399,7 +401,7 @@ export async function runAsk(deps: AskDeps, input: AskInput, emit: (e: StreamEve
       answer: answerText,
       cited: blocks.flatMap((b) => b.citations.map((c) => ({ cited_text: c.cited_text, page: c.page, kind: c.kind }))),
       retrieved: [...retrieved.values()],
-      inputs: [input.question, ...(input.caseBlock ? [input.caseBlock] : []), ...(input.history ?? []).filter((h) => h.role === "user").map((h) => h.text)],
+      inputs: [input.question, ...(input.caseInputs ?? (input.caseBlock ? [input.caseBlock] : [])), ...(input.history ?? []).filter((h) => h.role === "user").map((h) => h.text)],
     });
     emit({ t: "final", blocks, usage, turns: Math.min(turns, maxTurns), stop_reason: last.stop_reason, searched_books: usage.book_searches > 0, numbers, ...(overlap ? { overlap } : {}) });
   } catch (e) {

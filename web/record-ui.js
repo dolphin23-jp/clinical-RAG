@@ -1153,11 +1153,11 @@ export function initRecords(ctx) {
     hasRecordFor: (kase) => !!recordFor(kase),
     /**
      * The summary of the open record for a scene's draft (web/record-brief.js): { text, day, truncated, omitted } or null.  Built from the record as it
-     * is on the screen now (not what was last saved), as of the working day (the discharge day for the discharge summary once it is decided).
+     * is on the screen now (not what was last saved), as of the day of the scene (record-brief.js briefDay), with what the scene is about.
      */
     brief(scene, kase) {
       const rec = recordFor(kase);
-      return rec ? recordBrief(rec, briefDay(rec, scene)) : null;
+      return rec ? recordBrief(rec, briefDay(rec, scene), { scene }) : null;
     },
     /** told when the open record changes (case.js refreshes the scene choices) */
     onChange: (fn) => listeners.push(fn),

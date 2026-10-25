@@ -14,6 +14,7 @@ import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-
 import { DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, cleanLog, courseChecks, dayNo, dropEmptyDays, emptyCourse, stampLog } from "./case-course.js";
 import { relativizeDates } from "./date-relative.js";
 import { contextOf, coreMissing, cleanAnswers, isAnswered, isVisible, lineText, shortLabel } from "./intake.js";
+import { isScene } from "./draft-scenes.js";
 import { ROLES, assemble } from "./note-assemble.js";
 
 export const RECORD_VERSION = 1;
@@ -183,6 +184,7 @@ export function cleanRecord(raw) {
     if (!text) continue;
     const to = a.to === "none" || a.to === "outlook" || problems.some((p) => p.id === a.to) ? a.to : "";
     const item = { id: a.id, role: a.role, heading: str(a.heading, LIMITS.heading), text, cites: cleanCites(a.cites), to };
+    if (isScene(a.scene)) item.scene = a.scene; // the scene of the draft it came from (a problem made from it is "from the emergency" only for the emergency scene)
     if (to && typeof a.entry === "string" && used.has(a.entry)) item.entry = a.entry;
     if (typeof a.made === "string" && problems.some((p) => p.id === a.made)) item.made = a.made;
     adopted.push(item);
@@ -299,7 +301,7 @@ export function addAdopted(rec, items) {
     const text = str(it.text, LIMITS.text);
     if (!text || next.ed.adopted.some((a) => a.role === it.role && a.text === text) || next.ed.adopted.length >= LIMITS.adopted) continue;
     next.seq.a += 1;
-    next.ed.adopted.push({ id: `a${next.seq.a}`, role: it.role, heading: str(it.heading, LIMITS.heading), text, cites: cleanCites(it.cites), to: "" });
+    next.ed.adopted.push({ id: `a${next.seq.a}`, role: it.role, heading: str(it.heading, LIMITS.heading), text, cites: cleanCites(it.cites), to: "", ...(isScene(it.scene) ? { scene: it.scene } : {}) });
     added++;
   }
   return { rec: next, added };
@@ -467,6 +469,9 @@ const clipLabel = (text) => {
   return t.length > LIMITS.label ? `${t.slice(0, LIMITS.label - 1)}…` : t;
 };
 
+/** Whether the doctor has worked on a problem beyond what an adopted item made: a page left, a certainty, a class, a trend, a task linked to it. */
+const workedOn = (rec, p) => !!(p.refs?.length || p.certainty || p.dx || p.cert_log?.length || rec.course.days.some((d) => d.trend?.[p.id]) || rec.course.tasks.some((k) => k.problem === p.id));
+
 /** Where an entry is now: { list, entry } over the problems' lists and the criteria to call, or null. */
 function locate(rec, entryId) {
   if (!entryId) return null;
@@ -533,7 +538,7 @@ export function attach(rec, adoptedId, target) {
   };
   const dropMade = () => {
     // a problem this item made, left as it was made, goes with the item; one the doctor has worked on stays
-    if (made && made.label === clipLabel(a.text) && made.ai && !made.assess.length && !made.plan.length) {
+    if (made && made.label === clipLabel(a.text) && made.ai && !made.assess.length && !made.plan.length && !workedOn(next, made)) {
       next.problems = next.problems.filter((p) => p.id !== made.id);
       delete a.made;
     }
@@ -550,7 +555,8 @@ export function attach(rec, adoptedId, target) {
       a.to = made.id;
       return { rec: next, ok: true };
     }
-    const made2 = addProblem(next, "", "ed");
+    // "from the emergency" only for what the emergency scene's draft (or the common draft, as before) gave; a later scene's problem is not the emergency's
+    const made2 = addProblem(next, "", !a.scene || a.scene === "ed" ? "ed" : "typed");
     if (!made2.id) return { rec, ok: false };
     Object.assign(next, made2.rec);
     const na = next.ed.adopted.find((x) => x.id === adoptedId);

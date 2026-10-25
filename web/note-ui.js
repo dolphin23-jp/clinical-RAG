@@ -3,7 +3,7 @@
 // case and the ticked items (web/note-assemble.js) and copies it as plain text.  Everything is read-only and in the tab's memory:
 // nothing is sent, saved, exported, printed or shared, and a ticked item enters the note only because the doctor ticked it.
 // Every string reaches the DOM through textContent.
-import { AI_MARK, ENABLED, assemble, headingRole, toText } from "./note-assemble.js";
+import { AI_MARK, ENABLED, assemble, headingRole, isNoneLine, toText } from "./note-assemble.js";
 import { NOTE_TYPES } from "./note-types.js";
 
 /** Text of a node without its nested lists and the tick itself; source tags keep their brackets; citation chips become keys. */
@@ -71,9 +71,10 @@ export function initNotes(ctx) {
       const heading = sec.querySelector("summary")?.textContent ?? "";
       const role = headingRole(heading);
       if (!role) continue;
+      // `scene`: which scene's draft the item came from (the record marks a problem "from the emergency" only for the emergency scene)
       const add = (host, text, keys) => {
-        if (!text) return;
-        host.append(tick(host, { role, heading, text, cites: cite(keys) }, onChange));
+        if (!text || isNoneLine(text)) return;
+        host.append(tick(host, { role, heading, text, cites: cite(keys), scene: turn.scene || "" }, onChange));
       };
       for (const node of sec.children) {
         if (node.tagName === "P") {
@@ -94,7 +95,7 @@ export function initNotes(ctx) {
             tr.append(td);
             if (text) {
               const keys = cells.flatMap((c) => c.keys);
-              td.append(tick(tr, { role, heading, text, cites: cite(keys) }, onChange));
+              td.append(tick(tr, { role, heading, text, cites: cite(keys), scene: turn.scene || "" }, onChange));
             }
           }
         }
