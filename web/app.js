@@ -3,7 +3,7 @@ import { initCase } from "./case.js";
 import { initCreate } from "./create-ui.js";
 import { initNotes } from "./note-ui.js";
 import { initRecords } from "./record-ui.js";
-import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
+import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseSummary, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
 import { SCENE_LABELS, briefNeed, isScene } from "./draft-scenes.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
@@ -268,8 +268,26 @@ function runMode(id) {
   const scene = id === "assess" ? caseCtl.scene() : "";
   if (!scene) return submit(label, id, false);
   const brief = briefNeed(scene) === "none" ? null : caseCtl.brief();
-  if (briefNeed(scene) === "record" && !brief) return caseCtl.refreshScene(); // the choice is disabled without a record; this only keeps a stale choice from being sent
+  // the choice is off without a record; this only keeps a stale choice (the record was let go meanwhile) from being sent, and says so
+  if (briefNeed(scene) === "record" && !brief) return caseCtl.notice(`${SCENE_LABELS[scene]}の草案には、症例の記録が要ります。記録を開いて連動させてから、選び直してください。`);
+  if (brief && !confirmRecordOf(brief)) return;
   submit(`${label}（${SCENE_LABELS[scene]}）`, id, false, { scene, brief: brief?.text ?? "", briefDay: brief?.day ?? null });
+}
+
+/**
+ * Before a record's summary goes with a case: whose record it is.  An age and a sex that are the same keep the record linked when the pinned case
+ * is edited, so a case edited for the next patient would take the last patient's problems along; the doctor sees the problems' names next to the
+ * case and says whether they are the same patient's.  Asked once for each record and case text in this tab (a new conversation forgets it).
+ */
+const briefAcked = new Set();
+function confirmRecordOf(brief) {
+  const kase = caseCtl.pinned();
+  const key = `${records.linked() ?? ""}|${kase ? caseKey(kase) : ""}`;
+  if (briefAcked.has(key)) return true;
+  const names = brief.names.length ? brief.names.join("、") : "（問題はまだありません）";
+  const ok = confirm(`症例の記録（問題: ${names}${brief.problems > brief.names.length ? " ほか" : ""}）の要約を、いまの症例（${kase ? caseSummary(kase) : ""}）に添えて送ります。\n\nこの記録は、この症例と同じ患者のものですか？\n別の患者なら［キャンセル］し、「記録」を開いて連動を確かめてください。`);
+  if (ok) briefAcked.add(key);
+  return ok;
 }
 
 /** Identifier-like kinds in the question and (in case mode) in every free-text field of the case. */
@@ -336,6 +354,7 @@ function newConversation() {
   S.history = [];
   S.convId = null; // the conversation so far stays saved on the server; the next question starts a new one
   S.caseAckKey = "";
+  briefAcked.clear();
   caseCtl.clear(); // the last case never rides along by accident
   for (const t of document.querySelectorAll(".turn")) t.remove();
   empty.hidden = false;

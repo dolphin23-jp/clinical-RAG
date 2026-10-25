@@ -137,9 +137,22 @@ export function parseBrief(raw: unknown): string {
   return s;
 }
 
+/** The mark the screen puts on a line of the summary that an AI draft wrote (the doctor adopted it).  Twin of AI_NOTE in web/record-brief.js. */
+export const AI_NOTE = "（AI草案を採用したもの）";
+
+/**
+ * The summary without the lines an AI draft wrote: what is left is the doctor's own words, whose numbers are the doctor's input (the number check of
+ * the answer leaves those alone).  A number an earlier draft invented and the doctor adopted is not the doctor's input and is still checked.
+ */
+export const userBrief = (brief: string): string =>
+  brief
+    .split("\n")
+    .filter((l) => !l.includes(AI_NOTE))
+    .join("\n");
+
 /** The summary as the model sees it (after the case, before 【依頼】). */
 export const renderBrief = (brief: string): string =>
-  `【症例の記録（先生が記録したもの）】先生がこの症例の記録に書いた問題・評価・計画と、先生が選んだ確度・計画の状態・推移・未完了の課題です。後日の事実は含みません。「（AI草案を採用したもの）」の印の行は、以前の草案を先生が採用した文です。\n${brief}`;
+  `【症例の記録（先生が記録したもの）】先生がこの症例の記録に書いた問題・評価・計画と、先生が選んだ確度・計画の状態・推移・未完了の課題です。確度・計画の状態・推移・課題の完了は、その日までに先生が記録したものです。問題名・評価と計画の文・問題の順序は、いまの記録のままです。「${AI_NOTE}」の印の行は、以前の草案を先生が採用した文です。\n${brief}`;
 
 const indent = (s: string) => s.replace(/\n/g, "\n  ");
 

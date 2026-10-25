@@ -257,3 +257,48 @@ test("pins: the screen keeps a title, a page and a section's name (never the sni
   const model = readFileSync(web("case-record.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
   assert.doesNotMatch(model, /\bfetch\s*\(|\/api\//);
 });
+
+// ---------------------------------------------------------------------------------- review follow-ups (PR #17)
+test("taking back an adopted item takes back the problem it made only while nobody has worked on it: pages left, a certainty, a class, a trend or a task keep it", () => {
+  const made = () => {
+    let r = R.addAdopted(R.newRecord(CASE), [{ role: "problems", heading: "問題リスト", text: "腎前性AKI" }]).rec;
+    r = R.attach(r, "a1", "new").rec;
+    return r;
+  };
+  assert.deepEqual(R.attach(made(), "a1", "none").rec.problems, [], "left as it was made, it goes");
+  const kept = (touch: (r: any) => any, what: string) => {
+    const r = R.attach(touch(made()), "a1", "none").rec;
+    assert.equal(r.problems.length, 1, `${what}: the problem stays`);
+    return r;
+  };
+  const withPage = kept((r) => R.pinRef(r, "p1", { title: T, page: "p.30" }).rec, "a page the doctor left");
+  assert.equal(withPage.problems[0].refs.length, 1, "and so does the page");
+  kept((r) => R.setProblem(r, "p1", { certainty: "likely" }), "a certainty");
+  kept((r) => R.setProblem(r, "p1", { dx: "main" }), "a class for the discharge summary");
+  kept((r) => C.setTrend(r, 1, "p1", "improved", ""), "a trend");
+  kept((r) => C.addTask(r, { text: "培養の確認", problem: "p1" }).rec, "a task linked to it");
+});
+
+test("a problem adopted from a scene other than the emergency one is not marked as from the emergency", () => {
+  const adopt = (scene: string | undefined, day: number) => {
+    let r = C.setToday(R.newRecord(CASE), day);
+    r = R.addAdopted(r, [{ role: "problems", heading: "新しく立つ問題", text: "院内発症の肺炎 [推論]", ...(scene ? { scene } : {}) }]).rec;
+    return R.attach(r, "a1", "new").rec;
+  };
+  assert.equal(adopt(undefined, 1).problems[0].from, "ed", "no scene: as before");
+  assert.equal(adopt("ed", 1).problems[0].from, "ed");
+  for (const scene of ["op_first", "adm", "prog", "interim", "dc"]) {
+    const p = adopt(scene, 4).problems[0];
+    assert.equal(p.from, "typed", scene);
+    assert.equal(p.ai, true, `${scene}: the AI mark stays`);
+  }
+  const t = A.toText(N.progressNote(R.addEntry(adopt("prog", 4), "p1", "assess", "経過を見る").rec, 4)); // (a problem with nothing recorded is not in the progress note)
+  assert.match(t, /〔AI草案〕院内発症の肺炎/);
+  assert.doesNotMatch(t, /〔救急から〕/);
+  assert.match(A.toText(R.admissionNote(adopt("ed", 1))), /〔救急から〕/);
+  // read back: a scene that is not one is dropped, a real one is kept
+  const raw = JSON.parse(JSON.stringify(adopt("prog", 4)));
+  assert.equal(R.cleanRecord(raw).ed.adopted[0].scene, "prog");
+  raw.ed.adopted[0].scene = "icu";
+  assert.ok(!("scene" in R.cleanRecord(raw).ed.adopted[0]));
+});

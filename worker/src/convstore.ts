@@ -7,6 +7,7 @@
 // identifier check (the screen does not send it, and this store refuses identifier-like text in a question on its own),
 // the API key, usage totals beyond what the footer shows.  Conversations expire after `retentionDays` without a new turn
 // (the purge runs whenever the list is read or a turn is added; 0 = keep until deleted).
+import { SCENES } from "./casemode.ts";
 import { scanAll } from "./idguard.ts";
 import type { D1Rw } from "./evalstore.ts";
 
@@ -116,6 +117,8 @@ export function convStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
       // request (payload.create): their text is checked like the question
       const caseHits = scanAll([...caseStrings(p.case), ...caseStrings(p.create)]);
       if (caseHits.length) throw new ConvInputError(`患者を特定できる情報の可能性があるため、この症例の入力は保存しません（${caseHits.map((h) => h.label).join("、")}）`, "possible_identifier");
+      // the scene a draft was made for (docs/enhancement-plan.md 8.16) is one of the fixed scenes, never free text
+      if (p.scene !== undefined && !(typeof p.scene === "string" && (SCENES as readonly string[]).includes(p.scene))) throw new ConvInputError("payload.scene is not one of the scenes");
       const payload = JSON.stringify(p);
       if (payload.length > MAX_PAYLOAD) throw new ConvInputError(`payload is longer than ${MAX_PAYLOAD} characters`);
 

@@ -1,6 +1,6 @@
 import { dbBackend, evalRetrieval, parseQuestions } from "../../eval/lib.ts";
 import { runAsk, type StreamEvent } from "./anthropic.ts";
-import { CaseInputError, caseTexts, createTexts, MODE_LABELS, BRIEF_SCENES, parseBrief, parseCase, parseCreate, parseMode, parseScene, RECORD_SCENES, renderBrief, renderCase, renderCreate, SCENE_LABELS, type CaseInput, type CreateInput, type Mode, type Scene } from "./casemode.ts";
+import { CaseInputError, caseTexts, createTexts, MODE_LABELS, BRIEF_SCENES, parseBrief, parseCase, parseCreate, parseMode, parseScene, RECORD_SCENES, renderBrief, renderCase, renderCreate, SCENE_LABELS, userBrief, type CaseInput, type CreateInput, type Mode, type Scene } from "./casemode.ts";
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
 import { ConvInputError, convStore } from "./convstore.ts";
@@ -304,7 +304,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
             web: !!body.web,
             bookIds,
             model,
-            ...(kase && mode && mode !== "create" ? { caseBlock: brief ? `${renderCase(kase)}\n\n${renderBrief(brief)}` : renderCase(kase), modeSystem: caseSystem(mode, !!kase.own, scene, !!brief), hint: caseHint(kase) } : {}),
+            ...(kase && mode && mode !== "create" ? { caseBlock: brief ? `${renderCase(kase)}\n\n${renderBrief(brief)}` : renderCase(kase), caseInputs: [renderCase(kase), ...(brief ? [userBrief(brief)] : [])], modeSystem: caseSystem(mode, !!kase.own, scene, !!brief), hint: caseHint(kase) } : {}),
             ...(create ? { caseBlock: renderCreate(create), modeSystem: createSystem(create), hint: create.theme, checkOverlap: true } : {}),
           },
           emit,

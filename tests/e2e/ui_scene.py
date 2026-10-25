@@ -64,7 +64,14 @@ with sync_playwright() as pw:
     logs, asks = [], []
     page.on("console", lambda m: logs.append((m.type, m.text)) if m.type in ("error", "warning") else None)
     page.on("pageerror", lambda e: logs.append(("pageerror", str(e))))
-    page.on("dialog", lambda d: d.accept())
+    dialogs = []  # what confirm() asked
+    policy = {"accept": True}
+
+    def on_dialog(d):
+        dialogs.append(d.message)
+        d.accept() if policy["accept"] else d.dismiss()
+
+    page.on("dialog", on_dialog)
     page.on("request", lambda r: asks.append(json.loads(r.post_data)) if r.url.endswith("/api/ask") and r.method == "POST" else None)
     page.goto(BASE + "/")
     page.evaluate(f"localStorage.setItem('mb.token','{TOKEN}')")
@@ -170,7 +177,7 @@ with sync_playwright() as pw:
     page.locator("#scene-brief summary").click()
     expect(page.locator("#scene-brief-text")).to_contain_text("入院1日目の時点の記録")
     shown = page.locator("#scene-brief-text").inner_text()
-    check(shown.startswith("入院1日目の時点の記録（先生の記録。後日の事実は含みません）") and "確度: 疑い" in shown and "（AI草案を採用したもの）" in shown, f"the summary: the day, the certainty as chosen, the AI-draft mark ({shown[:200]})")
+    check(shown.startswith("入院1日目の時点の記録（確度・計画の状態・推移・課題の完了は、その日までに先生が記録したもの。問題名・評価と計画の文・問題の順序は、いまの記録のまま）") and "確度: 疑い" in shown and "（AI草案を採用したもの）" in shown, f"the summary: the day, the certainty as chosen, the AI-draft mark ({shown[:200]})")
     check("確度: 未選択" in shown, "a problem with no certainty chosen says so")
     check("経過観察のうえ輸液を検討" in shown and "予定・検討" in shown, "the doctor's own plan, still planned")
     page.screenshot(path=str(OUT / "02_prog_brief.png"))
@@ -184,8 +191,10 @@ with sync_playwright() as pw:
     page.wait_for_timeout(300)
     page.keyboard.press("Escape")
     n_before = len(asks)
+    d_before = len(dialogs)
     page.click("#case-modes button[data-mode=assess]")
     expect(page.locator("#guard")).to_be_visible()
+    check(len(dialogs) == d_before + 1 and "同じ患者" in dialogs[-1] and "いまの症例（70代・男性・病棟" in dialogs[-1], f"the doctor is asked whose record it is before a summary goes with the case ({dialogs[-1][:120]})")
     check("識別" in page.locator("#guard-list").inner_text() or page.locator("#guard-list li").count() > 0, "the identifier prompt opens for the summary")
     check(len(asks) == n_before, "nothing was sent")
     page.keyboard.press("Escape")
@@ -195,8 +204,10 @@ with sync_playwright() as pw:
     page.keyboard.press("Escape")
 
     # 6. the draft for the scene after a record: the request carries the summary; the turn shows what was sent; the headings are the scene's
+    d_before = len(dialogs)
     page.click("#case-modes button[data-mode=assess]")
     wait_done(2)
+    check(len(dialogs) == d_before, "asked once for the same record and case, not again")
     t2 = page.locator(".turn").nth(1)
     ask = asks[-1]
     check(ask["scene"] == "prog" and ask["record_brief"].startswith("入院1日目の時点の記録") and "確度: 疑い" in ask["record_brief"], "the request carries the scene and the record's summary")
@@ -224,6 +235,20 @@ with sync_playwright() as pw:
     check("後日の事実は含みません" not in blob and "（AI草案を採用したもの）" not in blob and "record_brief" not in blob, "the record's summary is not saved with the conversation")
     store = page.evaluate("JSON.stringify([localStorage, sessionStorage])")
     check("入院1日目の時点の記録" not in store and "確度" not in store and "ゼルニア" not in store, "nothing of it is kept in localStorage / sessionStorage")
+
+    # 7b. another patient's record must not ride along unnoticed: once the case's text changes the doctor is asked again, and cancelling sends nothing
+    page.click("#btn-case")
+    page.fill("#case-complaint", CASE["complaint"] + "追加の記載。")
+    page.click("#case-pin")
+    check(page.locator("#scene-select option[value=prog]").evaluate("o => !o.disabled"), "editing the pinned case keeps the scenes of the record open (the record follows the case)")
+    page.select_option("#scene-select", "prog")
+    policy["accept"] = False
+    n_before, d_before = len(asks), len(dialogs)
+    page.click("#case-modes button[data-mode=assess]")
+    page.wait_for_timeout(500)
+    check(len(dialogs) == d_before + 1 and "同じ患者" in dialogs[-1] and "問題:" in dialogs[-1] and len(asks) == n_before, "the case's text changed: asked again; cancelled, nothing was sent")
+    policy["accept"] = True
+    check(page.locator("#scene-select").input_value() == "prog", "the choice of scene is kept")
 
     # 8. the pages kept for a problem: the ones an adopted item cited are listed; the doctor searches by the problem's name, keeps one, takes it back
     page.click("#casebar-record")
@@ -273,6 +298,17 @@ with sync_playwright() as pw:
     page.locator(".rec-problem").nth(2).locator("button", has_text="削除").click()
     wait_saved()
 
+    # 9b. a problem carried from the progress scene's draft is not marked as from the emergency (the first two, from the emergency draft, are)
+    page.click("#casebar-record") if not page.locator("#record").is_visible() else None
+    rows = page.locator(".rec-adopted")
+    idx = [i for i in range(rows.count()) if rows.nth(i).locator("select").input_value() == "" and rows.nth(i).locator(".rec-role").inner_text().startswith("問題リスト")]
+    check(len(idx) == 1, f"one item of the problem list is still undecided ({idx})")
+    rows.nth(idx[0]).locator("select").select_option("new")
+    cards = page.locator(".rec-problem")
+    check("救急から" in cards.nth(0).inner_text() and "救急から" in cards.nth(1).inner_text(), "the two problems from the emergency draft say so")
+    check(cards.count() == 3 and "救急から" not in cards.nth(2).inner_text(), "the one from the progress draft does not")
+    wait_saved()
+
     # 10. the discharge summary lists the pages under the diagnoses the doctor classed, and the copy without the marks of origin leaves them out
     page.locator(".rec-problem").nth(1).locator(".rec-cert .chip[data-opt=likely]").click()
     page.locator(".rec-problem").nth(1).locator(".rec-dx .chip[data-opt=main]").click()
@@ -286,6 +322,16 @@ with sync_playwright() as pw:
     src_box.check()
     check("書籍の根拠" in page.locator(".rec-discharge-text").inner_text(), "and back with them")
     page.keyboard.press("Escape")
+
+    # 10b. the admission scene stays as of day 1 while the record moves on; the progress scene follows the working day
+    page.click("#casebar-record")
+    page.locator("button[data-act=next-day]").click()
+    wait_saved()
+    page.keyboard.press("Escape")
+    page.select_option("#scene-select", "adm")
+    check("入院1日目の時点" in page.locator("#scene-help").inner_text(), "the admission draft is given the record as of day 1")
+    page.select_option("#scene-select", "prog")
+    check("入院2日目の時点" in page.locator("#scene-help").inner_text(), "the progress draft is given the record as of the working day")
 
     # 11. the conversation reopened in a fresh page: the scene comes back with the draft, and the headings still take ticks
     page2 = ctx.new_page()
