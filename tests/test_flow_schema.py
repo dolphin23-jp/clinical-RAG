@@ -274,6 +274,186 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(out.read_text(encoding="utf-8"), before)  # --check does not rewrite
 
 
+# ---------------------------------------------------------------- cat: the category that ties a question to a field of a chart-note type
+CAT_FLOW = """# 架空の場面 × 架空の症候 の対話フロー（試験用。臨床には使わない）
+scene = "er-demo"
+module = "demo"
+version = 1
+bridge = [
+  { q = "temp", ent = "observation", cat = "abcde" },
+  { q = "onset", ent = "observation", cat = "pending" },
+  { q = "hx", ent = "context", cat = "hpi" },
+  { q = "judge", ent = "assessment", cat = "initial" },
+  { q = "given", ent = "action", cat = "pending" },
+  { q = "t_temp", ent = "time" },
+  { q = "memo", ent = "none", why = "ZZ_SENTINEL_WHY" },
+]
+
+[[phase]]
+id = "p1"
+name = "初期評価"
+short = "初期"
+slots = [1]
+
+[[question]]
+id = "temp"
+slot = 1
+label = "体温"
+type = "number"
+unit = "℃"
+
+[[question]]
+id = "onset"
+slot = 1
+label = "発症様式"
+type = "choice"
+options = ["sudden:突然", "gradual:徐々に"]
+
+[[question]]
+id = "hx"
+slot = 1
+label = "経過"
+type = "text"
+
+[[question]]
+id = "judge"
+slot = 1
+label = "評価（医師の判断）"
+type = "choice"
+options = ["a:安定", "b:不安定"]
+
+[[question]]
+id = "given"
+slot = 1
+label = "行った処置"
+type = "multi"
+options = ["o2:酸素", "iv:輸液"]
+
+[[question]]
+id = "t_temp"
+slot = 1
+label = "測った時刻"
+type = "time"
+
+[[question]]
+id = "memo"
+slot = 1
+label = "メモ"
+type = "text"
+"""
+
+# the parts of the training repository's scripts that the importer reads as literals (never runs)
+FLOW_PY = """# stand-in for clinical-modules' scripts/flow.py: only the declarations the importer reads
+BRIDGE_CAT_PENDING = "pending"
+BRIDGE_CAT_ENTITY = {"observation": "observation", "context": "patient_context", "assessment": "assessment", "action": "action"}
+CAT_SCENE_NOTE = {"er-demo": "X04"}
+"""
+
+NOTE_PY = """ROUTES = {
+    "X04": {
+        "arrival": "patient_context:arrival",
+        "hpi": "patient_context:hpi;observation:hpi",
+        "initial": "observation:initial,abcde;assessment:initial",
+        "exam": "observation:physical",
+        "plan": "action:management,procedure;communication:consult_request",
+    },
+}
+"""
+
+
+def make_cat(flow_text=CAT_FLOW, flow_py=FLOW_PY, note_py=NOTE_PY) -> Path:
+    root = make({"er-demo.demo.toml": flow_text})
+    (root / "scripts").mkdir()
+    if flow_py is not None:
+        (root / "scripts" / "flow.py").write_text(flow_py, encoding="utf-8")
+    if note_py is not None:
+        (root / "scripts" / "note_expanded.py").write_text(note_py, encoding="utf-8")
+    return root
+
+
+def replace_decl(text: str, q: str, new: str) -> str:
+    out, n = re.subn(rf'  \{{ q = "{q}", [^\n]*\}},\n', f"  {new},\n", text)
+    assert n == 1, q
+    return out
+
+
+class CategoryTest(unittest.TestCase):
+    def flow(self, text=CAT_FLOW, **kw):
+        return imp.load_all(make_cat(text, **kw))[0][0]
+
+    def test_a_category_comes_across_with_the_note_type_it_points_into(self):
+        f = self.flow()
+        by = {q["id"]: q["br"] for q in f["questions"]}
+        self.assertEqual((by["temp"]["cat"], by["onset"]["cat"], by["hx"]["cat"], by["judge"]["cat"], by["given"]["cat"]), ("abcde", "pending", "hpi", "initial", "pending"))
+        self.assertEqual(f["cat"], {"note": "X04", "entity": {"action": "action", "assessment": "assessment", "context": "patient_context", "observation": "observation"}, "pending": "pending"})
+        for k in ("t_temp", "memo"):
+            self.assertNotIn("cat", by[k])  # time and none take none
+        self.assertNotIn("ZZ_SENTINEL_WHY", imp.render([f], [], "c1"))  # the prose of the declaration still does not come across
+
+    def test_a_missing_category_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, r"question temp has no cat"):
+            self.flow(replace_decl(CAT_FLOW, "temp", '{ q = "temp", ent = "observation" }'))
+
+    def test_an_unknown_category_and_an_entity_ROUTES_does_not_take_it_for_are_refused(self):
+        with self.assertRaisesRegex(SystemExit, r"temp.*'nonsense'.*does not take"):
+            self.flow(replace_decl(CAT_FLOW, "temp", '{ q = "temp", ent = "observation", cat = "nonsense" }'))
+        # hpi is a category of patient_context and of observation, but initial is not one for a context
+        with self.assertRaisesRegex(SystemExit, r"hx.*'initial'.*patient_context"):
+            self.flow(replace_decl(CAT_FLOW, "hx", '{ q = "hx", ent = "context", cat = "initial" }'))
+        # arrival is a context category only
+        with self.assertRaisesRegex(SystemExit, r"temp.*'arrival'"):
+            self.flow(replace_decl(CAT_FLOW, "temp", '{ q = "temp", ent = "observation", cat = "arrival" }'))
+        # a wildcard or prose is not a category
+        for bad in ("*", "Initial", "初期", "initial x", ""):
+            with self.subTest(bad), self.assertRaises(SystemExit):
+                self.flow(replace_decl(CAT_FLOW, "temp", f'{{ q = "temp", ent = "observation", cat = "{bad}" }}'))
+
+    def test_a_category_on_a_question_that_is_not_a_record_entry_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, r"t_temp.*cannot have a cat"):
+            self.flow(replace_decl(CAT_FLOW, "t_temp", '{ q = "t_temp", ent = "time", cat = "pending" }'))
+        with self.assertRaisesRegex(SystemExit, r"memo.*cannot have a cat"):
+            self.flow(replace_decl(CAT_FLOW, "memo", '{ q = "memo", ent = "none", why = "w", cat = "hpi" }'))
+
+    def test_a_scene_without_a_note_type_takes_no_category(self):
+        other = CAT_FLOW.replace('scene = "er-demo"', 'scene = "op-demo"')
+        with self.assertRaisesRegex(SystemExit, r"scene op-demo takes no cat"):
+            imp.load_all(make_cat(other))
+        # the same flow without any cat is fine in such a scene (the outpatient first visit today)
+        bare = re.sub(r', cat = "[a-z_]+"', "", other)
+        f = self.flow(bare)
+        self.assertNotIn("cat", f)
+
+    def test_without_the_scripts_a_category_cannot_be_checked_so_it_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, r"no scripts/flow.py"):
+            imp.load_all(make_cat(flow_py=None))
+        # a checkout without them and without any cat is the synthetic one of the other tests: fine
+        bare = re.sub(r', cat = "[a-z_]+"', "", CAT_FLOW)
+        self.assertEqual(len(imp.load_all(make_cat(bare, flow_py=None, note_py=None))[0]), 1)
+
+    def test_ROUTES_that_sends_one_category_to_two_fields_is_refused(self):
+        twice = NOTE_PY.replace('"exam": "observation:physical"', '"exam": "observation:physical,abcde"')
+        with self.assertRaisesRegex(SystemExit, r"observation:abcde goes to both"):
+            self.flow(note_py=twice)
+
+    def test_the_declarations_are_read_not_run(self):
+        marker = Path(tempfile.mkdtemp()) / "ran"
+        evil_flow = FLOW_PY + f'\nopen({str(marker)!r}, "w").write("x")\n'
+        evil_note = NOTE_PY + f'\nopen({str(marker)!r}, "w").write("x")\n'
+        self.flow(flow_py=evil_flow, note_py=evil_note)
+        self.assertFalse(marker.exists())
+        with self.assertRaisesRegex(SystemExit, r"not a plain literal"):
+            self.flow(flow_py=FLOW_PY.replace('CAT_SCENE_NOTE = {"er-demo": "X04"}', 'CAT_SCENE_NOTE = dict(a="X04")'))
+
+    def test_output_is_deterministic_and_check_notices_a_changed_category(self):
+        root = make_cat()
+        out = Path(tempfile.mkdtemp()) / "flow-schema.js"
+        self.assertEqual(imp.main(["--modules", str(root), "--out", str(out), "--commit", "c1"]), 0)
+        self.assertEqual(imp.main(["--modules", str(root), "--out", str(out), "--commit", "c1", "--check"]), 0)
+        path = root / "flows" / "er-demo.demo.toml"
+        path.write_text(replace_decl(CAT_FLOW, "onset", '{ q = "onset", ent = "observation", cat = "hpi" }'), encoding="utf-8")
+        self.assertEqual(imp.main(["--modules", str(root), "--out", str(out), "--commit", "c1", "--check"]), 1)
+
+
 class CommittedFileTest(unittest.TestCase):
     def test_web_flow_schema_matches_a_modules_checkout(self):
         committed = (ROOT / "web" / "flow-schema.js").read_text(encoding="utf-8")
@@ -289,7 +469,8 @@ class CommittedFileTest(unittest.TestCase):
         flows = js_json(text, "FLOWS")
         self.assertGreaterEqual(len(flows), 13)
         for f in flows.values():
-            self.assertLessEqual(set(f), {"id", "scene", "module", "version", "title", "phases", "questions", "defs", "skipped", "origin"})
+            self.assertLessEqual(set(f), {"id", "scene", "module", "version", "title", "phases", "questions", "defs", "skipped", "origin", "cat"})
+            self.assertLessEqual(set(f.get("cat", {})), {"note", "entity", "pending"})
             self.assertTrue(f["questions"] and f["phases"])
             for p in f["phases"]:
                 self.assertLessEqual(set(p), {"id", "name", "short", "slots"})
@@ -302,6 +483,20 @@ class CommittedFileTest(unittest.TestCase):
                 self.assertIn(q["type"], imp.SUPPORTED_TYPES)
                 for o in q.get("options", []):
                     self.assertLessEqual(set(o), {"id", "label", "short"})
+        # a category is a lower-case word, never prose; where a flow has them (the emergency scene) every question that becomes a record entry has one
+        for f in flows.values():
+            words = [q["br"]["cat"] for q in f["questions"] if "cat" in q.get("br", {})]
+            self.assertTrue(all(re.fullmatch(r"[a-z][a-z_]{0,30}", w) for w in words), f["id"])
+            if "cat" in f:
+                self.assertEqual(f["scene"], "emergency-department")
+                for q in f["questions"]:
+                    if q["br"]["ent"] in f["cat"]["entity"]:
+                        self.assertIn("cat", q["br"], (f["id"], q["id"]))
+                    else:
+                        self.assertNotIn("cat", q["br"], (f["id"], q["id"]))
+            else:
+                self.assertEqual(words, [], f["id"])  # the outpatient first visit (A01) takes none: its output fields are provisional upstream
+        self.assertEqual(sorted(f["id"] for f in flows.values() if "cat" in f), sorted(i for i in flows if i.startswith("emergency-department.")))
         # the keys are checked above, structurally; the toml tables of the judgement never appear as text either
         for banned in ("[[rule]]", "[[ddx]]", "[[axis]]", "[[fact]]", "[[mark]]", "[[bridge]]", "ddx_slot"):
             self.assertNotIn(banned, text)

@@ -7,6 +7,7 @@
 // A plan item is a proposal: it is labelled as such and is never placed in a field for what was already done.
 import { ageText } from "./case-model.js";
 import { sceneHeadingRole } from "./draft-scenes.js";
+import { REST_LABEL, REST_NOTE, ROUTED_LABEL, answeredText, restText, routeAnswers } from "./note-route.js";
 import { NOTE_TYPES } from "./note-types.js";
 
 /** The types offered, in picker order.  The others are imported (note-types.js) but not wired yet. */
@@ -67,7 +68,7 @@ export function headingRole(heading) {
  * Each draft role appears once per type, so an item is never written twice.
  */
 export const FILL = {
-  A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
+  A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
   A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
   A05: { admission: ["ctx", "b:route"], hpi: ["complaint"], background: ["history"], baseline: ["b:baseline"], initial: ["vitals", "findings", "structured"], summary: ["b:summary"], problem_list: ["d:problems", "b:list"], problem_ap: ["own", "d:assessment", "d:plan", "b:ap"], general: ["b:general"], outlook: ["d:contingency", "b:outlook"] },
   A06: { context: ["ctx"], interval: ["complaint"], objective: ["vitals", "findings", "structured"], problem_ap: ["own", "d:problems", "d:assessment", "d:plan"], handover: ["d:contingency"] },
@@ -84,6 +85,11 @@ export const RECORD_FILL = {
   A07: { context: ["b:sum_context"], admission: ["ctx", "b:route", "b:summary"], course: ["b:sum_course"], condition: ["b:sum_condition"], problems: ["b:sum_ap"], ongoing: ["b:sum_ongoing"], pending: ["b:sum_pending"], contingency: ["b:outlook"], handover: ["b:sum_handover"] },
   A08: { context: ["b:dc_context"], diagnoses: ["b:dc_dx"], hpi: ["complaint", "b:route"], initial: ["vitals", "findings", "structured"], course: ["b:dc_course"], procedures: ["b:dc_procedures"], condition: ["b:dc_state"], medications: ["b:dc_meds"], followup: ["b:dc_followup"], unresolved: ["b:dc_tasks"] },
 };
+/**
+ * The flow's answers (kase.structured / kase.intake, web/intake.js) for the types in ROUTED (web/note-route.js: A04): each answer goes to the field
+ * that clinical-modules' ROUTES gives its question's category (docs/enhancement-plan.md 8.18).  What cannot be placed is kept, in a block of its own
+ * after the fields (`extras`), and counted.  The other types still place the answers beside the findings (FILL), as before: A01 waits for its upstream.
+ */
 /** Fields whose line says something is still to be filled by hand (not an AI statement): shown after the adopted items. */
 export const FIELD_NOTES = {
   "B06.tasks": "（担当・期限は入力していません）",
@@ -93,16 +99,7 @@ export const FIELD_NOTES = {
  * The flow's answers for the note: the answered lines only.  The first line (a note to the model) becomes the scene and symptom, and the
  * list of unanswered core questions (also a note to the model) is left out: a note holds what was entered, not what was not.
  */
-export function structuredForNote(text) {
-  const lines = String(text ?? "").split("\n");
-  const out = [];
-  for (const l of lines) {
-    if (l.startsWith("未入力の中核項目")) continue;
-    const m = /^場面・症候: (.+?)（/.exec(l);
-    out.push(m ? `【${m[1]}】` : l);
-  }
-  return out.join("\n").trim();
-}
+export const structuredForNote = answeredText;
 
 const ctxText = (c) => [[ageText(c.age), c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
 
@@ -114,16 +111,20 @@ function sectionsOf(type) {
 
 /**
  * kase: the typed case ({age, sex, setting, complaint, vitals, findings, history, own, structured}).
- * `structured` (the flow's answered questions, web/intake.js) is placed beside the findings until the scene-by-scene routing (docs/enhancement-plan.md 8) exists.
+ * `structured` (the flow's answered questions as text, web/intake.js) and `intake` ({flow, answers}): for a type in ROUTED (A04) the answers are
+ * routed to the fields by their questions' categories (web/note-route.js, needs `flow`: the flow's structure from web/flow-schema.js); for the
+ * others `structured` is placed beside the findings until a declared routing exists (docs/enhancement-plan.md 8.18).
  * items: adopted draft items [{ role, heading, text, cites: [{kind, title, page, url}] }] (anything else is ignored).
  * board: from a case record (web/case-record.js boardOf): { adm: {route, summary, baseline, general, outlook}, contingency, problems } — the
  * doctor's own admission texts, and the problems with the entries the doctor carried over.  Only the types whose fields list a `b:` source use it.
  * A board may also carry `fields: { [source]: blocks }` (web/record-notes.js): blocks built for a source that is not one of the admission ones
  * (the course notes), and `asOf` (the hospital day the note is as of: the text says nothing recorded later is in it).  fill: a map of the
  * same shape as FILL, used instead of FILL[typeId] (the record's notes name their own sources).
- * Returns { type, sections: [{ key, label, requirement, blocks, empty }], adopted, unfilled, omitted, asOf }.
+ * Returns { type, sections: [{ key, label, requirement, blocks, empty }], extras: [{ key, label, note, text }], routing, adopted, unfilled, omitted, asOf }.
+ * `extras`: blocks outside the fields (the flow's answers that no field took): never "（未入力）", never counted as unfilled; no such answer, no block.
+ * `routing`: null, or what web/note-route.js routeAnswers gave (how many answers, how many placed, why the others were not).
  */
-export function assemble(typeId, { kase = {}, items = [], board = null, fill: fillOverride = null } = {}) {
+export function assemble(typeId, { kase = {}, items = [], board = null, fill: fillOverride = null, flow = null } = {}) {
   if (!ENABLED.includes(typeId) && !(fillOverride && RECORD_ONLY.includes(typeId))) throw new Error(`note type ${typeId} is not offered`);
   const type = NOTE_TYPES[typeId];
   if (!type) throw new Error(`note type ${typeId} is not imported`);
@@ -133,6 +134,7 @@ export function assemble(typeId, { kase = {}, items = [], board = null, fill: fi
   const unfilled = [];
   const omitted = [];
   const used = new Set();
+  const routing = routeAnswers(typeId, { flow, kase }); // null for the types that do not route
   let boardAi = 0; // the AI entries that reached the note through the board (they carry the AI mark like adopted items)
   for (const s of sectionsOf(type)) {
     const blocks = [];
@@ -154,6 +156,9 @@ export function assemble(typeId, { kase = {}, items = [], board = null, fill: fi
         if (text) blocks.push({ kind: src === "own" ? "own" : "case", source: src, label: SOURCE_LABELS[src], text });
       }
     }
+    // the flow's answers whose question category ROUTES sends to this field (web/note-route.js), after what was typed
+    const routedHere = routing?.routed[s.key];
+    if (routedHere?.length) blocks.push({ kind: "case", source: "routed", label: ROUTED_LABEL, text: routedHere.join("\n") });
     const empty = blocks.length === 0;
     if (empty && s.requirement !== "required") {
       omitted.push(s.key);
@@ -163,10 +168,14 @@ export function assemble(typeId, { kase = {}, items = [], board = null, fill: fi
     const note = FIELD_NOTES[`${typeId}.${s.key}`];
     sections.push({ key: s.key, label: s.label, requirement: s.requirement, blocks, empty, ...(note && !empty ? { note } : {}) });
   }
+  // the flow's answers no field took: one block after the fields, in the order the flow asked
+  const extras = [];
+  const rest = restText(routing);
+  if (rest) extras.push({ key: "scene_rest", label: REST_LABEL, note: REST_NOTE, text: rest });
   // an adopted item whose role has no field in this type is reported, never silently dropped
   const unplaced = adopted.filter((i) => !used.has(i));
   const asOf = Number.isInteger(board?.asOf) ? board.asOf : null;
-  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf };
+  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, extras, routing, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf };
 }
 
 const ADM_LABELS = { route: "入院の経路・目的（先生の入力）", summary: "Clinical Summary（先生の入力）", baseline: "ベースライン（先生の入力）", general: "全身管理・治療目標・予防（先生の入力）", outlook: "再評価・退院条件・申し送り（先生の入力）" };
@@ -312,13 +321,15 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
           }
         });
       } else {
-        if (several || b.kind === "own" || b.source === "findings") out.push(`［${b.label}］`);
+        if (several || b.kind === "own" || b.source === "findings" || b.source === "routed") out.push(`［${b.label}］`);
         out.push(b.text);
       }
     }
     if (s.note) out.push(s.note);
     out.push("");
   }
+  // blocks outside the fields (the flow's answers no field took): the doctor's own input, so neither the AI mark nor the source marks apply to them
+  for (const x of note.extras ?? []) out.push(`■${x.label}`, x.note, x.text, "");
   if (sourceMarks && cites.size) {
     out.push("■AI草案の出典（採用した項目）");
     for (const line of cites.keys()) if (line) out.push(`・${line}`);

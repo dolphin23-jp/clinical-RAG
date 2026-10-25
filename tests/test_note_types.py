@@ -125,6 +125,94 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(out.read_text(encoding="utf-8"), before)  # --check does not rewrite
 
 
+ROUTES_PY = """ROUTES = {
+    "X01": {
+        "first": "patient_context:chief_complaint,hpi;observation:hpi",
+        "second": "observation:physical,test;task:test_result",
+    },
+}
+"""
+
+
+def make_routes(routes_py: str | None = ROUTES_PY, files=None) -> Path:
+    root = make(files or {"x01.toml": X01})
+    if routes_py is not None:
+        (root / "scripts").mkdir()
+        (root / "scripts" / "note_expanded.py").write_text(routes_py, encoding="utf-8")
+    return root
+
+
+class RoutesTest(unittest.TestCase):
+    """ROUTES (clinical-modules scripts/note_expanded.py): which record entries go to which field of a type.  Read as a literal, names only."""
+
+    def load(self, routes_py=ROUTES_PY):
+        root = make_routes(routes_py)
+        return imp.load_routes(root, imp.load_types(root))
+
+    def test_the_table_comes_across_as_entities_and_categories_in_the_files_order(self):
+        r = self.load()
+        self.assertEqual(r, {"X01": {"first": {"patient_context": ["chief_complaint", "hpi"], "observation": ["hpi"]},
+                                      "second": {"observation": ["physical", "test"], "task": ["test_result"]}}})
+        self.assertEqual(list(r["X01"]), ["first", "second"])
+
+    def test_the_output_has_a_line_per_field_and_records_where_the_table_is_from(self):
+        root = make_routes()
+        types = imp.load_types(root)
+        a = imp.render(types, "c1", imp.load_routes(root, types))
+        self.assertEqual(a, imp.render(types, "c1", imp.load_routes(root, types)))
+        self.assertIn("export const NOTE_ROUTES = {", a)
+        self.assertIn('"first": {"patient_context":["chief_complaint","hpi"],"observation":["hpi"]},', a)
+        self.assertEqual(js_json(a, "NOTE_TYPES_SOURCE")["routes_path"], "scripts/note_expanded.py (ROUTES)")
+        # without the table there is no NOTE_ROUTES and the source says nothing of it (the earlier output, byte for byte)
+        plain = imp.render(types, "c1")
+        self.assertNotIn("NOTE_ROUTES", plain)
+        self.assertNotIn("routes_path", plain)
+
+    def test_a_checkout_without_the_table_has_no_routes(self):
+        root = make_routes(None)
+        self.assertEqual(imp.load_routes(root, imp.load_types(root)), {})
+
+    def test_prose_or_an_unknown_entity_or_a_malformed_table_is_refused(self):
+        bad = {
+            "prose in a category": ROUTES_PY.replace("chief_complaint,hpi", "主訴 and history"),
+            "a space": ROUTES_PY.replace("observation:hpi", "observation: hpi"),
+            "unknown entity": ROUTES_PY.replace("task:test_result", "diagnosis:test_result"),
+            "no colon": ROUTES_PY.replace("task:test_result", "test_result"),
+            "empty category": ROUTES_PY.replace("physical,test", "physical,"),
+            "upper case": ROUTES_PY.replace("physical", "Physical"),
+            "entity twice": ROUTES_PY.replace("observation:physical,test;task", "observation:physical;observation:test;task"),
+            "a call, not a literal": ROUTES_PY.replace('"first": "patient_context:chief_complaint,hpi;observation:hpi"', '"first": "a".join(["b"])'),
+            "not a dict": "ROUTES = []\n",
+            "empty": "ROUTES = {}\n",
+            "no ROUTES": "OTHER = {}\n",
+            "a type id that is not one": ROUTES_PY.replace('"X01"', '"hello"'),
+        }
+        for name, text in bad.items():
+            with self.subTest(name), self.assertRaises(SystemExit):
+                self.load(text)
+
+    def test_a_field_the_type_does_not_have_and_a_type_that_was_not_imported_are_refused(self):
+        with self.assertRaisesRegex(SystemExit, r"not the type's own fields"):
+            self.load(ROUTES_PY.replace('"second"', '"third"'))
+        with self.assertRaisesRegex(SystemExit, r"not the type's own fields"):
+            self.load(ROUTES_PY.replace('"second": "observation:physical,test;task:test_result",\n', ""))
+        with self.assertRaisesRegex(SystemExit, r"not an imported note type"):
+            self.load(ROUTES_PY.replace('"X01"', '"X77"'))
+
+    def test_the_table_is_read_not_run(self):
+        marker = Path(tempfile.mkdtemp()) / "ran"
+        self.load(ROUTES_PY + f'\nopen({str(marker)!r}, "w").write("x")\n')
+        self.assertFalse(marker.exists())
+
+    def test_check_notices_a_changed_table(self):
+        root = make_routes()
+        out = Path(tempfile.mkdtemp()) / "note-types.js"
+        self.assertEqual(imp.main(["--modules", str(root), "--out", str(out), "--commit", "c1"]), 0)
+        self.assertEqual(imp.main(["--modules", str(root), "--out", str(out), "--commit", "c1", "--check"]), 0)
+        (root / "scripts" / "note_expanded.py").write_text(ROUTES_PY.replace("physical,test", "physical"), encoding="utf-8")
+        self.assertEqual(imp.main(["--modules", str(root), "--out", str(out), "--commit", "c1", "--check"]), 1)
+
+
 class CommittedFileTest(unittest.TestCase):
     def test_web_note_types_matches_a_modules_checkout(self):
         committed = (ROOT / "web" / "note-types.js").read_text(encoding="utf-8")
@@ -133,7 +221,28 @@ class CommittedFileTest(unittest.TestCase):
             self.skipTest("no clinical-modules checkout (set MODULES_DIR)")
         commit = js_json(committed, "NOTE_TYPES_SOURCE")["commit"]
         # compared at the commit the file records, so a later unrelated Modules commit does not matter; a changed type does
-        self.assertEqual(imp.render(imp.load_types(modules), commit), committed, "web/note-types.js is out of date: re-run scripts/import_note_types.py")
+        types = imp.load_types(modules)
+        self.assertEqual(imp.render(types, commit, imp.load_routes(modules, types)), committed, "web/note-types.js is out of date: re-run scripts/import_note_types.py")
+
+    def test_committed_routes_are_entity_and_category_words_over_the_types_own_fields(self):
+        text = (ROOT / "web" / "note-types.js").read_text(encoding="utf-8")
+        types = js_json(text, "NOTE_TYPES")
+        routes = js_json(text, "NOTE_ROUTES")
+        self.assertIn("A04", routes)
+        for note, fields in routes.items():
+            self.assertEqual(set(fields), {s["key"] for s in types[note]["sections"]}, note)
+            for field, rules in fields.items():
+                for entity, cats in rules.items():
+                    self.assertIn(entity, imp.modules_literals.ENTITIES, (note, field))
+                    self.assertTrue(cats and all(re.fullmatch(r"\*|[a-z][a-z_]{0,30}", c) for c in cats), (note, field, cats))
+        # the emergency note: an answer of one (entity, category) lands in one field
+        seen = {}
+        for field, rules in routes["A04"].items():
+            for entity, cats in rules.items():
+                for c in cats:
+                    if c != "*":
+                        self.assertNotIn((entity, c), seen, (entity, c, field, seen.get((entity, c))))
+                        seen[(entity, c)] = field
 
     def test_committed_file_has_only_names_and_order(self):
         types = js_json((ROOT / "web" / "note-types.js").read_text(encoding="utf-8"), "NOTE_TYPES")

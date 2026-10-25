@@ -235,14 +235,31 @@ with sync_playwright() as pw:
     wait_done(3)
     check("妊娠" not in asks[-1]["case"]["structured"], "and not when the sex is changed to male (the question is gone)")
 
-    # 12. the chart-note stopgap: the answers go beside the findings; the list of unanswered questions does not go into a note
+    # 12. the chart note (docs/enhancement-plan.md 8.18): A04 sends each answer to the field ROUTES gives its question's category (question -> cat -> ROUTES);
+    #     what no field takes stays in a block of its own, counted on the screen; the other types keep the stopgap (the answers beside the findings)
     page.click("#casebar-note")
     dlg = page.locator("#note")
     expect(dlg).to_be_visible()
     text = page.locator("#note-text").inner_text()
-    check("■身体診察\n【救急外来 × 腹痛】" in text and "体温：38.4 ℃" in text, "the note carries the answers beside the findings, headed by the scene and symptom")
+    check(page.input_value("#note-type") == "A04", "the emergency note is the one offered first")
+    initial = text.split("■初期評価・ABCDE\n", 1)[1].split("\n■", 1)[0] if "■初期評価・ABCDE\n" in text else ""
+    check("［場面・症候の入力（フローの質問への答え）］\n体温：38.4 ℃" in initial, "the temperature (the E slot, category abcde) goes to the field ROUTES gives it: 初期評価・ABCDE")
+    exam = text.split("■身体診察\n", 1)[1].split("\n■", 1)[0] if "■身体診察\n" in text else ""
+    check("体温" not in exam and "第一印象" not in exam and "（未入力）" in exam, "the physical-exam field does not hold the answers (it says （未入力） when nothing else was typed there)")
+    rest = text.split("■欄に結びつかなかった場面・症候の入力\n", 1)[1] if "■欄に結びつかなかった場面・症候の入力\n" in text else ""
+    check("【救急外来 × 腹痛】" in rest and "第一印象：sick" in rest and "病着：21:40" in rest and "発症様式：徐々に発症" in rest and "随伴症状：嘔気" in rest,
+          "the answers no field took are kept in a block of their own, headed by the scene and symptom (none is dropped)")
+    check("体温" not in rest and text.count("体温：38.4 ℃") == 1, "an answer is written once: the temperature is in its field only")
+    check(text.index("■欄に結びつかなかった場面・症候の入力") > text.index("■身体診察"), "the block comes after the fields")
+    check("ここにない項目は未確認で、陰性・正常を意味しません" in rest, "and it says what is absent from it is unchecked, not negative or normal")
+    info = page.locator("#note-info").inner_text()
+    check(re.search(r"場面・症候の入力 \d+ 件のうち、1 件を ROUTES の欄に振り分けました", info) is not None and "カテゴリ未分類" in info, f"the screen says how many answers went to a field and why the others did not ({info[-120:]})")
     check("未入力の中核項目" not in text and "陰性ではありません" not in text, "but not the notes meant for the model")
     page.screenshot(path=str(OUT / "04_note.png"))
+    page.select_option("#note-type", "A01")
+    t_a01 = page.locator("#note-text").inner_text()
+    check("■身体診察\n【救急外来 × 腹痛】" in t_a01 and "■欄に結びつかなかった" not in t_a01, "the outpatient first-visit note still places the answers beside the findings (its routing waits for the upstream)")
+    page.select_option("#note-type", "A04")
     page.keyboard.press("Escape")
 
     # 13. nothing is kept in the browser's own storage

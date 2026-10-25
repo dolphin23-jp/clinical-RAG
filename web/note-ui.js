@@ -4,6 +4,7 @@
 // nothing is sent, saved, exported, printed or shared, and a ticked item enters the note only because the doctor ticked it.
 // Every string reaches the DOM through textContent.
 import { AI_MARK, ENABLED, assemble, headingRole, isNoneLine, toText } from "./note-assemble.js";
+import { routingSummary } from "./note-route.js";
 import { NOTE_TYPES } from "./note-types.js";
 
 /** Text of a node without its nested lists and the tick itself; source tags keep their brackets; citation chips become keys. */
@@ -37,7 +38,7 @@ export function initNotes(ctx) {
   const info = $("#note-info");
   const copyBtn = $("#note-copy");
   const itemData = new WeakMap(); // tick's container element -> { role, heading, text, keys }
-  let current = null; // { kase, items(): adopted items, label }
+  let current = null; // { kase, items(): adopted items, label, flow: the structure of the flow the case's answers came from, or null }
 
   for (const id of ENABLED) {
     const t = NOTE_TYPES[id];
@@ -133,18 +134,31 @@ export function initNotes(ctx) {
   // ---------------------------------------------------------------- the dialog
   function render() {
     if (!current) return;
-    const note = assemble(pick.value, { kase: current.kase, items: current.items() });
+    const note = assemble(pick.value, { kase: current.kase, items: current.items(), flow: current.flow });
     pre.textContent = toText(note, { aiMark: optAi.checked, sourceMarks: optSrc.checked });
     const t = NOTE_TYPES[pick.value];
     const lines = [`${current.label}。採用した草案の項目だけが入ります（採用していない項目は入りません）。`];
     if (note.unfilled.length) lines.push(`未入力の必須欄 ${note.unfilled.length} 個は「（未入力）」のままです。`);
     if (note.unplaced) lines.push(`この型には、採用した ${note.unplaced} 件を入れる欄がありません。別の型を選ぶと入ることがあります。`);
+    if (note.routing) lines.push(routingSummary(note.routing));
     lines.push(`型: ${t.id} ${t.title} v${t.version}（${t.status}）。欄の名前と順序だけを clinical-modules から取り込んでいます。`);
     info.textContent = lines.join(" ");
     copyBtn.textContent = "コピー";
   }
-  function open(c) {
+  /** The structure of the flow the case's answers came from (loaded on demand: it is large), or null when there is none or it cannot be loaded. */
+  async function loadFlow(kase) {
+    const id = kase?.intake?.flow;
+    if (!id) return null;
+    try {
+      return (await import("./flow-schema.js")).FLOWS[id] ?? null;
+    } catch {
+      return null;
+    }
+  }
+  async function open(c) {
     current = c;
+    current.flow = await loadFlow(c.kase);
+    if (current !== c) return; // closed (or another note opened) while the flow loaded
     render();
     openDialog(dlg);
   }
