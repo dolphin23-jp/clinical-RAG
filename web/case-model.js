@@ -15,8 +15,10 @@ export const isAgeYears = (v) => typeof v === "string" && /^(0|[1-9]\d{0,2})$/.t
  * (`ok`: false when something was typed that is not an age, so the screen can say so).
  */
 export function readAge(text) {
-  const t = String(text ?? "").normalize("NFKC").replace(/\s+/g, "").replace(/[歳才]$/u, "");
-  if (t === "") return { age: "", ok: true };
+  const bare = String(text ?? "").normalize("NFKC").replace(/\s+/g, "");
+  const t = bare.replace(/[歳才]$/u, "");
+  if (bare === "") return { age: "", ok: true };
+  if (t === "") return { age: "", ok: false }; // only the unit ("歳") was typed
   if (isAgeYears(t)) return { age: t, ok: true };
   const band = String(text).normalize("NFKC").replace(/\s+/g, "");
   return LEGACY_AGES.includes(band) ? { age: band, ok: true } : { age: "", ok: false };
