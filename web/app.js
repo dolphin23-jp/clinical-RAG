@@ -607,13 +607,20 @@ function finish(turn, ev) {
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
+    return true;
   } catch {
     const ta = el("textarea");
     ta.value = text;
     document.body.append(ta);
     ta.select();
-    document.execCommand?.("copy");
+    let ok = false;
+    try {
+      ok = document.execCommand?.("copy") === true;
+    } catch {
+      ok = false;
+    }
     ta.remove();
+    return ok;
   }
 }
 

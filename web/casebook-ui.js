@@ -25,6 +25,9 @@ const randomBytes = (n) => {
 };
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
+const outHead = (o) =>
+  `${o.count} 項目のパケットを作りました。${o.copied === true ? "クリップボードにコピーしました。" : o.copied === false ? "コピーできませんでした。下の欄の文字を選んで、手でコピーしてください。" : "クリップボードにコピーしています…"}`;
+
 export function initCasebook(ctx) {
   const { el, copyText } = ctx;
   const fresh = () => ({ id: null, sel: new Map(), mode: "", age: null, sex: null, setting: null, synthetic: null, code: null, out: null, note: "" });
@@ -248,8 +251,9 @@ export function initCasebook(ctx) {
     build.id = "cb-build";
     build.addEventListener("click", async () => {
       M.out = null;
+      const bytes = randomBytes(10);
       const now = getRec();
-      const seeded = ensureSeed(now, randomBytes(10));
+      const seeded = ensureSeed(now, bytes);
       const current = candidates(seeded);
       if (signature(current) !== shown) {
         M.note = "記録が変わっていたので、項目の一覧を更新しました。内容を確かめて、もう一度押してください。";
@@ -258,11 +262,14 @@ export function initCasebook(ctx) {
       }
       const keys = chosen(seeded, current).map((c) => c.key);
       const m = M.mode || mode;
+      const typedCode = normalizeCode(code.value);
+      // a code that differs from the one this record was sent to: another case in Casebook is meant, or a slip
+      if (m === "append" && seeded.casebook.code && typedCode !== seeded.casebook.code && !confirm("入れた症例コードが、この記録を送った症例のコードと違います。別の Casebook の症例に追加しますか？")) return;
       const typedAge = readAge(age.value);
       const patient = { ageYears: typedAge.ok && /^\d+$/.test(typedAge.age) ? Number(typedAge.age) : null, sex: sex.value, setting: setting.value };
       const res = buildPacket(seeded, {
         mode: m,
-        code: normalizeCode(code.value),
+        code: typedCode,
         patient,
         synthetic: M.synthetic,
         keys,
@@ -275,15 +282,18 @@ export function initCasebook(ctx) {
         for (const e of res.errors) errors.append(el("li", null, e));
         return;
       }
-      M.out = { text: res.text, entries: res.entries, count: res.json.items.length, mode: m, copied: false };
-      try {
-        await copyText(res.text);
-        M.out.copied = true;
-      } catch {
-        /* the text is on the screen to copy by hand */
-      }
-      if (seeded.casebook.seed !== now.casebook.seed) mutate(() => seeded);
+      const shownItems = new Map(current.map((c) => [c.key, c]));
+      M.out = { text: res.text, entries: res.entries, items: res.entries.map((e) => ({ key: e.key, tag: shownItems.get(e.key)?.tag ?? "", text: shownItems.get(e.key)?.text ?? "" })), skip: new Set(), count: res.json.items.length, mode: m, copied: null };
+      // the seed goes into the record NOW, on the record as it is at this moment and before anything is waited for: a later answer from the
+      // clipboard must not write an older copy of the record over whatever is open by then (another record, or text typed in the meantime)
+      if (!now.casebook.seed) mutate((r) => ensureSeed(r, bytes));
       else redraw();
+      const packet = res.text;
+      const ok = (await copyText(packet)) === true;
+      if (M.id !== id || !M.out || M.out.text !== packet) return; // another record or another packet is on the screen by now
+      M.out.copied = ok;
+      const head = document.getElementById("cb-out-head");
+      if (head?.isConnected) head.textContent = outHead(M.out);
     });
     const buildRow = el("div", "btn-row");
     buildRow.append(build);
@@ -293,7 +303,9 @@ export function initCasebook(ctx) {
     if (M.out) {
       const out = el("div", "cb-out");
       out.id = "cb-out";
-      out.append(el("p", "cb-out-head", `${M.out.count} 項目のパケットを作りました。${M.out.copied ? "クリップボードにコピーしました。" : "下の文字を選んでコピーしてください。"}`));
+      const head = el("p", "cb-out-head", outHead(M.out));
+      head.id = "cb-out-head";
+      out.append(head);
       const ta = el("textarea", "cb-packet");
       ta.id = "cb-packet";
       ta.readOnly = true;
@@ -304,8 +316,7 @@ export function initCasebook(ctx) {
       again.type = "button";
       again.id = "cb-copy";
       again.addEventListener("click", async () => {
-        await copyText(M.out.text);
-        again.textContent = "コピーしました";
+        again.textContent = (await copyText(M.out?.text ?? "")) === true ? "コピーしました" : "コピーできませんでした（上の欄から手で）";
       });
       const copyRow = el("div", "btn-row");
       copyRow.append(again);
@@ -322,6 +333,25 @@ export function initCasebook(ctx) {
         newCode.setAttribute("autocomplete", "off");
         done.append(field("Casebook が示した症例コード（取り込み完了の画面。6文字）", newCode, "入れておくと、次の送信は、この症例への追加になります。"));
       }
+      // Casebook may skip an item (its own check, a shape it does not take): the doctor takes those out of the marks, so they are offered again
+      const which = el("details", "cb-which");
+      which.id = "cb-which";
+      which.append(el("summary", null, "Casebook が取り込まなかった項目があったとき（その項目を外してから押す）"));
+      which.append(el("p", "help", "Casebook の取り込み完了の画面に「取り込めなかった」と出た項目は、ここで外してください。外した項目には印が付かず、まだ送っていない項目として残ります。"));
+      for (const it of M.out.items) {
+        const lab = el("label", "cb-label");
+        const cbx = el("input", "cb-check");
+        cbx.type = "checkbox";
+        cbx.checked = !M.out.skip.has(it.key);
+        cbx.dataset.key = it.key;
+        cbx.addEventListener("change", () => {
+          if (cbx.checked) M.out.skip.delete(it.key);
+          else M.out.skip.add(it.key);
+        });
+        lab.append(cbx, el("span", "cb-text", `${it.tag}｜${clip(it.text, 120)}`));
+        which.append(lab);
+      }
+      done.append(which);
       const msg = el("p", "help", "");
       msg.setAttribute("role", "status");
       const imported = el("button", "btn primary", "Casebook に取り込みました（送信済みの印を付ける）");
@@ -329,6 +359,7 @@ export function initCasebook(ctx) {
       imported.id = "cb-imported";
       imported.addEventListener("click", () => {
         const o = M.out;
+        const taken = o.entries.filter((e) => !o.skip.has(e.key));
         let next = null;
         if (newCode) {
           const typed = normalizeCode(newCode.value);
@@ -337,8 +368,8 @@ export function initCasebook(ctx) {
             return;
           }
           if (!typed && !confirm("症例コードが空です。次の送信は、追加ではなく新しい症例になります。このまま印を付けますか？")) return;
-          next = typed ? (r) => markSent(setCode(r, typed).rec, o.entries) : (r) => markSent(r, o.entries);
-        } else next = (r) => markSent(r, o.entries);
+          next = typed ? (r) => markSent(setCode(r, typed).rec, taken) : (r) => markSent(r, taken);
+        } else next = (r) => markSent(r, taken);
         M.out = null;
         M.sel.clear();
         M.mode = "";
