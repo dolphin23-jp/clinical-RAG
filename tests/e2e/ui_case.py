@@ -28,7 +28,7 @@ def check(cond, msg):
 
 
 CASE = {
-    "age": "70代",
+    "age": "72",
     "sex": "男性",
     "setting": "救急",
     "complaint": "ゼルニア値の低下を指摘された。3日前から発熱と咳。",
@@ -64,7 +64,8 @@ with sync_playwright() as pw:
         )
 
     def fill_case(c, own=""):
-        for k in ("age", "sex", "setting"):
+        page.fill("#case-age", c.get("age", ""))
+        for k in ("sex", "setting"):
             page.select_option(f"#case-{k}", c.get(k, ""))
         for k in ("complaint", "vitals", "findings", "history"):
             page.fill(f"#case-{k}", c.get(k, ""))
@@ -83,16 +84,22 @@ with sync_playwright() as pw:
     expect(page.locator("#case")).to_be_visible()
     check(page.locator("#case .band").is_visible(), "band shown in the case dialog")
     check(page.locator("#case-fields textarea:not(.extract-memo)").count() == 5, "five free-text fields (complaint, vitals, findings, history, own)")
-    check(page.locator("#case-age option").count() == 13, "age choices: unselected + 12 bands")
+    check(page.locator("input#case-age").count() == 1 and page.locator("#case-age").get_attribute("inputmode") == "numeric", "the age is a numeric text field (whole years), not a band list")
+    check(page.locator("label[for=case-age]").inner_text() == "年齢（歳）", "the age field says years")
     check("日付は「3日前から」" in page.locator("#case").inner_text(), "the dialog tells to write dates as elapsed days")
     page.screenshot(path=str(OUT / "01_dialog_empty.png"))
 
     # 2. pinning an empty case is refused; an identifier-like word warns while typing (kinds only)
     page.click("#case-pin")
     check(page.locator("#case-msg").is_visible(), "an empty case cannot be pinned")
-    page.select_option("#case-age", "70代")
+    page.fill("#case-age", "72")
     page.click("#case-pin")
     check(page.locator("#case-msg").is_visible() and not page.locator("#casebar").is_visible(), "age alone is not a case")
+    for bad in ["七十二", "131", "72.5", "-3", "70代前半", "0x10"]:
+        page.fill("#case-age", bad)
+        page.click("#case-pin")
+        check("整数" in page.locator("#case-msg").inner_text() and not page.locator("#casebar").is_visible(), f"an age that is not whole years is refused: {bad}")
+    page.fill("#case-age", "72")
     page.fill("#case-complaint", "カルテ番号 12345678 の件")
     warn = page.locator("#case-warn")
     check(warn.is_visible() and "「カルテ番号」の語" in warn.inner_text() and "12345678" not in warn.inner_text(), "identifier warning names the kind, never the text")
@@ -104,7 +111,7 @@ with sync_playwright() as pw:
     page.click("#case-pin")
     expect(page.locator("#case")).not_to_be_visible()
     bar = page.locator("#casebar")
-    check(bar.is_visible() and "70代・男性・救急" in page.locator("#casebar-text").inner_text(), "the bar summarises age, sex, setting and the complaint")
+    check(bar.is_visible() and "72歳・男性・救急" in page.locator("#casebar-text").inner_text(), "the bar summarises age, sex, setting and the complaint")
     check(page.locator("#case-modes button").count() == 4, "four mode buttons")
     labels = [b.inner_text() for b in page.locator("#case-modes button").all()]
     check(labels == ["アセスメントとプラン（草案）", "鑑別と反証", "見落としチェック", "コンサルト・医師コールの基準"], "mode buttons carry the four labels")
@@ -117,7 +124,7 @@ with sync_playwright() as pw:
     wait_done(1)
     req = asks[-1]
     check(req.get("mode") == "assess" and req["question"] == "アセスメントとプラン（草案）", "assess button sends its mode and label")
-    check(req["case"]["complaint"] == CASE["complaint"] and req["case"]["age"] == "70代" and req["case"]["own"] == "", "the case is sent as typed")
+    check(req["case"]["complaint"] == CASE["complaint"] and req["case"]["age"] == "72" and req["case"]["own"] == "", "the case is sent as typed")
     check(req["history"] == [], "no history on the first turn")
     turn = page.locator(".turn").first
     check("症例つき" in turn.locator(".q small").inner_text(), "the turn is marked as asked with a case")
@@ -218,7 +225,7 @@ with sync_playwright() as pw:
     page2.wait_for_selector(".conv-open")
     page2.click(".conv-open")
     page2.wait_for_selector(".turn .foot button")
-    check(page2.locator("#casebar").is_visible() and "70代・男性・救急" in page2.locator("#casebar-text").inner_text(), "reopening pins the case the conversation was last asked with")
+    check(page2.locator("#casebar").is_visible() and "72歳・男性・救急" in page2.locator("#casebar-text").inner_text(), "reopening pins the case the conversation was last asked with")
     check(page2.locator("#case-modes").is_visible(), "and the mode buttons are back")
     first = page2.locator(".turn").first
     check(first.locator("details.sec").count() == 6 and first.locator(".src-tag").count() >= 3, "the restored draft keeps its sections and tags")

@@ -1,0 +1,312 @@
+{
+ "source": {
+  "repo": "clinical-casebook",
+  "commit": "3e518c96a2b10e9e9ae119fd52988dbb00545376",
+  "files": [
+   "packages/core/src/ids/ulid.ts",
+   "packages/core/src/handoff/codec.ts",
+   "packages/core/src/handoff/packet.ts",
+   "fixtures/synthetic/handoff/*.json"
+  ],
+  "note": "Made by Casebook's own encoder / ulid; web/casebook-packet.js must give the same strings (worker/test/casebook.test.ts)"
+ },
+ "ulid": [
+  {
+   "timeMs": 0,
+   "bytes": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   "id": "00000000000000000000000000"
+  },
+  {
+   "timeMs": 1700000000000,
+   "bytes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+   "id": "01HF7YAT00041061050R3GG28A"
+  },
+  {
+   "timeMs": 281474976710655,
+   "bytes": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
+   "id": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ"
+  },
+  {
+   "timeMs": 1234567890123,
+   "bytes": [171, 205, 239, 1, 35, 69, 103, 137, 171, 205],
+   "id": "013XRZP16BNF6YY0938NKRKAYD"
+  },
+  {
+   "timeMs": 987654321,
+   "bytes": [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+   "id": "0000XDWT5H1440E1G50G1G4080"
+  }
+ ],
+ "codec": [
+  {
+   "name": "new-emergency-synthetic",
+   "json": {
+    "magic": "CBH1",
+    "schemaVersion": 1,
+    "packetId": "01MCC5RG110000000000000000",
+    "target": {
+     "mode": "new"
+    },
+    "patient": {
+     "ageYears": 62,
+     "sex": "F",
+     "setting": "emergency"
+    },
+    "hospitalDay": 1,
+    "synthetic": true,
+    "items": [
+     {
+      "itemId": "01MCC5RG120000000000000000",
+      "source": "user",
+      "body": {
+       "kind": "problem",
+       "text": "発熱と咳（架空）"
+      }
+     },
+     {
+      "itemId": "01MCC5RG130000000000000000",
+      "source": "ai",
+      "body": {
+       "kind": "diagnosis",
+       "text": "市中肺炎の疑い（架空）",
+       "status": "suspected"
+      }
+     },
+     {
+      "itemId": "01MCC5RG140000000000000000",
+      "day": 1,
+      "afterMin": 15,
+      "source": "user",
+      "body": {
+       "kind": "course",
+       "text": "胸部X線で右下肺野に浸潤影（架空）"
+      }
+     }
+    ]
+   },
+   "packet": "CBH1:eyJtYWdpYyI6IkNCSDEiLCJzY2hlbWFWZXJzaW9uIjoxLCJwYWNrZXRJZCI6IjAxTUNDNVJHMTEwMDAwMDAwMDAwMDAwMDAwIiwidGFyZ2V0Ijp7Im1vZGUiOiJuZXcifSwicGF0aWVudCI6eyJhZ2VZZWFycyI6NjIsInNleCI6IkYiLCJzZXR0aW5nIjoiZW1lcmdlbmN5In0sImhvc3BpdGFsRGF5IjoxLCJzeW50aGV0aWMiOnRydWUsIml0ZW1zIjpbeyJpdGVtSWQiOiIwMU1DQzVSRzEyMDAwMDAwMDAwMDAwMDAwMCIsInNvdXJjZSI6InVzZXIiLCJib2R5Ijp7ImtpbmQiOiJwcm9ibGVtIiwidGV4dCI6IueZuueGseOBqOWSs--8iOaetuepuu-8iSJ9fSx7Iml0ZW1JZCI6IjAxTUNDNVJHMTMwMDAwMDAwMDAwMDAwMDAwIiwic291cmNlIjoiYWkiLCJib2R5Ijp7ImtpbmQiOiJkaWFnbm9zaXMiLCJ0ZXh0Ijoi5biC5Lit6IK654KO44Gu55aR44GE77yI5p6256m677yJIiwic3RhdHVzIjoic3VzcGVjdGVkIn19LHsiaXRlbUlkIjoiMDFNQ0M1UkcxNDAwMDAwMDAwMDAwMDAwMDAiLCJkYXkiOjEsImFmdGVyTWluIjoxNSwic291cmNlIjoidXNlciIsImJvZHkiOnsia2luZCI6ImNvdXJzZSIsInRleHQiOiLog7jpg6hY57ea44Gn5Y-z5LiL6IK66YeO44Gr5rW45r2k5b2x77yI5p6256m677yJIn19XX0.1b9181c9"
+  },
+  {
+   "name": "new-inpatient",
+   "json": {
+    "magic": "CBH1",
+    "schemaVersion": 1,
+    "packetId": "01MCC5RM010000000000000001",
+    "target": {
+     "mode": "new"
+    },
+    "patient": {
+     "ageYears": 81,
+     "sex": "F",
+     "setting": "inpatient"
+    },
+    "hospitalDay": 10,
+    "items": [
+     {
+      "itemId": "01MCC5RM020000000000000002",
+      "source": "rule",
+      "body": {
+       "kind": "problem",
+       "text": "食思不振と水様下痢（脱水）"
+      }
+     },
+     {
+      "itemId": "01MCC5RM030000000000000003",
+      "source": "rule",
+      "body": {
+       "kind": "diagnosis",
+       "text": "腎前性急性腎障害",
+       "status": "confirmed"
+      }
+     },
+     {
+      "itemId": "01MCC5RM040000000000000004",
+      "day": -2,
+      "source": "user",
+      "body": {
+       "kind": "course",
+       "text": "食思不振と水様下痢が始まった。"
+      }
+     },
+     {
+      "itemId": "01MCC5RM050000000000000005",
+      "day": 1,
+      "source": "rule",
+      "body": {
+       "kind": "lab",
+       "name": "Cr",
+       "value": 2.9,
+       "unit": "mg/dL"
+      }
+     },
+     {
+      "itemId": "01MCC5RM060000000000000006",
+      "day": 1,
+      "source": "rule",
+      "body": {
+       "kind": "lab",
+       "name": "K",
+       "value": 6.4,
+       "unit": "mEq/L"
+      }
+     },
+     {
+      "itemId": "01MCC5RM070000000000000007",
+      "day": 1,
+      "source": "rule",
+      "body": {
+       "kind": "finding",
+       "text": "口腔内乾燥",
+       "polarity": "positive"
+      }
+     },
+     {
+      "itemId": "01MCC5RM080000000000000008",
+      "day": 1,
+      "source": "rule",
+      "body": {
+       "kind": "ecg",
+       "text": "テント状T波。QRS 幅は正常"
+      }
+     },
+     {
+      "itemId": "01MCC5RM090000000000000009",
+      "day": 1,
+      "source": "rule",
+      "body": {
+       "kind": "treatment",
+       "text": "カルシウム製剤の静注と補液を開始",
+       "change": "start",
+       "reason": "高カリウム血症"
+      }
+     },
+     {
+      "itemId": "01MCC5RM0A000000000000000A",
+      "day": 4,
+      "source": "rule",
+      "body": {
+       "kind": "lab",
+       "name": "Cr",
+       "value": 1.4,
+       "unit": "mg/dL"
+      }
+     },
+     {
+      "itemId": "01MCC5RM0B000000000000000B",
+      "day": 9,
+      "source": "user",
+      "body": {
+       "kind": "course",
+       "text": "腎機能が改善した。"
+      }
+     }
+    ]
+   },
+   "packet": "CBH1:eyJtYWdpYyI6IkNCSDEiLCJzY2hlbWFWZXJzaW9uIjoxLCJwYWNrZXRJZCI6IjAxTUNDNVJNMDEwMDAwMDAwMDAwMDAwMDAxIiwidGFyZ2V0Ijp7Im1vZGUiOiJuZXcifSwicGF0aWVudCI6eyJhZ2VZZWFycyI6ODEsInNleCI6IkYiLCJzZXR0aW5nIjoiaW5wYXRpZW50In0sImhvc3BpdGFsRGF5IjoxMCwiaXRlbXMiOlt7Iml0ZW1JZCI6IjAxTUNDNVJNMDIwMDAwMDAwMDAwMDAwMDAyIiwic291cmNlIjoicnVsZSIsImJvZHkiOnsia2luZCI6InByb2JsZW0iLCJ0ZXh0Ijoi6aOf5oCd5LiN5oyv44Go5rC05qeY5LiL55ei77yI6ISx5rC077yJIn19LHsiaXRlbUlkIjoiMDFNQ0M1Uk0wMzAwMDAwMDAwMDAwMDAwMDMiLCJzb3VyY2UiOiJydWxlIiwiYm9keSI6eyJraW5kIjoiZGlhZ25vc2lzIiwidGV4dCI6IuiFjuWJjeaAp-aApeaAp-iFjumanOWusyIsInN0YXR1cyI6ImNvbmZpcm1lZCJ9fSx7Iml0ZW1JZCI6IjAxTUNDNVJNMDQwMDAwMDAwMDAwMDAwMDA0IiwiZGF5IjotMiwic291cmNlIjoidXNlciIsImJvZHkiOnsia2luZCI6ImNvdXJzZSIsInRleHQiOiLpo5_mgJ3kuI3mjK_jgajmsLTmp5jkuIvnl6LjgYzlp4vjgb7jgaPjgZ_jgIIifX0seyJpdGVtSWQiOiIwMU1DQzVSTTA1MDAwMDAwMDAwMDAwMDAwNSIsImRheSI6MSwic291cmNlIjoicnVsZSIsImJvZHkiOnsia2luZCI6ImxhYiIsIm5hbWUiOiJDciIsInZhbHVlIjoyLjksInVuaXQiOiJtZy9kTCJ9fSx7Iml0ZW1JZCI6IjAxTUNDNVJNMDYwMDAwMDAwMDAwMDAwMDA2IiwiZGF5IjoxLCJzb3VyY2UiOiJydWxlIiwiYm9keSI6eyJraW5kIjoibGFiIiwibmFtZSI6IksiLCJ2YWx1ZSI6Ni40LCJ1bml0IjoibUVxL0wifX0seyJpdGVtSWQiOiIwMU1DQzVSTTA3MDAwMDAwMDAwMDAwMDAwNyIsImRheSI6MSwic291cmNlIjoicnVsZSIsImJvZHkiOnsia2luZCI6ImZpbmRpbmciLCJ0ZXh0Ijoi5Y-j6IWU5YaF5Lm-54elIiwicG9sYXJpdHkiOiJwb3NpdGl2ZSJ9fSx7Iml0ZW1JZCI6IjAxTUNDNVJNMDgwMDAwMDAwMDAwMDAwMDA4IiwiZGF5IjoxLCJzb3VyY2UiOiJydWxlIiwiYm9keSI6eyJraW5kIjoiZWNnIiwidGV4dCI6IuODhuODs-ODiOeKtlTms6LjgIJRUlMg5bmF44Gv5q2j5bi4In19LHsiaXRlbUlkIjoiMDFNQ0M1Uk0wOTAwMDAwMDAwMDAwMDAwMDkiLCJkYXkiOjEsInNvdXJjZSI6InJ1bGUiLCJib2R5Ijp7ImtpbmQiOiJ0cmVhdG1lbnQiLCJ0ZXh0Ijoi44Kr44Or44K344Km44Og6KO95Ymk44Gu6Z2Z5rOo44Go6KOc5ray44KS6ZaL5aeLIiwiY2hhbmdlIjoic3RhcnQiLCJyZWFzb24iOiLpq5jjgqvjg6rjgqbjg6DooYDnl4cifX0seyJpdGVtSWQiOiIwMU1DQzVSTTBBMDAwMDAwMDAwMDAwMDAwQSIsImRheSI6NCwic291cmNlIjoicnVsZSIsImJvZHkiOnsia2luZCI6ImxhYiIsIm5hbWUiOiJDciIsInZhbHVlIjoxLjQsInVuaXQiOiJtZy9kTCJ9fSx7Iml0ZW1JZCI6IjAxTUNDNVJNMEIwMDAwMDAwMDAwMDAwMDBCIiwiZGF5Ijo5LCJzb3VyY2UiOiJ1c2VyIiwiYm9keSI6eyJraW5kIjoiY291cnNlIiwidGV4dCI6IuiFjuapn-iDveOBjOaUueWWhOOBl-OBn-OAgiJ9fV19.d32e269f"
+  },
+  {
+   "name": "append-inpatient",
+   "json": {
+    "magic": "CBH1",
+    "schemaVersion": 1,
+    "packetId": "01MCC5RM0C000000000000000C",
+    "target": {
+     "mode": "append",
+     "caseCode": "23456A"
+    },
+    "hospitalDay": 5,
+    "items": [
+     {
+      "itemId": "01MCC5RM0D000000000000000D",
+      "source": "rule",
+      "body": {
+       "kind": "vital",
+       "name": "収縮期血圧",
+       "value": 152,
+       "unit": "mmHg"
+      }
+     },
+     {
+      "itemId": "01MCC5RM0E000000000000000E",
+      "day": 5,
+      "source": "rule",
+      "body": {
+       "kind": "treatment",
+       "text": "アムロジピンを再開",
+       "change": "start"
+      }
+     },
+     {
+      "itemId": "01MCC5RM0F000000000000000F",
+      "day": 5,
+      "source": "user",
+      "body": {
+       "kind": "note",
+       "text": "血圧が上がってきた"
+      }
+     }
+    ]
+   },
+   "packet": "CBH1:eyJtYWdpYyI6IkNCSDEiLCJzY2hlbWFWZXJzaW9uIjoxLCJwYWNrZXRJZCI6IjAxTUNDNVJNMEMwMDAwMDAwMDAwMDAwMDBDIiwidGFyZ2V0Ijp7Im1vZGUiOiJhcHBlbmQiLCJjYXNlQ29kZSI6IjIzNDU2QSJ9LCJob3NwaXRhbERheSI6NSwiaXRlbXMiOlt7Iml0ZW1JZCI6IjAxTUNDNVJNMEQwMDAwMDAwMDAwMDAwMDBEIiwic291cmNlIjoicnVsZSIsImJvZHkiOnsia2luZCI6InZpdGFsIiwibmFtZSI6IuWPjue4ruacn-ihgOWcpyIsInZhbHVlIjoxNTIsInVuaXQiOiJtbUhnIn19LHsiaXRlbUlkIjoiMDFNQ0M1Uk0wRTAwMDAwMDAwMDAwMDAwMEUiLCJkYXkiOjUsInNvdXJjZSI6InJ1bGUiLCJib2R5Ijp7ImtpbmQiOiJ0cmVhdG1lbnQiLCJ0ZXh0Ijoi44Ki44Og44Ot44K444OU44Oz44KS5YaN6ZaLIiwiY2hhbmdlIjoic3RhcnQifX0seyJpdGVtSWQiOiIwMU1DQzVSTTBGMDAwMDAwMDAwMDAwMDAwRiIsImRheSI6NSwic291cmNlIjoidXNlciIsImJvZHkiOnsia2luZCI6Im5vdGUiLCJ0ZXh0Ijoi6KGA5Zyn44GM5LiK44GM44Gj44Gm44GN44GfIn19XX0.df0edaf4"
+  },
+  {
+   "name": "rag-kinds",
+   "json": {
+    "magic": "CBH1",
+    "schemaVersion": 1,
+    "packetId": "01HF7YAT001440E1G50G1G4080",
+    "target": {
+     "mode": "new"
+    },
+    "patient": {
+     "ageYears": 72,
+     "sex": "M",
+     "setting": "emergency"
+    },
+    "synthetic": true,
+    "hospitalDay": 1,
+    "items": [
+     {
+      "itemId": "0000000001040G2081040G2081",
+      "day": 1,
+      "source": "user",
+      "body": {
+       "kind": "problem",
+       "text": "腎前性AKI"
+      }
+     },
+     {
+      "itemId": "0000000002081040G2081040G2",
+      "day": 1,
+      "source": "ai",
+      "body": {
+       "kind": "diagnosis",
+       "text": "腎前性AKI",
+       "status": "suspected"
+      }
+     },
+     {
+      "itemId": "00000000030C1G60R30C1G60R3",
+      "day": 2,
+      "source": "user",
+      "problemId": "0000000001040G2081040G2081",
+      "body": {
+       "kind": "note",
+       "text": "評価: 脱水と NSAIDs 😀 の関与"
+      }
+     },
+     {
+      "itemId": "00000000040G2081040G208104",
+      "day": 1,
+      "source": "user",
+      "body": {
+       "kind": "course",
+       "text": "主訴と経過: 3日前から発熱と咳"
+      }
+     }
+    ]
+   },
+   "packet": "CBH1:eyJtYWdpYyI6IkNCSDEiLCJzY2hlbWFWZXJzaW9uIjoxLCJwYWNrZXRJZCI6IjAxSEY3WUFUMDAxNDQwRTFHNTBHMUc0MDgwIiwidGFyZ2V0Ijp7Im1vZGUiOiJuZXcifSwicGF0aWVudCI6eyJhZ2VZZWFycyI6NzIsInNleCI6Ik0iLCJzZXR0aW5nIjoiZW1lcmdlbmN5In0sInN5bnRoZXRpYyI6dHJ1ZSwiaG9zcGl0YWxEYXkiOjEsIml0ZW1zIjpbeyJpdGVtSWQiOiIwMDAwMDAwMDAxMDQwRzIwODEwNDBHMjA4MSIsImRheSI6MSwic291cmNlIjoidXNlciIsImJvZHkiOnsia2luZCI6InByb2JsZW0iLCJ0ZXh0Ijoi6IWO5YmN5oCnQUtJIn19LHsiaXRlbUlkIjoiMDAwMDAwMDAwMjA4MTA0MEcyMDgxMDQwRzIiLCJkYXkiOjEsInNvdXJjZSI6ImFpIiwiYm9keSI6eyJraW5kIjoiZGlhZ25vc2lzIiwidGV4dCI6IuiFjuWJjeaAp0FLSSIsInN0YXR1cyI6InN1c3BlY3RlZCJ9fSx7Iml0ZW1JZCI6IjAwMDAwMDAwMDMwQzFHNjBSMzBDMUc2MFIzIiwiZGF5IjoyLCJzb3VyY2UiOiJ1c2VyIiwicHJvYmxlbUlkIjoiMDAwMDAwMDAwMTA0MEcyMDgxMDQwRzIwODEiLCJib2R5Ijp7ImtpbmQiOiJub3RlIiwidGV4dCI6IuipleS-oTog6ISx5rC044GoIE5TQUlEcyDwn5iAIOOBrumWouS4jiJ9fSx7Iml0ZW1JZCI6IjAwMDAwMDAwMDQwRzIwODEwNDBHMjA4MTA0IiwiZGF5IjoxLCJzb3VyY2UiOiJ1c2VyIiwiYm9keSI6eyJraW5kIjoiY291cnNlIiwidGV4dCI6IuS4u-iotOOBqOe1jOmBjjogM-aXpeWJjeOBi-OCieeZuueGseOBqOWSsyJ9fV19.85dd1bb8"
+  }
+ ]
+}

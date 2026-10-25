@@ -30,7 +30,7 @@ def check(cond, msg):
 
 
 CASE = {
-    "age": "70代",
+    "age": "72",
     "sex": "男性",
     "setting": "病棟",
     "complaint": "ゼルニア値の低下を指摘された。3日前から腹痛と嘔気。",
@@ -111,7 +111,8 @@ with sync_playwright() as pw:
     # 1. no case: no scene row.  A pinned case: the row, with the scenes after the admission switched off (they need a record)
     check(not page.locator("#case-scene").is_visible(), "no scene row without a pinned case")
     page.click("#btn-case")
-    for k in ("age", "sex", "setting"):
+    page.fill("#case-age", CASE["age"])
+    for k in ("sex", "setting"):
         page.select_option(f"#case-{k}", CASE[k])
     for k in ("complaint", "vitals", "findings", "history"):
         page.fill(f"#case-{k}", CASE[k])
@@ -194,7 +195,7 @@ with sync_playwright() as pw:
     d_before = len(dialogs)
     page.click("#case-modes button[data-mode=assess]")
     expect(page.locator("#guard")).to_be_visible()
-    check(len(dialogs) == d_before + 1 and "同じ患者" in dialogs[-1] and "いまの症例（70代・男性・病棟" in dialogs[-1], f"the doctor is asked whose record it is before a summary goes with the case ({dialogs[-1][:120]})")
+    check(len(dialogs) == d_before + 1 and "同じ患者" in dialogs[-1] and "いまの症例（72歳・男性・病棟" in dialogs[-1], f"the doctor is asked whose record it is before a summary goes with the case ({dialogs[-1][:120]})")
     check("識別" in page.locator("#guard-list").inner_text() or page.locator("#guard-list li").count() > 0, "the identifier prompt opens for the summary")
     check(len(asks) == n_before, "nothing was sent")
     page.keyboard.press("Escape")

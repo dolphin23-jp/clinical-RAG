@@ -27,7 +27,7 @@ def check(cond, msg):
 
 
 CASE = {
-    "age": "70代",
+    "age": "72",
     "sex": "男性",
     "setting": "救急",
     "complaint": "ゼルニア値の低下を指摘された。3日前から発熱と咳。",
@@ -68,7 +68,8 @@ with sync_playwright() as pw:
 
     def pin(pg, c, own=""):
         pg.click("#btn-case")
-        for k in ("age", "sex", "setting"):
+        pg.fill("#case-age", c.get("age", ""))
+        for k in ("sex", "setting"):
             pg.select_option(f"#case-{k}", c.get(k, ""))
         for k in ("complaint", "vitals", "findings", "history"):
             pg.fill(f"#case-{k}", c.get(k, ""))
@@ -117,7 +118,7 @@ with sync_playwright() as pw:
     check(page.input_value("#note-type") == "A04", "the emergency note is first")
     text = page.locator("#note-text").inner_text()
     check(text.startswith("【救急外来初療】下書き\n［日付］　［患者ID］　［氏名］"), "title, then the blank date / ID / name line")
-    check("■来院情報\n70代・男性・救急" in text and "■現病歴\nゼルニア値の低下を指摘された" in text, "the case is placed in its fields")
+    check("■来院情報\n72歳・男性・救急" in text and "■現病歴\nゼルニア値の低下を指摘された" in text, "the case is placed in its fields")
     check("■身体診察\n［身体所見・検査・画像・心電図］\nCr 2.4 mg/dL" in text, "findings are labelled as the combined input")
     check("■帰宅・入院・転院と根拠\n（未入力）" in text, "a required field with nothing stays （未入力）")
     check("■検査所見" not in text and "■再評価・治療反応" not in text, "conditional fields with nothing are left out")

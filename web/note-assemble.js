@@ -5,6 +5,7 @@
 // ticked, the draft's "確認すべき数値" / "書籍に見つからなかった点" / "先生の案との差" sections, a date, a patient ID or a name.  A
 // required field with nothing to put in says （未入力）; it is not filled with prose.  A conditional field with nothing is left out.
 // A plan item is a proposal: it is labelled as such and is never placed in a field for what was already done.
+import { ageText } from "./case-model.js";
 import { sceneHeadingRole } from "./draft-scenes.js";
 import { NOTE_TYPES } from "./note-types.js";
 
@@ -28,7 +29,7 @@ export const REF_VIA_LABEL = { found: "先生が検索で残した頁", cited: "
 
 /** The typed case's parts, as sources for a field. */
 export const SOURCE_LABELS = {
-  ctx: "年代・性別・場面",
+  ctx: "年齢・性別・場面",
   complaint: "主訴と経過",
   vitals: "バイタル",
   findings: "身体所見・検査・画像・心電図",
@@ -103,7 +104,7 @@ export function structuredForNote(text) {
   return out.join("\n").trim();
 }
 
-const ctxText = (c) => [[c.age, c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
+const ctxText = (c) => [[ageText(c.age), c.sex].filter(Boolean).join("・"), c.setting].filter(Boolean).join("・");
 
 /** The sections of a type that apply to the note being made (B02 has a request and a response side: the request is made). */
 function sectionsOf(type) {

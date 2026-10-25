@@ -238,7 +238,7 @@ const CREATED = `## 導入文
 
 ## 症例の入力用
 
-- 年代: 70代
+- 年齢: 72
 - 性別: 男性
 - 場面: 救急
 - 主訴と経過: 3日前から発熱と咳。
@@ -276,7 +276,7 @@ test("reading a created case: the parts by heading, the seven input lines (with 
   const p = C.parseCreated(CREATED);
   assert.deepEqual(p.absent, []);
   assert.equal(p.intro, "夕方、救急外来を受診した七十代の男性。三日前から発熱と咳が続いている。");
-  assert.deepEqual(p.input, { 年代: "70代", 性別: "男性", 場面: "救急", 主訴と経過: "3日前から発熱と咳。\n昨日から尿量が減った。", バイタル: "BP 92/54, HR 108", "所見・検査": "Cr 2.4 mg/dL, K 5.8 mEq/L", "既往・内服": "高血圧。アムロジピン内服。" });
+  assert.deepEqual(p.input, { 年齢: "72", 性別: "男性", 場面: "救急", 主訴と経過: "3日前から発熱と咳。\n昨日から尿量が減った。", バイタル: "BP 92/54, HR 108", "所見・検査": "Cr 2.4 mg/dL, K 5.8 mEq/L", "既往・内服": "高血圧。アムロジピン内服。" });
   assert.deepEqual(p.table.map((r: any) => [r.item, r.value]), [["Cr", "2.4 mg/dL"], ["K", "5.8 mEq/L"]]);
   assert.match(p.table[0].basis, /［書籍 p\.10-12］/); // the page that came from the citation metadata is kept in the basis column
   assert.equal(p.pitfall, "NSAIDsの内服を聞かないと見誤る。");
@@ -291,17 +291,26 @@ test("into case mode: the fields come from the seven lines only; a choice that i
   const ok = C.toCase(C.parseCreated(CREATED));
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.notes, []);
-  assert.deepEqual(ok.kase, { age: "70代", sex: "男性", setting: "救急", complaint: "3日前から発熱と咳。\n昨日から尿量が減った。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧。アムロジピン内服。", own: "", structured: "", intake: null });
+  assert.deepEqual(ok.kase, { age: "72", sex: "男性", setting: "救急", complaint: "3日前から発熱と咳。\n昨日から尿量が減った。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧。アムロジピン内服。", own: "", structured: "", intake: null });
   assert.ok(!JSON.stringify(ok.kase).includes("腎前性AKI")); // the assessment (and every other section) stays out
-  const odd = C.toCase(C.parseCreated(CREATED.replace("- 年代: 70代", "- 年代: 70歳代").replace("- 性別: 男性", "- 性別: 不明")));
+  const odd = C.toCase(C.parseCreated(CREATED.replace("- 年齢: 72", "- 年齢: 70歳代").replace("- 性別: 男性", "- 性別: 不明")));
   assert.equal(odd.kase.age, "");
   assert.equal(odd.kase.sex, "その他・不明");
-  assert.deepEqual(odd.notes, ["「年代」の「70歳代」は選択肢にないため、空欄にしました"]);
+  assert.deepEqual(odd.notes, ["「年齢」の「70歳代」は 0〜130 の整数ではないため、空欄にしました"]);
+  // "72歳" and full-width digits are read as 72; out of range is blanked and said; the age line missing is said
+  assert.equal(C.toCase(C.parseCreated(CREATED.replace("- 年齢: 72", "- 年齢: ７２歳"))).kase.age, "72");
+  assert.equal(C.toCase(C.parseCreated(CREATED.replace("- 年齢: 72", "- 年齢: 0"))).kase.age, "0");
+  assert.equal(C.toCase(C.parseCreated(CREATED.replace("- 年齢: 72", "- 年齢: 131"))).kase.age, "");
+  assert.deepEqual(C.toCase(C.parseCreated(CREATED.replace("- 年齢: 72\n", ""))).notes, ["「年齢」がありません"]);
+  // a case created before the age became whole years still opens: the old line is read as the age, and the band is kept as it was
+  const old = C.toCase(C.parseCreated(CREATED.replace("- 年齢: 72", "- 年代: 70代")));
+  assert.equal(old.kase.age, "70代");
+  assert.deepEqual(old.notes, []);
   const none = C.toCase(C.parseCreated("## 導入文\n\nだけ\n"));
   assert.equal(none.ok, false);
   assert.ok(none.notes.some((n: string) => /どれもありません/.test(n)));
   // the dialog's own choices and limits still apply
-  assert.deepEqual(M.AGES.includes(ok.kase.age), true);
+  assert.equal(M.isAgeYears(ok.kase.age), true);
 });
 
 test("the Modules draft: valid TOML with the fields of a drill case; [case.answers] is not made; what the doctor must fix is marked; no assessment as a value", () => {

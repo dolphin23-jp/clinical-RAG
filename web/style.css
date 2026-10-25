@@ -299,7 +299,7 @@ input[type="number"].n-input { width: 72px; min-height: 44px; padding: 0 8px; fo
 .chip.mode { flex: none; color: var(--ink); border-color: var(--accent); }
 .chip.mode:disabled { opacity: 0.45; }
 .case-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.case-choice select { width: 100%; }
+.case-choice select, .case-choice input { width: 100%; }
 textarea.case-text { display: block; width: 100%; max-height: 36dvh; resize: vertical; }
 .draftmark { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 12.5px; line-height: 1.6; }
 .casebox { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; font-size: 13px; }
@@ -464,3 +464,29 @@ details.extract-same > summary, details.extract-hidden > summary { min-height: 4
 .rec-ref-snippet { flex-basis: 100%; font-size: 12px; color: var(--muted); }
 .rec-found { margin-top: 6px; }
 
+/* ---- sending a record to Casebook (web/casebook-ui.js; docs/enhancement-plan.md 8.17) ---- */
+.cb-box { padding-top: 4px; }
+fieldset.cb-target, fieldset.cb-synth { margin: 12px 0; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 12px; }
+.cb-target legend, .cb-synth legend { padding: 0 6px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.cb-modes { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.cb-radio { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.cb-radio input { width: 20px; height: 20px; accent-color: var(--accent); }
+.cb-patient { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.cb-field { min-width: 120px; }
+.cb-field input, .cb-field select { min-height: 44px; }
+.cb-notsent { margin: 8px 0; }
+.cb-notsent summary { min-height: 40px; display: flex; align-items: center; color: var(--muted); cursor: pointer; }
+ul.cb-list { margin: 6px 0; padding: 0; list-style: none; }
+.cb-row { margin: 6px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.cb-row[data-state="sent"] { opacity: 0.6; }
+.cb-label { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; min-height: 48px; }
+.cb-check { flex: none; width: 22px; height: 22px; margin-top: 2px; accent-color: var(--accent); }
+.cb-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cb-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.cb-text { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.cb-why { font-size: 12.5px; color: var(--danger); }
+.cb-count { margin: 8px 0; font-size: 13.5px; font-weight: 600; }
+.cb-count.over { color: var(--danger); }
+.cb-out { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--accent-soft); }
+.cb-out-head { margin: 0 0 6px; font-weight: 700; }
+textarea.cb-packet { display: block; width: 100%; font-family: var(--mono); font-size: 12px; }

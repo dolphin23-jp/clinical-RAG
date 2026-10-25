@@ -5,13 +5,15 @@
 // The draft is a starting point, not a finished drill: `[case.answers]` is NOT made (it is keyed to the flow's question and option
 // ids, which only clinical-modules knows), the id / key / source are marked for the doctor to replace, and the findings table and the
 // assessment are left as comments for the doctor to convert there.  Nothing of the "見立て" goes into the case dialog.
-import { AGES, SETTINGS, SEXES, cleanCase, isEmptyCase } from "./case-model.js";
+import { AGE_MAX, SETTINGS, SEXES, cleanCase, isEmptyCase, readAge } from "./case-model.js";
 import { scan } from "./id-guard.js";
 
 /** The `##` headings a created case has, in order.  Twin of worker/src/prompt.ts CREATE_HEADINGS (pinned equal by the tests). */
 export const CREATE_HEADINGS = ["導入文", "症例の入力用", "所見の表", "見立て", "落とし穴", "教訓", "書籍に見つからなかった点"];
 /** The lines under 症例の入力用.  Twin of CREATE_INPUT_LABELS. */
-export const INPUT_LABELS = ["年代", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
+export const INPUT_LABELS = ["年齢", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
+/** The first line's old name, still read from a saved conversation (the case was created before the age became whole years). */
+const LEGACY_LABELS = { 年代: "年齢" };
 /** Placeholder id in the draft: the doctor picks the real one (clinical-modules' scripts/drill.py has the rule). */
 export const DRAFT_ID = "xx-draft";
 /** clinical-modules limits a case's text fields to this many characters (scripts/drill.py MAX_TEXT). */
@@ -44,15 +46,15 @@ export function splitSections(text) {
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.join("\n").trim()]));
 }
 
-/** "- 年代: 70代" lines under 症例の入力用 -> { 年代: "70代", … } (a following indented line continues the value). */
+/** "- 年齢: 72" lines under 症例の入力用 -> { 年齢: "72", … } (a following indented line continues the value; the old "- 年代: 70代" is read as 年齢). */
 function readInput(body) {
   const out = {};
   let last = null;
-  const re = new RegExp(`^\\s*[-*・]\\s*(${INPUT_LABELS.join("|")})\\s*[:：]\\s*(.*)$`);
+  const re = new RegExp(`^\\s*[-*・]\\s*(${[...INPUT_LABELS, ...Object.keys(LEGACY_LABELS)].join("|")})\\s*[:：]\\s*(.*)$`);
   for (const line of String(body ?? "").split("\n")) {
     const m = re.exec(line);
     if (m) {
-      last = m[1];
+      last = LEGACY_LABELS[m[1]] ?? m[1];
       if (!(last in out)) out[last] = m[2];
       else last = null;
     } else if (last && line.trim()) out[last] += `\n${line.trim()}`;
@@ -107,8 +109,16 @@ export function toCase(parsed) {
     notes.push(v ? `「${label}」の「${v}」は選択肢にないため、空欄にしました` : `「${label}」がありません`);
     return "";
   };
+  // the age is whole years (an old band such as "70代" from a saved conversation is kept as it was); anything else is left empty and said so
+  const pickAge = () => {
+    const v = i["年齢"] ?? "";
+    const r = readAge(v);
+    if (r.ok && r.age) return r.age;
+    notes.push(v ? `「年齢」の「${v}」は 0〜${AGE_MAX} の整数ではないため、空欄にしました` : "「年齢」がありません");
+    return "";
+  };
   const kase = cleanCase({
-    age: pick("年代", AGES),
+    age: pickAge(),
     sex: pick("性別", SEXES, SEX_ALIASES),
     setting: pick("場面", SETTINGS),
     complaint: i["主訴と経過"],

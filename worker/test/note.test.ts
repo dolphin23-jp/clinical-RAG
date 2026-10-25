@@ -11,7 +11,7 @@ const web = (f: string) => join(REPO, "web", f);
 const A: any = await import(web("note-assemble.js"));
 const T: any = await import(web("note-types.js"));
 
-const KASE = { age: "70代", sex: "男性", setting: "救急", complaint: "3日前から発熱と咳。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧。アムロジピン内服。", own: "腎前性AKIを第一に考える。" };
+const KASE = { age: "72", sex: "男性", setting: "救急", complaint: "3日前から発熱と咳。", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL, K 5.8 mEq/L", history: "高血圧。アムロジピン内服。", own: "腎前性AKIを第一に考える。" };
 const item = (role: string, text: string, cites: any[] = []) => ({ role, heading: "h", text, cites });
 const BOOK = { kind: "book", title: "架空内科ハンドブック ［照合未完］", page: "p.10-12" };
 
@@ -79,7 +79,7 @@ test("assemble: the case goes into its fields in the type's order; a required fi
   assert.deepEqual(note.omitted, ["tests", "management", "reassessment"]);
   assert.deepEqual(note.unfilled, ["disposition"]);
   const text = A.toText(note);
-  assert.match(text, /■来院情報\n70代・男性・救急/);
+  assert.match(text, /■来院情報\n72歳・男性・救急/);
   assert.match(text, /■現病歴\n3日前から発熱と咳。/);
   assert.match(text, /■初期評価・ABCDE\nBP 92\/54, HR 108/);
   assert.match(text, /■身体診察\n［身体所見・検査・画像・心電図］\nCr 2\.4 mg\/dL, K 5\.8 mEq\/L/);
@@ -187,7 +187,7 @@ test("pins: the assembly and the note screen never send, save, export, print or 
   }
   // nothing from the AI side is imported by the assembly: it is deterministic
   const asm = readFileSync(web("note-assemble.js"), "utf-8");
-  assert.deepEqual([...asm.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./draft-scenes.js", "./note-types.js"]);
+  assert.deepEqual([...asm.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./case-model.js", "./draft-scenes.js", "./note-types.js"]);
   // the scenes' headings are plain data: they import nothing at all (docs/enhancement-plan.md 8.16)
   assert.deepEqual([...readFileSync(web("draft-scenes.js"), "utf-8").matchAll(/^import /gm)], []);
   const ui = readFileSync(web("note-ui.js"), "utf-8");

@@ -112,7 +112,7 @@ with sync_playwright() as pw:
 
     # 4. into case mode: from the seven lines only, never the assessment
     panel.locator("button", has_text="症例モードに入れる").click()
-    check(page.locator("#casebar").is_visible() and "70代・男性・救急" in page.locator("#casebar-text").inner_text(), "the case is pinned in case mode")
+    check(page.locator("#casebar").is_visible() and "72歳・男性・救急" in page.locator("#casebar-text").inner_text(), "the case is pinned in case mode")
     check("見立ては入れていません" in panel.inner_text(), "the panel says the assessment was not carried over")
     page.click("#casebar-open")
     check(page.input_value("#case-complaint").startswith("ゼルニア値の低下を指摘され") and "Cr 2.4 mg/dL" in page.input_value("#case-findings"), "the case dialog holds the created case's findings")
@@ -190,7 +190,7 @@ with sync_playwright() as pw:
     check(p0["mode"] == "create" and p0["create"]["theme"] == "ゼルニア値の低下" and p0["overlap"] == [] and "case" not in p0, "the request and the (empty) overlap result are in the saved payload")
     check("12345678" not in json.dumps(saved, ensure_ascii=False).replace("検体番号 12345678", ""), "the identifier-like request was never saved")
     store = page.evaluate("JSON.stringify([localStorage, sessionStorage])")
-    check("ゼルニア値" not in store and "腎前性" not in store and "70代" not in store, "nothing of the case is kept in localStorage / sessionStorage")
+    check("ゼルニア値" not in store and "腎前性" not in store and "72歳" not in store, "nothing of the case is kept in localStorage / sessionStorage")
     page2 = ctx.new_page()
     page2.on("dialog", lambda d: d.accept())
     page2.goto(BASE + "/")

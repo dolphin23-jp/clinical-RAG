@@ -36,7 +36,7 @@ def check(cond, msg):
 
 
 CASE = {
-    "age": "70代",
+    "age": "72",
     "sex": "男性",
     "setting": "救急",
     "complaint": "ゼルニア値の低下を指摘された。3日前から腹痛と嘔気。",
@@ -115,7 +115,8 @@ with sync_playwright() as pw:
 
     # 2. the case: age/sex/setting, free text, and the scene x symptom questions with times
     page.click("#btn-case")
-    for k in ("age", "sex", "setting"):
+    page.fill("#case-age", CASE["age"])
+    for k in ("sex", "setting"):
         page.select_option(f"#case-{k}", CASE[k])
     for k in ("complaint", "vitals", "findings", "history"):
         page.fill(f"#case-{k}", CASE[k])
@@ -165,7 +166,7 @@ with sync_playwright() as pw:
     page.click("#casebar-record")
     expect(dlg).to_be_visible()
     expect(page.locator("#record .rec-status")).to_have_text("保存済み")
-    check(page.locator(".rec-title").inner_text().startswith("70代・男性・救急｜"), "the title is the case's one line")
+    check(page.locator(".rec-title").inner_text().startswith("72歳・男性・救急｜"), "the title is the case's one line")
     rows = [r.inner_text().replace("\n", " ") for r in page.locator(".rec-axis-row").all()]
     check(len(rows) == 4, f"four times on the axis ({rows})")
     check(rows[0].startswith("0分") and "21:40" in rows[0] and "病着" in rows[0], "the arrival is minute 0")
@@ -331,11 +332,11 @@ with sync_playwright() as pw:
     page2.click("#btn-records")
     page2.wait_for_selector(".rec-item")
     item = page2.locator(".rec-item").first
-    check("最終更新 今日" in item.inner_text() and item.locator(".rec-item-title").inner_text().startswith("70代・男性・救急"), "the list shows the title and when it was last updated (relative)")
+    check("最終更新 今日" in item.inner_text() and item.locator(".rec-item-title").inner_text().startswith("72歳・男性・救急"), "the list shows the title and when it was last updated (relative)")
     page2.screenshot(path=str(OUT / "04_list.png"))
     item.locator("button", has_text="開く").click()
     page2.wait_for_selector(".rec-problem")
-    check(page2.locator("#casebar").is_visible() and "70代・男性・救急" in page2.locator("#casebar-text").inner_text(), "opening a record pins its case")
+    check(page2.locator("#casebar").is_visible() and "72歳・男性・救急" in page2.locator("#casebar-text").inner_text(), "opening a record pins its case")
     check([pr.locator(".rec-id").inner_text() for pr in page2.locator(".rec-problem").all()] == ["p2", "p1"], "the problems come back with the same ids and order")
     check(len(page2.locator(".rec-axis-row").all()) == 4, "and the time axis is rebuilt from the saved answers")
     page2.keyboard.press("Escape")
@@ -433,14 +434,14 @@ with sync_playwright() as pw:
     page.keyboard.press("Escape")
     page.click("#btn-case")
     check(page.locator("#case-linked").is_visible() and "別の患者の症例を入れるときは、先に「症例を外す」" in page.locator("#case-linked").inner_text(), "the case dialog says it is linked and what to do for another patient")
-    page.select_option("#case-age", "30代")
+    page.fill("#case-age", "30")
     policy["log"].clear()
     policy["accept"] = False
     page.click("#case-pin")
     page.wait_for_timeout(800)
-    check(any("年代・性別が、この記録の症例と違います" in m for m in policy["log"]), "a different age asks whether it is the same patient")
+    check(any("年齢・性別が、この記録の症例と違います" in m for m in policy["log"]), "a different age asks whether it is the same patient")
     check(page.locator("#casebar-record").inner_text() == "記録", "cancel: the record is let go (the case stays pinned on its own)")
-    check(api("GET", f"/api/records/{rid2}")["body"]["record"]["ed"]["case"]["age"] == "70代", "and the record still holds the 70代 case")
+    check(api("GET", f"/api/records/{rid2}")["body"]["record"]["ed"]["case"]["age"] == "72", "and the record still holds the 72-year-old case")
     policy["accept"] = True
 
     # 20. opening a record while another patient's thread is on screen starts a new conversation (after asking); cancel changes nothing
@@ -456,7 +457,7 @@ with sync_playwright() as pw:
     page.locator(".rec-item button", has_text="開く").first.click()
     page.wait_for_selector(".rec-axis")
     check(page.locator(".turn").count() == 0, "accepted: the thread is closed (a new conversation), so nothing of the other case rides along")
-    check("70代・男性・救急" in page.locator("#casebar-text").inner_text() and page.locator("#casebar-record").inner_text() == "記録（連動中）", "and the record's case is pinned and linked")
+    check("72歳・男性・救急" in page.locator("#casebar-text").inner_text() and page.locator("#casebar-record").inner_text() == "記録（連動中）", "and the record's case is pinned and linked")
     page.keyboard.press("Escape")
     page.click("#case-modes button[data-mode=ddx]")
     wait_done(1)
@@ -469,7 +470,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(600)
     page.click("#btn-case")
     page.fill("#case-complaint", "3日前から腹痛と嘔気")
-    page.select_option("#case-age", "70代")
+    page.fill("#case-age", "72")
     page.select_option("#case-sex", "男性")
     page.click("#case-pin")
     page.click("#btn-records")
@@ -563,7 +564,7 @@ with sync_playwright() as pw:
     page.wait_for_timeout(600)
     page.click("#btn-case")
     page.fill("#case-complaint", "3日前から腹痛と嘔気")
-    page.select_option("#case-age", "70代")
+    page.fill("#case-age", "72")
     page.select_option("#case-sex", "男性")
     page.click("#case-pin")
     page.click("#btn-records")

@@ -13,7 +13,7 @@ const R: any = await import(web("case-record.js"));
 const C: any = await import(web("case-course.js"));
 const B: any = await import(web("record-brief.js"));
 
-const CASE = { age: "70代", sex: "男性", setting: "救急", complaint: "3日前から腹痛、嘔気", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL", history: "高血圧", own: "" };
+const CASE = { age: "72", sex: "男性", setting: "救急", complaint: "3日前から腹痛、嘔気", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL", history: "高血圧", own: "" };
 const snap = (o: unknown) => JSON.stringify(o);
 
 /** A record worked over three hospital days: two problems (one carried from an AI draft), plans, a trend, a task, a day's texts. */

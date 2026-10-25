@@ -12,6 +12,7 @@
 // Checks (checks()) count what is blank or undecided; they are notes, not judgements.
 import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
 import { DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, cleanLog, courseChecks, dayNo, dropEmptyDays, emptyCourse, stampLog } from "./case-course.js";
+import { cleanCasebook } from "./casebook-state.js";
 import { relativizeDates } from "./date-relative.js";
 import { contextOf, coreMissing, cleanAnswers, isAnswered, isVisible, lineText, shortLabel } from "./intake.js";
 import { isScene } from "./draft-scenes.js";
@@ -197,7 +198,7 @@ export function cleanRecord(raw) {
   const reading = {};
   for (const [k, v] of isObj(raw.ed.reading) ? Object.entries(raw.ed.reading).slice(0, LIMITS.reading) : []) if (QID.test(k) && READINGS.has(v)) reading[k] = v;
   const course = cleanCourse(raw.course, problems.map((p) => p.id));
-  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, course, seq: { p: 0, i: 0, a: 0, k: 0, m: 0 } };
+  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, course, casebook: cleanCasebook(raw.casebook), seq: { p: 0, i: 0, a: 0, k: 0, m: 0 } };
   rec.seq = seqOf(rec, raw.seq);
   return rec;
 }

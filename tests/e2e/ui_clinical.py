@@ -55,7 +55,7 @@ with sync_playwright() as pw:
     page.wait_for_selector("#settings-msg.ok")
     page.click("#settings [data-close]")
     check(band_visible(page, "header.bar"), "band shown in the sticky header")
-    check("年代・主要所見・検査値の数値まで" in page.locator(".fine").inner_text(), "input rule (age band / findings / lab values) shown on the empty screen")
+    check("年齢（歳の整数）・主要所見・検査値の数値まで" in page.locator(".fine").inner_text(), "input rule (age in years / findings / lab values) shown on the empty screen")
     check("氏名・ID" in (page.get_attribute("#q", "placeholder") or ""), "placeholder says names and IDs stay out")
     check("施設プロトコル" in page.locator(".how").inner_text(), "empty screen says facility protocols are not included")
     page.screenshot(path=str(OUT / "01-empty.png"))

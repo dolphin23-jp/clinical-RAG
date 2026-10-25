@@ -13,7 +13,7 @@ const C: any = await import(web("case-course.js"));
 const N: any = await import(web("record-notes.js"));
 const A: any = await import(web("note-assemble.js"));
 
-const CASE = { age: "70代", sex: "男性", setting: "救急", complaint: "3日前から腹痛、嘔気", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL", history: "高血圧", own: "" };
+const CASE = { age: "72", sex: "男性", setting: "救急", complaint: "3日前から腹痛、嘔気", vitals: "BP 92/54, HR 108", findings: "Cr 2.4 mg/dL", history: "高血圧", own: "" };
 const snap = (o: unknown) => JSON.stringify(o);
 const text = (rec: any, day?: number, opts: object = {}) => A.toText(N.progressNote(rec, day), opts);
 const part = (t: string, label: string) => t.split(`■${label}`)[1].split("\n■")[0];

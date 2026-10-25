@@ -14,6 +14,7 @@ import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, MED_CHANGES, SUMMARY_FIELD
 import { dischargeNote, interimNote, progressNote } from "./record-notes.js";
 import { briefDay, recordBrief } from "./record-brief.js";
 import { ADM_FIELDS, CERTAINTY, DX_CLASSES, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, pinRef, refKey, refsOf, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline, unpinRef, waiting } from "./case-record.js";
+import { initCasebook } from "./casebook-ui.js";
 import { bindDates, changesNote } from "./intake-ui.js";
 
 const SAVE_DELAY = 1200;
@@ -49,6 +50,7 @@ export function initRecords(ctx) {
   // gen: which opened record this is (a response for an earlier one is ignored); pending: the save in flight; unconfirmed: what was sent
   // since the last answer we read (a write whose answer was lost may have landed); unlinking: the pinned case was cleared and the record is being let go
   const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true }, noteDay: null, sumDay: null, open: {}, refSearch: {} };
+  const casebook = initCasebook({ el, copyText }); // the "Casebook へ送る" part: ticks, the packet and what was typed live in its own memory
   let derived = null; // { checks, preview, progress, interim, discharge } nodes that change while typing
   let dateNote = null;
 
@@ -365,7 +367,7 @@ export function initRecords(ctx) {
   // ------------------------------------------- the list
   function renderList() {
     body.append(
-      el("p", "help", `症例の記録は、診察をまたいで残る症例のデータです。サーバーに保存され、最後の更新から${S.retention ?? "一定の"}日で自動的に消えます。「終える」で消せます。入れてよいのは、年代・主要所見・検査値の数値までで、氏名・ID・日付は入れません（時間は「4日前」「入院3日目」の形で）。`),
+      el("p", "help", `症例の記録は、診察をまたいで残る症例のデータです。サーバーに保存され、最後の更新から${S.retention ?? "一定の"}日で自動的に消えます。「終える」で消せます。入れてよいのは、年齢（歳）・主要所見・検査値の数値までで、氏名・ID・日付は入れません（時間は「4日前」「入院3日目」の形で）。`),
     );
     const pinned = caseCtl.pinned();
     if (pinned) {
@@ -422,11 +424,26 @@ export function initRecords(ctx) {
     renderAdmission(rec);
     renderCourse(rec);
     renderSummaries(rec);
+    renderCasebook();
 
     const end = el("div", "btn-row");
     end.append(btn("この症例を終える（削除）", "btn danger", endRecord));
     body.append(end);
     showStatus();
+  }
+
+  function renderCasebook() {
+    const d = sec("Casebook へ送る（試作）", false);
+    d.id = "rec-casebook";
+    const box = el("div", "cb-box");
+    d.append(box);
+    body.append(d);
+    const draw = () => casebook.draw(box, { getRec: () => S.rec, id: S.id, mutate: mutateAndRender });
+    draw();
+    // typing in the record does not draw the screen again, so the list is drawn again when the part is opened
+    d.addEventListener("toggle", () => {
+      if (d.open) draw();
+    });
   }
 
   const sec = (title, open = true) => {
@@ -1085,6 +1102,7 @@ export function initRecords(ctx) {
 
   // ------------------------------------------- the parts that change while typing: the checks, the identifier warning, the draft
   function renderDerived() {
+    casebook.refresh(); // the Casebook part follows the record while it is typed in (drawn again a moment later, unless it is being used)
     const warn = body.querySelector("#rec-warn");
     if (warn && S.rec) {
       const kinds = new Set();
@@ -1168,7 +1186,7 @@ export function initRecords(ctx) {
     onCasePinned(kase) {
       if (!S.rec || !S.id || S.unlinking) return;
       const cur = S.rec.ed.case;
-      if ((kase.age !== cur.age || kase.sex !== cur.sex) && !confirm("年代・性別が、この記録の症例と違います。同じ患者の症例を直したのなら［OK］（この記録の症例を更新します）、別の患者なら［キャンセル］（この記録との連動を外します。記録はそのまま残ります）。")) {
+      if ((kase.age !== cur.age || kase.sex !== cur.sex) && !confirm("年齢・性別が、この記録の症例と違います。同じ患者の症例を直したのなら［OK］（この記録の症例を更新します）、別の患者なら［キャンセル］（この記録との連動を外します。記録はそのまま残ります）。")) {
         this.onCaseCleared();
         return;
       }
