@@ -11,6 +11,7 @@
 //  8. No date: the time axis is minutes from the arrival (or the clock time of the encounter); "入院N日目" comes with the later encounters.
 // Checks (checks()) count what is blank or undecided; they are notes, not judgements.
 import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
+import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, courseChecks, dayNo, emptyCourse } from "./case-course.js";
 import { relativizeDates } from "./date-relative.js";
 import { contextOf, coreMissing, cleanAnswers, isAnswered, isVisible, lineText, shortLabel } from "./intake.js";
 import { ROLES, assemble } from "./note-assemble.js";
@@ -24,10 +25,16 @@ export const CERTAINTY = [
   { id: "confirmed", label: "確定" },
   { id: "ruled_out", label: "除外" },
 ];
+/** The doctor's designation of a problem in the discharge summary (a blank means not designated: it is listed as "not classed"). */
+export const DX_CLASSES = [
+  { id: "main", label: "主病名" },
+  { id: "sub", label: "副病名" },
+];
 /** What the doctor can record for a plan entry.  "done" is the doctor's record of an action; nothing sets it by itself. */
 export const PLAN_STATES = [
   { id: "planned", label: "予定・検討" },
   { id: "done", label: "実施（医師の記録）" },
+  { id: "changed", label: "変更" },
   { id: "stopped", label: "中止・しない" },
 ];
 /** The free-text parts of the admission note that only the doctor writes. */
@@ -66,18 +73,30 @@ const cleanCites = (raw) =>
     })
     .filter((o) => o.title || o.url || o.page);
 
+/** A log of a judgement that changed: [{ day, ...}] one item per day (the last one wins), by day, at most COURSE_LIMITS.log. */
+function cleanLog(raw, ok, pick) {
+  const byDay = new Map();
+  for (const l of Array.isArray(raw) ? raw : []) if (isObj(l) && dayNo(l.day, 0) && ok(l)) byDay.set(l.day, { day: l.day, ...pick(l) });
+  return [...byDay.values()].sort((a, b) => a.day - b.day).slice(-COURSE_LIMITS.log);
+}
+
+/** Writes a judgement into its log for a day (replacing that day's item): the history of what the doctor decided, and when. */
+const upsertLog = (log = [], item) => [...log.filter((l) => l.day !== item.day), item].sort((a, b) => a.day - b.day).slice(-COURSE_LIMITS.log);
+
 function cleanEntry(raw, isPlan, used) {
   if (!isObj(raw)) return null;
   const text = str(raw.text, LIMITS.text);
   if (!text || typeof raw.id !== "string" || !ID.i.test(raw.id) || used.has(raw.id)) return null;
   used.add(raw.id);
-  const e = { id: raw.id, text, from: ["typed", "ai", "ed"].includes(raw.from) ? raw.from : "typed" };
+  const e = { id: raw.id, text, from: ["typed", "ai", "ed"].includes(raw.from) ? raw.from : "typed", added: dayNo(raw.added) };
   const cites = cleanCites(raw.cites);
   if (cites.length) e.cites = cites;
   if (isPlan) {
     e.state = STATE_IDS.has(raw.state) ? raw.state : "planned";
     const reason = str(raw.reason, LIMITS.reason);
     if (reason) e.reason = reason;
+    const log = cleanLog(raw.log, (l) => STATE_IDS.has(l.state), (l) => ({ state: l.state, ...(str(l.reason, LIMITS.reason) ? { reason: str(l.reason, LIMITS.reason) } : {}) }));
+    if (log.length) e.log = log;
   }
   return e;
 }
@@ -91,6 +110,8 @@ function seqOf(rec, given) {
     p: Math.max(num(given?.p), top(rec.problems.map((p) => p.id), ID.p)),
     i: Math.max(num(given?.i), top(entries, ID.i)),
     a: Math.max(num(given?.a), top(rec.ed.adopted.map((a) => a.id), ID.a)),
+    k: Math.max(num(given?.k), top(rec.course.tasks.map((k) => k.id), /^k\d{1,4}$/)),
+    m: Math.max(num(given?.m), top(rec.course.discharge.meds.map((m) => m.id), /^m\d{1,4}$/)),
   };
 }
 
@@ -108,6 +129,9 @@ export function cleanRecord(raw) {
       label: str(p.label, LIMITS.label),
       certainty: CERT_IDS.has(p.certainty) ? p.certainty : "",
       from: p.from === "ed" ? "ed" : "typed",
+      added: dayNo(p.added),
+      ...(p.dx === "main" || p.dx === "sub" ? { dx: p.dx } : {}),
+      ...(cleanLog(p.cert_log, (l) => l.certainty === "" || CERT_IDS.has(l.certainty), (l) => ({ certainty: l.certainty })).length ? { cert_log: cleanLog(p.cert_log, (l) => l.certainty === "" || CERT_IDS.has(l.certainty), (l) => ({ certainty: l.certainty })) } : {}),
       ...(p.ai === true ? { ai: true } : {}),
       ...(p.ai === true && cleanCites(p.cites).length ? { cites: cleanCites(p.cites) } : {}),
       assess: (Array.isArray(p.assess) ? p.assess : []).slice(0, LIMITS.entries).map((e) => cleanEntry(e, false, used)).filter(Boolean),
@@ -133,7 +157,8 @@ export function cleanRecord(raw) {
   if (!seen.includes(caseHash(kase))) seen.push(caseHash(kase));
   const reading = {};
   for (const [k, v] of isObj(raw.ed.reading) ? Object.entries(raw.ed.reading).slice(0, LIMITS.reading) : []) if (QID.test(k) && READINGS.has(v)) reading[k] = v;
-  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, seq: { p: 0, i: 0, a: 0 } };
+  const course = cleanCourse(raw.course, problems.map((p) => p.id));
+  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, course, seq: { p: 0, i: 0, a: 0, k: 0, m: 0 } };
   rec.seq = seqOf(rec, raw.seq);
   return rec;
 }
@@ -158,7 +183,7 @@ export const isRecordCase = (rec, kase) => rec.ed.seen.includes(caseHash(cleanCa
 
 export function newRecord(kase) {
   const c = cleanCase(kase);
-  return cleanRecord({ v: RECORD_VERSION, title: recordTitle(c), ed: { case: c, adopted: [], seen: [], reading: {} }, adm: {}, problems: [], contingency: [], seq: {} });
+  return cleanRecord({ v: RECORD_VERSION, title: recordTitle(c), ed: { case: c, adopted: [], seen: [], reading: {} }, adm: {}, problems: [], contingency: [], course: emptyCourse(), seq: {} });
 }
 
 // ---------------------------------------------------------------- no calendar date is kept
@@ -186,10 +211,22 @@ export function relativizeRecord(rec, { now = new Date() } = {}) {
     for (const e of [...p.assess, ...p.plan]) {
       fix(e, "text");
       fix(e, "reason");
+      for (const l of e.log ?? []) fix(l, "reason"); // the history of a plan's state carries the reason too
     }
   }
   for (const e of next.contingency) fix(e, "text");
   for (const a of next.ed.adopted) fix(a, "text");
+  for (const d of next.course.days) {
+    for (const f of DAY_FIELDS) fix(d, f.key);
+    for (const t of Object.values(d.trend)) fix(t, "note");
+  }
+  for (const k of next.course.tasks) for (const key of ["text", "owner", "due"]) fix(k, key);
+  for (const f of SUMMARY_FIELDS) fix(next.course.summary, f.key);
+  for (const f of DISCHARGE_FIELDS) fix(next.course.discharge, f.key);
+  for (const m of next.course.discharge.meds) {
+    fix(m, "text");
+    fix(m, "reason");
+  }
   return { rec: changes.length ? next : rec, changes };
 }
 
@@ -228,7 +265,7 @@ export function addProblem(rec, label = "", from = "typed") {
   const next = clone(rec);
   if (next.problems.length >= LIMITS.problems) return { rec: next, id: null };
   const id = nextId(next, "p");
-  next.problems.push({ id, label: str(label, LIMITS.label), certainty: "", from: from === "ed" ? "ed" : "typed", assess: [], plan: [] });
+  next.problems.push({ id, label: str(label, LIMITS.label), certainty: "", from: from === "ed" ? "ed" : "typed", added: next.course.today, assess: [], plan: [] });
   return { rec: next, id };
 }
 
@@ -243,6 +280,8 @@ export function removeProblem(rec, id) {
     }
     if (a.made === id) delete a.made;
   }
+  for (const k of next.course.tasks) if (k.problem === id) delete k.problem;
+  for (const d of next.course.days) delete d.trend[id];
   return next;
 }
 
@@ -270,7 +309,17 @@ export function setProblem(rec, id, patch) {
     }
     p.label = label;
   }
-  if ("certainty" in patch) p.certainty = CERT_IDS.has(patch.certainty) ? patch.certainty : "";
+  if ("dx" in patch) {
+    // the doctor's designation of the diagnosis for the discharge summary (主病名 / 副病名); blank when not designated
+    if (patch.dx === "main" || patch.dx === "sub") p.dx = patch.dx;
+    else delete p.dx;
+  }
+  if ("certainty" in patch) {
+    const c = CERT_IDS.has(patch.certainty) ? patch.certainty : "";
+    // the certainty is a judgement with a history: what it was on each day stays (a note for an earlier day does not show a later one)
+    if (c !== p.certainty) p.cert_log = upsertLog(p.cert_log, { day: next.course.today, certainty: c });
+    p.certainty = c;
+  }
   return next;
 }
 
@@ -282,7 +331,7 @@ export function addEntry(rec, problemId, which, text = "") {
   const p = findProblem(next, problemId);
   if (!p || listOf(p, which).length >= LIMITS.entries) return { rec: next, id: null };
   const id = nextId(next, "i");
-  const e = { id, text: str(text, LIMITS.text), from: "typed" };
+  const e = { id, text: str(text, LIMITS.text), from: "typed", added: next.course.today };
   if (which === "plan") e.state = "planned";
   listOf(p, which).push(e);
   return { rec: next, id };
@@ -295,12 +344,15 @@ export function setEntry(rec, problemId, which, entryId, patch) {
   if (!e) return next;
   if ("text" in patch) e.text = str(patch.text, LIMITS.text);
   if (which === "plan") {
+    const before = `${e.state ?? "planned"}|${e.reason ?? ""}`;
     if ("state" in patch && STATE_IDS.has(patch.state)) e.state = patch.state;
     if ("reason" in patch) {
       const r = str(patch.reason, LIMITS.reason);
       if (r) e.reason = r;
       else delete e.reason;
     }
+    // what the doctor recorded about the plan (done, changed, stopped, why) is logged with the day: the notes of earlier days do not show it
+    if (`${e.state ?? "planned"}|${e.reason ?? ""}` !== before) e.log = upsertLog(e.log, { day: next.course.today, state: e.state ?? "planned", ...(e.reason ? { reason: e.reason } : {}) });
   }
   return next;
 }
@@ -381,7 +433,7 @@ export function attach(rec, adoptedId, target) {
   a.to = "";
 
   const mk = (plan) => {
-    const e = { id: nextId(next, "i"), text: a.text, from: "ai" };
+    const e = { id: nextId(next, "i"), text: a.text, from: "ai", added: next.course.today };
     if (a.cites?.length) e.cites = clone(a.cites);
     if (plan) e.state = "planned";
     return e;
@@ -531,7 +583,7 @@ export const boardOf = (rec) => ({
 
 /** The admission note (A05) as assemble() builds it: the case as typed, and the board.  Adopted items reach it only through the board. */
 export function admissionNote(rec) {
-  const r = relativizeRecord(rec).rec; // what is shown has no calendar date even before the next save
+  const r = asOf(relativizeRecord(rec).rec, 1); // what is shown has no calendar date even before the next save, and nothing later than the admission day
   return assemble("A05", { kase: r.ed.case, items: [], board: boardOf(r) });
 }
 
@@ -568,6 +620,7 @@ export function checks(rec, FLOWS) {
   const noPlan = rec.problems.filter((p) => p.label && !p.plan.length);
   if (noPlan.length) add("no_plan", `計画を書いていない問題が ${noPlan.length} 件`, noPlan.map((p) => p.label));
   if (!rec.problems.length) add("no_problems", "問題がまだありません（入院時の記載の「Problem List」は未入力になります）");
+  out.push(...courseChecks(rec)); // what the course leaves blank or undecided on the working day (case-course.js)
   const note = admissionNote(rec);
   if (note.unfilled.length) add("unfilled", `入院時の記載の必須欄が「（未入力）」のまま: ${note.unfilled.length} 個`, note.sections.filter((s) => s.empty && s.requirement === "required").map((s) => s.label));
   return out;

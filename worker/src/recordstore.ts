@@ -20,7 +20,7 @@ export const RECORD_TABLE_SQL =
   "CREATE TABLE IF NOT EXISTS case_records (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL, payload TEXT NOT NULL)";
 
 export const MAX_RECORDS = 30;
-export const MAX_RECORD_PAYLOAD = 200_000;
+export const MAX_RECORD_PAYLOAD = 400_000; // a record with a month of daily entries and the summaries still fits (D1 allows a row of 2 MB)
 export const MAX_TITLE = 80;
 export const MAX_DEPTH = 8;
 export const MAX_STRING = 8000;

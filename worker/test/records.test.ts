@@ -138,9 +138,9 @@ test("store: shape and size — an object with v=1 and a title; plain keys; dept
   await rejects(s.put(ID(1), { record: rec({ deep }) }, day(1)), "bad_request");
   await rejects(s.put(ID(1), { record: rec({ note: "あ".repeat(MAX_STRING + 1) }) }, day(1)), "too_large", (e) => assert.equal(e.status, 413));
   await s.put(ID(1), { record: rec({ note: "あ".repeat(MAX_STRING) }) }, day(1)); // exactly the limit is fine
-  const many = Array.from({ length: 30 }, (_, i) => ({ id: `n${i}`, t: "あ".repeat(MAX_STRING) }));
+  const many = Array.from({ length: Math.ceil(MAX_RECORD_PAYLOAD / MAX_STRING) + 5 }, (_, i) => ({ id: `n${i}`, t: "あ".repeat(MAX_STRING) }));
   await rejects(s.put(ID(2), { record: rec({ many }) }, day(1)), "too_large");
-  assert.ok(MAX_RECORD_PAYLOAD >= 100_000);
+  assert.ok(MAX_RECORD_PAYLOAD >= 400_000);
   await rejects(s.put("bad id!", { record: rec() }, day(1)), "bad_request");
   assert.throws(() => check(rec({ n: Infinity })), RecordInputError);
   assert.equal((await s.list(day(1))).length, 1);

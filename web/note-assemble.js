@@ -9,6 +9,8 @@ import { NOTE_TYPES } from "./note-types.js";
 
 /** The types offered, in picker order.  The others are imported (note-types.js) but not wired yet. */
 export const ENABLED = ["A04", "A01", "A05", "A06", "A08", "B02", "B06"];
+/** Offered only from a case record (web/record-notes.js, with its own `fill`): the interim summary has nothing to take from a typed case alone. */
+export const RECORD_ONLY = ["A07"];
 
 export const UNFILLED = "（未入力）";
 export const AI_MARK = "〔AI草案〕";
@@ -17,7 +19,7 @@ export const BLANK_HEADER = "［日付］　［患者ID］　［氏名］";
 export const AI_NOTICE = `※${AI_MARK}の印がある項目は、AI（書籍の検索に基づく草案）の提案を、医師が採用したものです。`;
 
 /** The headings of a problem's plan entries by what the doctor recorded (an AI item is never "done": only the doctor sets that). */
-export const PLAN_HEADINGS = { planned: "計画（予定・検討。実施の記録ではありません）", done: "実施（医師の記録）", stopped: "中止・しない" };
+export const PLAN_HEADINGS = { planned: "計画（予定・検討。実施の記録ではありません）", done: "実施（医師の記録）", changed: "変更（医師の記録）", stopped: "中止・しない" };
 export const CARRIED_MARK = "〔救急から〕";
 
 /** The typed case's parts, as sources for a field. */
@@ -65,6 +67,15 @@ export const FILL = {
   B02: { summary: ["ctx", "complaint"], findings: ["vitals", "findings", "structured"] },
   B06: { situation: ["ctx", "complaint", "own", "d:problems"], background: ["history", "vitals", "findings", "structured"], tasks: ["d:plan"], contingency: ["d:contingency"] },
 };
+/**
+ * The record's own notes (web/record-notes.js): which sources fill which field.  They do not read the typed case's free-text fields for the
+ * course (a day's texts are the doctor's, kept per day), so they are not part of FILL.  Sources are "b:" names the record builds.
+ */
+export const RECORD_FILL = {
+  A06: { context: ["b:day_context"], interval: ["b:day_interval"], subjective: ["b:day_subjective"], objective: ["b:day_objective"], overall: ["b:day_overall"], problem_ap: ["b:day_ap"], general: ["b:day_general"], handover: ["b:day_handover"] },
+  A07: { context: ["b:sum_context"], admission: ["ctx", "b:route", "b:summary"], course: ["b:sum_course"], condition: ["b:sum_condition"], problems: ["b:sum_ap"], ongoing: ["b:sum_ongoing"], pending: ["b:sum_pending"], contingency: ["b:outlook"], handover: ["b:sum_handover"] },
+  A08: { context: ["b:dc_context"], diagnoses: ["b:dc_dx"], hpi: ["complaint", "b:route"], initial: ["vitals", "findings", "structured"], course: ["b:dc_course"], procedures: ["b:dc_procedures"], condition: ["b:dc_state"], medications: ["b:dc_meds"], followup: ["b:dc_followup"], unresolved: ["b:dc_tasks"] },
+};
 /** Fields whose line says something is still to be filled by hand (not an AI statement): shown after the adopted items. */
 export const FIELD_NOTES = {
   "B06.tasks": "（担当・期限は入力していません）",
@@ -99,14 +110,17 @@ function sectionsOf(type) {
  * items: adopted draft items [{ role, heading, text, cites: [{kind, title, page, url}] }] (anything else is ignored).
  * board: from a case record (web/case-record.js boardOf): { adm: {route, summary, baseline, general, outlook}, contingency, problems } — the
  * doctor's own admission texts, and the problems with the entries the doctor carried over.  Only the types whose fields list a `b:` source use it.
- * Returns { type, sections: [{ key, label, requirement, blocks, empty }], adopted, unfilled, omitted }.
+ * A board may also carry `fields: { [source]: blocks }` (web/record-notes.js): blocks built for a source that is not one of the admission ones
+ * (the course notes), and `asOf` (the hospital day the note is as of: the text says nothing recorded later is in it).  fill: a map of the
+ * same shape as FILL, used instead of FILL[typeId] (the record's notes name their own sources).
+ * Returns { type, sections: [{ key, label, requirement, blocks, empty }], adopted, unfilled, omitted, asOf }.
  */
-export function assemble(typeId, { kase = {}, items = [], board = null } = {}) {
-  if (!ENABLED.includes(typeId)) throw new Error(`note type ${typeId} is not offered`);
+export function assemble(typeId, { kase = {}, items = [], board = null, fill: fillOverride = null } = {}) {
+  if (!ENABLED.includes(typeId) && !(fillOverride && RECORD_ONLY.includes(typeId))) throw new Error(`note type ${typeId} is not offered`);
   const type = NOTE_TYPES[typeId];
   if (!type) throw new Error(`note type ${typeId} is not imported`);
   const adopted = items.filter((i) => i && Object.hasOwn(ROLES, i.role) && String(i.text ?? "").trim());
-  const fill = FILL[typeId] ?? {};
+  const fill = fillOverride ?? FILL[typeId] ?? {};
   const sections = [];
   const unfilled = [];
   const omitted = [];
@@ -143,7 +157,8 @@ export function assemble(typeId, { kase = {}, items = [], board = null } = {}) {
   }
   // an adopted item whose role has no field in this type is reported, never silently dropped
   const unplaced = adopted.filter((i) => !used.has(i));
-  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted };
+  const asOf = Number.isInteger(board?.asOf) ? board.asOf : null;
+  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf };
 }
 
 const ADM_LABELS = { route: "入院の経路・目的（先生の入力）", summary: "Clinical Summary（先生の入力）", baseline: "ベースライン（先生の入力）", general: "全身管理・治療目標・予防（先生の入力）", outlook: "再評価・退院条件・申し送り（先生の入力）" };
@@ -156,6 +171,7 @@ function boardBlocks(board, src) {
     .filter((p) => String(p.label ?? "").trim() || p.assess?.length || p.plan?.length)
     .map((p) => (String(p.label ?? "").trim() ? p : { ...p, label: "（名前なし）" }));
   const out = [];
+  if (board.fields && Object.hasOwn(board.fields, src)) return board.fields[src];
   if (src in ADM_LABELS) {
     const text = String(board.adm?.[src] ?? "").trim();
     if (text) out.push({ kind: "case", source: `adm.${src}`, label: ADM_LABELS[src], text });
@@ -167,7 +183,8 @@ function boardBlocks(board, src) {
   }
   return out;
 }
-const countAi = (b) => (b.kind === "ap" ? b.problems.flatMap((p) => [...p.assess, ...p.plan]) : b.kind === "contingency" ? b.entries : b.kind === "list" ? b.problems : []).filter((e) => e.from === "ai" || e.ai === true).length;
+const countAi = (b) =>
+  (b.kind === "ap" ? b.problems.flatMap((p) => [...p.assess, ...p.plan]) : b.kind === "contingency" ? b.entries : b.kind === "list" ? b.problems : b.kind === "dx" ? [...b.main, ...b.sub] : []).filter((e) => e.from === "ai" || e.ai === true).length;
 
 const TAG_RE = /\s*\[(?:推論|標準・出典未確認|施設依存)\]/g;
 
@@ -181,6 +198,7 @@ const citeLine = (c) => (c.kind === "web" ? `Web: ${c.title || c.url || ""}`.tri
  */
 export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
   const out = [`【${note.type.title}】下書き`, BLANK_HEADER];
+  if (note.asOf) out.push(`※入院${note.asOf}日目の時点の記録です。それより後に記録したことは入っていません。`);
   if (aiMark && note.adopted) out.push(AI_NOTICE);
   out.push("");
   const cites = new Map();
@@ -198,8 +216,10 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
     return `・${ai && aiMark ? AI_MARK : ""}${text}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}`;
   };
   const withReason = (e, line) => (e.reason ? `${line}（理由: ${e.reason}）` : line);
+  /** What the doctor chose and wrote for a trend: "改善", "改善 — note", or the note alone; a trend with neither is not printed. */
+  const trendText = (t) => `${t.stateLabel ?? ""}${t.note ? `${t.stateLabel ? " — " : ""}${t.note}` : ""}`;
   /** A problem's heading text: "label（certainty）", with the AI mark and the citations when the label is an AI draft's and the marks are kept. */
-  const problemName = (p, withMarks) => {
+  const problemName = (p, withMarks, certainty = p.certaintyLabel) => {
     let label = String(p.label);
     if (!sourceMarks) label = label.replace(TAG_RE, "");
     const marks = [];
@@ -207,7 +227,7 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
       marks.push(`［${citeLabel(c)}］`);
       cites.set(citeLine(c), true);
     }
-    return `${withMarks && p.ai && aiMark ? AI_MARK : ""}${label}${p.certaintyLabel ? `（${p.certaintyLabel}）` : ""}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}${sourceMarks && withMarks && p.from === "ed" ? ` ${CARRIED_MARK}` : ""}`;
+    return `${withMarks && p.ai && aiMark ? AI_MARK : ""}${label}${certainty ? `（${certainty}）` : ""}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}${sourceMarks && withMarks && p.from === "ed" ? ` ${CARRIED_MARK}` : ""}`;
   };
   for (const s of note.sections) {
     out.push(`■${s.label}`);
@@ -222,14 +242,46 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
         for (const e of b.entries) out.push(itemLine(e, e.from === "ai"));
       } else if (b.kind === "list") {
         b.problems.forEach((p, n) => out.push(`${n + 1}. ${problemName(p, true)}`));
+      } else if (b.kind === "turns") {
+        out.push(`［${b.label}］`);
+        for (const t of b.days) {
+          if (!t.lines.length && !t.trends.length) out.push(`入院${t.day}日目: ${UNFILLED}`);
+          else out.push(`入院${t.day}日目:`);
+          for (const l of t.lines) out.push(`・${l.label}: ${l.text}`);
+          for (const r of t.trends) out.push(`・推移 ${r.problem}: ${trendText(r)}`);
+        }
+      } else if (b.kind === "tasks") {
+        out.push(`［${b.label}］`);
+        for (const k of b.tasks) out.push(`・${k.kindLabel ? `${k.kindLabel}: ` : ""}${k.text}（担当: ${k.owner || "未入力"}／期限: ${k.due || "未入力"}）${k.problem ? ` ［${k.problem}］` : ""}`);
+      } else if (b.kind === "meds") {
+        out.push(`［${b.label}］`);
+        for (const m of b.meds) {
+          const needsReason = m.change === "changed" || m.change === "stopped";
+          out.push(`・${m.text} — ${m.changeLabel || "区分未記入"}${m.reason ? `（理由: ${m.reason}）` : needsReason ? "（理由: 未入力）" : ""}`);
+        }
+      } else if (b.kind === "dx") {
+        out.push(`［${b.label}］`);
+        for (const [heading, list] of [["主病名", b.main], ["副病名", b.sub]]) {
+          if (!list.length) continue;
+          out.push(`${heading}:`);
+          list.forEach((p, n) => out.push(`${n + 1}. ${problemName(p, true, `確度: ${p.certaintyLabel || "未選択"}`)}`));
+        }
+        if (b.other.length) out.push(`区分を選んでいない問題: ${b.other.join("、")}`);
       } else if (b.kind === "ap") {
         b.problems.forEach((p, n) => {
           out.push(`［${n + 1}. ${problemName(p, false)}］`);
+          if (p.trend && (p.trend.stateLabel || p.trend.note)) out.push(`推移（入院${p.trend.day}日目）: ${trendText(p.trend)}`);
+          if (p.history?.length) {
+            out.push("推移の記録:");
+            for (const h of p.history) out.push(`・入院${h.day}日目 ${trendText(h)}`);
+          }
+          // a named problem with nothing recorded for it (the discharge summary lists every named problem): blank, not filled in
+          if (!p.assess.length && !p.plan.length && !p.history?.length && !(p.trend && (p.trend.stateLabel || p.trend.note))) out.push(UNFILLED);
           if (p.assess.length) {
             out.push("評価:");
             for (const e of p.assess) out.push(itemLine(e, e.from === "ai"));
           }
-          for (const st of ["planned", "done", "stopped"]) {
+          for (const st of ["planned", "done", "changed", "stopped"]) {
             const mine = p.plan.filter((e) => (e.state ?? "planned") === st);
             if (!mine.length) continue;
             out.push(`${PLAN_HEADINGS[st]}:`);

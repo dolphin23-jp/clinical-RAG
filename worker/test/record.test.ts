@@ -30,7 +30,7 @@ test("newRecord / cleanRecord: a record keeps its case and its parts; unknown ke
   assert.equal(r.v, 1);
   assert.equal(r.title, "70代・男性・救急｜3日前から腹痛、嘔気");
   assert.deepEqual(r.problems, []);
-  assert.deepEqual(r.seq, { p: 0, i: 0, a: 0 });
+  assert.deepEqual(r.seq, { p: 0, i: 0, a: 0, k: 0, m: 0 });
   assert.deepEqual(Object.keys(r.adm), ["route", "summary", "baseline", "general", "outlook"]);
   assert.deepEqual(R.cleanRecord(JSON.parse(JSON.stringify(r))), r); // a round trip through the server's JSON
 
@@ -61,7 +61,7 @@ test("newRecord / cleanRecord: a record keeps its case and its parts; unknown ke
   assert.deepEqual(c.problems[0].assess.map((e: any) => e.id), ["i1"]);
   assert.deepEqual(c.problems[0].plan.map((e: any) => [e.id, e.state, e.from, e.reason]), [["i3", "done", "typed", "実施"], ["i4", "planned", "typed", undefined]]);
   assert.deepEqual(c.contingency.map((e: any) => e.id), ["i5"]);
-  assert.deepEqual(c.seq, { p: 1, i: 5, a: 1 }, "the counters are past every id in use");
+  assert.deepEqual(c.seq, { p: 1, i: 5, a: 1, k: 0, m: 0 }, "the counters are past every id in use");
   for (const bad of [null, "x", [], {}, { v: 2, ed: { case: CASE } }, { v: 1 }, { v: 1, ed: {} }, { v: 1, ed: { case: { age: "70代" } } }]) assert.equal(R.cleanRecord(bad), null);
   assert.equal(R.newRecord({ age: "70代" }), null); // an empty case is not a record
 });
@@ -122,7 +122,7 @@ test("problems: priority order, label, certainty (the doctor's choice; anything 
   r2 = R.setEntry(r2, "p1", "plan", e.id, { reason: "" });
   assert.ok(!("reason" in r2.problems[1].plan[0]));
   r2 = R.setEntry(r2, "p1", "assess", e2.id, { state: "done", text: "脱水と薬剤" });
-  assert.deepEqual(r2.problems[1].assess[0], { id: e2.id, text: "脱水と薬剤", from: "typed" }, "an assessment never gets a state");
+  assert.deepEqual(r2.problems[1].assess[0], { id: e2.id, text: "脱水と薬剤", from: "typed", added: 1 }, "an assessment never gets a state");
   r2 = R.removeEntry(r2, "p1", "plan", e.id);
   assert.deepEqual(r2.problems[1].plan, []);
   assert.equal(R.setAdm(r2, "route", "救急から入院").adm.route, "救急から入院");
