@@ -106,6 +106,90 @@ test("date, patient ID and name are blank placeholders; no digits or names are a
   assert.doesNotMatch(text, /[0-9０-９]/); // no digit anywhere: the assembly adds no date, ID or number of its own
 });
 
+// ---------------------------------------------------------------------------------- the flow's answers in A04 (docs/enhancement-plan.md 8.18)
+const FLOW = [
+  "場面・症候: 救急外来 × 腹痛（clinical-modules のフローの質問への答え。未入力の項目は未確認で、陰性ではありません）",
+  "［受け入れ］",
+  "第一印象：sick",
+  "病着：21:40",
+  "［初期評価］",
+  "体温：38.4 ℃",
+  "［病歴・診察］",
+  "随伴症状：嘔気",
+  "未入力の中核項目（3件。未確認）: 血圧、脈拍、SpO2",
+].join("\n");
+const sectionKeys = (n: any) => n.sections.map((s: any) => s.key);
+
+test("A04: the flow's answers are a block of their own after the fields, not in the physical-exam field; the findings stay where they were", () => {
+  const note = A.assemble("A04", { kase: { ...KASE, structured: FLOW } });
+  const exam = note.sections.find((s: any) => s.key === "exam");
+  assert.deepEqual(exam.blocks.map((b: any) => b.source), ["findings"]);
+  assert.ok(!JSON.stringify(note.sections).includes("第一印象") && !JSON.stringify(note.sections).includes("38.4"), "no answer reached a field");
+  assert.equal(note.extras.length, 1);
+  assert.equal(note.extras[0].label, "場面・症候の入力");
+  const text = A.toText(note);
+  assert.match(text, /■身体診察\n［身体所見・検査・画像・心電図］\nCr 2\.4 mg\/dL, K 5\.8 mEq\/L\n\n■重症度/);
+  // after every field, under its own heading, with the scene and symptom first and the answers in the order the flow asked
+  const order = [...text.matchAll(/^■(.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(order, ["来院情報", "現病歴", "患者背景", "初期評価・ABCDE", "身体診察", "重症度・第一仮説・鑑別", "帰宅・入院・転院と根拠", "場面・症候の入力"]);
+  assert.match(text, /■場面・症候の入力\n（フローの質問への答えです。記載の欄には振り分けていません。ここにない項目は未確認で、陰性・正常を意味しません）\n【救急外来 × 腹痛】\n［受け入れ］\n第一印象：sick\n病着：21:40\n［初期評価］\n体温：38.4 ℃\n［病歴・診察］\n随伴症状：嘔気$/);
+});
+
+test("A04: every other field is exactly as without the flow's answers; the block is not a field, so it is never （未入力） or counted as unfilled", () => {
+  const without = A.assemble("A04", { kase: KASE, items: [item("problems", "急性腎障害の疑い"), item("plan", "輸液の反応を見る")] });
+  const withFlow = A.assemble("A04", { kase: { ...KASE, structured: FLOW }, items: [item("problems", "急性腎障害の疑い"), item("plan", "輸液の反応を見る")] });
+  assert.deepEqual(withFlow.sections, without.sections);
+  assert.deepEqual([withFlow.unfilled, withFlow.omitted, withFlow.adopted, withFlow.unplaced], [without.unfilled, without.omitted, without.adopted, without.unplaced]);
+  assert.deepEqual(without.extras, []);
+  assert.ok(!A.toText(without).includes("場面・症候の入力"), "no answers, no block (and no heading made up)");
+  // a case with nothing but the flow's answers: the exam field is （未入力）, it is not pretended to hold them
+  const only = A.assemble("A04", { kase: { structured: FLOW } });
+  const exam = only.sections.find((s: any) => s.key === "exam");
+  assert.ok(exam.empty && only.unfilled.includes("exam"));
+  assert.match(A.toText(only), /■身体診察\n（未入力）\n/);
+  assert.equal(only.extras.length, 1);
+});
+
+test("A04: the block holds the answered lines only: nothing is added that reads as negative or normal, and the notes meant for the model stay out", () => {
+  const note = A.assemble("A04", { kase: { structured: FLOW } });
+  const lines = note.extras[0].text.split("\n");
+  const answered = FLOW.split("\n").filter((l) => !l.startsWith("未入力の中核項目") && !l.startsWith("場面・症候: "));
+  assert.deepEqual(lines, ["【救急外来 × 腹痛】", ...answered]);
+  const text = A.toText(note);
+  assert.ok(!text.includes("未入力の中核項目") && !text.includes("clinical-modules") && !text.includes("陰性ではありません"));
+  // the one sentence the assembly adds says the absent items are unchecked
+  assert.match(A.INPUT_BLOCK_NOTE, /ここにない項目は未確認で、陰性・正常を意味しません/);
+  assert.doesNotMatch(text.replace(A.INPUT_BLOCK_NOTE, ""), /異常なし|正常|陰性|なし/);
+});
+
+test("A04: the block is the doctor's own input, so dropping the AI mark and the source marks does not touch it", () => {
+  const note = A.assemble("A04", { kase: { ...KASE, structured: FLOW }, items: [item("plan", "輸液の反応を見る [標準・出典未確認]", [BOOK])] });
+  for (const opts of [{}, { aiMark: false }, { sourceMarks: false }, { aiMark: false, sourceMarks: false }]) {
+    const t = A.toText(note, opts);
+    assert.match(t, /■場面・症候の入力\n.*\n【救急外来 × 腹痛】\n［受け入れ］\n第一印象：sick/, JSON.stringify(opts));
+    assert.ok(!t.includes("AI草案〕第一印象") && !t.includes("［書籍］"), JSON.stringify(opts));
+  }
+  // the AI source list still comes last
+  const full = A.toText(note);
+  assert.ok(full.indexOf("■場面・症候の入力") < full.indexOf("■AI草案の出典（採用した項目）"));
+});
+
+test("scope: only A04 keeps the answers apart; A01 and the other types place them as before (docs/enhancement-plan.md 8.18)", () => {
+  assert.deepEqual(A.INPUT_BLOCK, { A04: ["structured"] });
+  for (const id of Object.keys(A.INPUT_BLOCK)) assert.ok(A.ENABLED.includes(id));
+  for (const [field, parts] of Object.entries<string[]>(A.FILL.A04)) assert.ok(!parts.includes("structured"), `A04.${field} still names the flow's answers`);
+  assert.deepEqual(A.FILL.A01.exam, ["findings", "structured"]);
+  for (const id of A.ENABLED.filter((t: string) => t !== "A04")) {
+    const note = A.assemble(id, { kase: { ...KASE, structured: FLOW } });
+    assert.deepEqual(note.extras, [], id);
+    assert.ok(JSON.stringify(note.sections).includes("第一印象：sick"), `${id} still carries the answers in a field`);
+    assert.ok(!A.toText(note).includes("■場面・症候の入力"), id);
+  }
+  assert.match(A.toText(A.assemble("A01", { kase: { ...KASE, structured: FLOW } })), /■身体診察\n［身体所見・検査・画像・心電図］\nCr 2\.4 mg\/dL, K 5\.8 mEq\/L\n［場面・症候の入力（フローの質問への答え）］\n【救急外来 × 腹痛】\n［受け入れ］/);
+  // the sections of A04 are still the type's own, in its order, with and without the answers
+  assert.deepEqual(sectionKeys(A.assemble("A04", { kase: { structured: FLOW } })), sectionKeys(A.assemble("A04", { kase: {} })));
+});
+
 test("adopted items: only the ticked ones enter, grouped by the draft section they came from; the doctor's own words carry no AI mark", () => {
   const items = [item("problems", "急性腎障害の疑い [推論]"), item("assessment", "腎前性を第一に考える", [BOOK]), item("plan", "輸液の反応を見る [標準・出典未確認]"), item("contingency", "尿量が出なければ腎臓内科へ相談 [施設依存]")];
   const note = A.assemble("A04", { kase: KASE, items });

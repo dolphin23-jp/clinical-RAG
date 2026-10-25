@@ -67,7 +67,7 @@ export function headingRole(heading) {
  * Each draft role appears once per type, so an item is never written twice.
  */
 export const FILL = {
-  A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
+  A04: { arrival: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings"], assessment: ["own", "d:problems", "d:assessment"], management: ["d:plan", "d:contingency"] },
   A01: { visit: ["ctx"], hpi: ["complaint"], background: ["history"], initial: ["vitals"], exam: ["findings", "structured"], reasoning: ["own", "d:problems", "d:assessment"], plan: ["d:plan"], recheck: ["d:contingency"] },
   A05: { admission: ["ctx", "b:route"], hpi: ["complaint"], background: ["history"], baseline: ["b:baseline"], initial: ["vitals", "findings", "structured"], summary: ["b:summary"], problem_list: ["d:problems", "b:list"], problem_ap: ["own", "d:assessment", "d:plan", "b:ap"], general: ["b:general"], outlook: ["d:contingency", "b:outlook"] },
   A06: { context: ["ctx"], interval: ["complaint"], objective: ["vitals", "findings", "structured"], problem_ap: ["own", "d:problems", "d:assessment", "d:plan"], handover: ["d:contingency"] },
@@ -84,6 +84,16 @@ export const RECORD_FILL = {
   A07: { context: ["b:sum_context"], admission: ["ctx", "b:route", "b:summary"], course: ["b:sum_course"], condition: ["b:sum_condition"], problems: ["b:sum_ap"], ongoing: ["b:sum_ongoing"], pending: ["b:sum_pending"], contingency: ["b:outlook"], handover: ["b:sum_handover"] },
   A08: { context: ["b:dc_context"], diagnoses: ["b:dc_dx"], hpi: ["complaint", "b:route"], initial: ["vitals", "findings", "structured"], course: ["b:dc_course"], procedures: ["b:dc_procedures"], condition: ["b:dc_state"], medications: ["b:dc_meds"], followup: ["b:dc_followup"], unresolved: ["b:dc_tasks"] },
 };
+/**
+ * The types that carry the flow's answers (kase.structured, web/intake.js) as a block of their own, outside every field (docs/enhancement-plan.md 8.18).
+ * clinical-modules' ROUTES is keyed by a record entry's data.category, and no flow question declares one, so there is no declared way to say which
+ * field an answer belongs to; routing them by a table made here would be a guess.  The answers stay together, under their own heading, after the
+ * fields.  The other types still place them beside the findings (FILL), as before: that placement is the stopgap this one replaces, type by type.
+ */
+export const INPUT_BLOCK = { A04: ["structured"] };
+export const INPUT_BLOCK_LABEL = "場面・症候の入力";
+/** Printed under the heading: what the block is, and that what is absent from it is unchecked, not negative or normal. */
+export const INPUT_BLOCK_NOTE = "（フローの質問への答えです。記載の欄には振り分けていません。ここにない項目は未確認で、陰性・正常を意味しません）";
 /** Fields whose line says something is still to be filled by hand (not an AI statement): shown after the adopted items. */
 export const FIELD_NOTES = {
   "B06.tasks": "（担当・期限は入力していません）",
@@ -114,14 +124,16 @@ function sectionsOf(type) {
 
 /**
  * kase: the typed case ({age, sex, setting, complaint, vitals, findings, history, own, structured}).
- * `structured` (the flow's answered questions, web/intake.js) is placed beside the findings until the scene-by-scene routing (docs/enhancement-plan.md 8) exists.
+ * `structured` (the flow's answered questions, web/intake.js): for a type in INPUT_BLOCK (A04) it is a block of its own, outside the fields; for the
+ * others it is placed beside the findings until a declared routing exists (docs/enhancement-plan.md 8.18).
  * items: adopted draft items [{ role, heading, text, cites: [{kind, title, page, url}] }] (anything else is ignored).
  * board: from a case record (web/case-record.js boardOf): { adm: {route, summary, baseline, general, outlook}, contingency, problems } — the
  * doctor's own admission texts, and the problems with the entries the doctor carried over.  Only the types whose fields list a `b:` source use it.
  * A board may also carry `fields: { [source]: blocks }` (web/record-notes.js): blocks built for a source that is not one of the admission ones
  * (the course notes), and `asOf` (the hospital day the note is as of: the text says nothing recorded later is in it).  fill: a map of the
  * same shape as FILL, used instead of FILL[typeId] (the record's notes name their own sources).
- * Returns { type, sections: [{ key, label, requirement, blocks, empty }], adopted, unfilled, omitted, asOf }.
+ * Returns { type, sections: [{ key, label, requirement, blocks, empty }], extras: [{ key, label, note, text }], adopted, unfilled, omitted, asOf }.
+ * `extras` are the blocks that sit outside the fields (INPUT_BLOCK): never "（未入力）" and never counted as unfilled: no answer, no block.
  */
 export function assemble(typeId, { kase = {}, items = [], board = null, fill: fillOverride = null } = {}) {
   if (!ENABLED.includes(typeId) && !(fillOverride && RECORD_ONLY.includes(typeId))) throw new Error(`note type ${typeId} is not offered`);
@@ -163,10 +175,16 @@ export function assemble(typeId, { kase = {}, items = [], board = null, fill: fi
     const note = FIELD_NOTES[`${typeId}.${s.key}`];
     sections.push({ key: s.key, label: s.label, requirement: s.requirement, blocks, empty, ...(note && !empty ? { note } : {}) });
   }
+  // the flow's answers of a type that keeps them apart: one block, in the order the flow asked, with the notes meant for the model left out
+  const extras = [];
+  for (const src of INPUT_BLOCK[typeId] ?? []) {
+    const text = structuredForNote(kase[src]);
+    if (text) extras.push({ key: "scene_input", label: INPUT_BLOCK_LABEL, note: INPUT_BLOCK_NOTE, text });
+  }
   // an adopted item whose role has no field in this type is reported, never silently dropped
   const unplaced = adopted.filter((i) => !used.has(i));
   const asOf = Number.isInteger(board?.asOf) ? board.asOf : null;
-  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf };
+  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, extras, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf };
 }
 
 const ADM_LABELS = { route: "入院の経路・目的（先生の入力）", summary: "Clinical Summary（先生の入力）", baseline: "ベースライン（先生の入力）", general: "全身管理・治療目標・予防（先生の入力）", outlook: "再評価・退院条件・申し送り（先生の入力）" };
@@ -319,6 +337,8 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
     if (s.note) out.push(s.note);
     out.push("");
   }
+  // blocks outside the fields (the flow's answers): the doctor's own input, so neither the AI mark nor the source marks apply to them
+  for (const x of note.extras ?? []) out.push(`■${x.label}`, x.note, x.text, "");
   if (sourceMarks && cites.size) {
     out.push("■AI草案の出典（採用した項目）");
     for (const line of cites.keys()) if (line) out.push(`・${line}`);

@@ -139,6 +139,7 @@ export function initNotes(ctx) {
     const lines = [`${current.label}。採用した草案の項目だけが入ります（採用していない項目は入りません）。`];
     if (note.unfilled.length) lines.push(`未入力の必須欄 ${note.unfilled.length} 個は「（未入力）」のままです。`);
     if (note.unplaced) lines.push(`この型には、採用した ${note.unplaced} 件を入れる欄がありません。別の型を選ぶと入ることがあります。`);
+    if (note.extras?.length) lines.push("場面・症候の入力は、どの欄にも振り分けず、独立したブロックとして末尾に入っています（暫定。欄への振り分けは、Modules の宣言が整ってからです）。");
     lines.push(`型: ${t.id} ${t.title} v${t.version}（${t.status}）。欄の名前と順序だけを clinical-modules から取り込んでいます。`);
     info.textContent = lines.join(" ");
     copyBtn.textContent = "コピー";

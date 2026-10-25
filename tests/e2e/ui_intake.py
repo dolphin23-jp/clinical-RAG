@@ -235,14 +235,23 @@ with sync_playwright() as pw:
     wait_done(3)
     check("妊娠" not in asks[-1]["case"]["structured"], "and not when the sex is changed to male (the question is gone)")
 
-    # 12. the chart-note stopgap: the answers go beside the findings; the list of unanswered questions does not go into a note
+    # 12. the chart note (docs/enhancement-plan.md 8.18): A04 carries the answers as a block of its own, in no field; the other types keep the stopgap
     page.click("#casebar-note")
     dlg = page.locator("#note")
     expect(dlg).to_be_visible()
     text = page.locator("#note-text").inner_text()
-    check("■身体診察\n【救急外来 × 腹痛】" in text and "体温：38.4 ℃" in text, "the note carries the answers beside the findings, headed by the scene and symptom")
+    check(page.input_value("#note-type") == "A04", "the emergency note is the one offered first")
+    check("■場面・症候の入力\n（フローの質問への答えです。記載の欄には振り分けていません。ここにない項目は未確認で、陰性・正常を意味しません）\n【救急外来 × 腹痛】" in text and "体温：38.4 ℃" in text, "the note carries the answers as a block of their own, headed by the scene and symptom")
+    exam = text.split("■身体診察\n", 1)[1].split("\n■", 1)[0] if "■身体診察\n" in text else ""
+    check("体温" not in exam and "第一印象" not in exam and "（未入力）" in exam, "the physical-exam field does not hold the answers (it says （未入力） when nothing else was typed there)")
+    check(text.index("■場面・症候の入力") > text.index("■身体診察"), "the block comes after the fields")
+    check("独立したブロック" in page.locator("#note-info").inner_text(), "the screen says the answers are a block of their own")
     check("未入力の中核項目" not in text and "陰性ではありません" not in text, "but not the notes meant for the model")
     page.screenshot(path=str(OUT / "04_note.png"))
+    page.select_option("#note-type", "A01")
+    t_a01 = page.locator("#note-text").inner_text()
+    check("■身体診察\n【救急外来 × 腹痛】" in t_a01 and "■場面・症候の入力" not in t_a01, "the outpatient first-visit note still places the answers beside the findings (its routing waits for the upstream)")
+    page.select_option("#note-type", "A04")
     page.keyboard.press("Escape")
 
     # 13. nothing is kept in the browser's own storage
