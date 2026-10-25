@@ -8,7 +8,7 @@ import { scan } from "./id-guard.js";
 import { bindDates, changesNote, initIntake } from "./intake-ui.js";
 
 export function initCase(ctx) {
-  const { el, $, openDialog, runMode } = ctx;
+  const { el, $, openDialog, runMode, api } = ctx;
   const dlg = $("#case");
   const host = $("#case-fields");
   const bar = $("#casebar");
@@ -38,7 +38,7 @@ export function initCase(ctx) {
   row.append(choice("age", "年代", AGES), choice("sex", "性別", SEXES), choice("setting", "場面", SETTINGS));
   host.append(row);
   // the scene x symptom questions (web/intake-ui.js); the sex in the select above decides which sex-specific questions show
-  const intake = initIntake({ el, host, context: () => ({ sex: inputs.sex.value }), onChange: () => showWarn() });
+  const intake = initIntake({ el, host, context: () => ({ sex: inputs.sex.value }), onChange: () => showWarn(), api });
   inputs.sex.addEventListener("change", () => intake.refresh());
   const dateMsg = el("p", "help", "");
   dateMsg.setAttribute("role", "status");

@@ -102,6 +102,18 @@ node --no-warnings eval/run_ask_eval.ts --api https://<worker> eval/clinical.loc
 - 結果は `work/ask_eval/<時刻>.jsonl`（回答の本文を含む。`.gitignore` 済み）。重要度 high で外れた問いを最後にまとめて出す
 - 費用は 1問 5〜15 円の概算（README。未実測）。1日の上限（`DAILY_ASK_LIMIT`）に達したら、そこで止まる。`--only id1,id2` で問いを絞れる。`--web` `--model` も渡せる
 
+### 3.3b 文章からの取り込みの評価（モデルを呼ぶ。費用がかかり、1日の上限に数える）
+
+```bash
+cp eval/extract.template.jsonl eval/extract.local.jsonl     # 先生のメモの型で書き直す（*.local.jsonl は .gitignore 済み）
+MEDBOOK_TOKEN=... node --no-warnings eval/run_extract_eval.ts --api https://<worker> eval/extract.local.jsonl --verbose --out work/extract_eval.json
+```
+
+- 1件ずつ `/api/extract` に送り、返った提案を `expect`（そのメモが支える答え）と `must_not`（支えない質問）に突き合わせる。**的中・欠落（missing）・誤り（wrong: 別の値）・余計（extra）・forbidden（`must_not` への提案）**を数える（`docs/enhancement-plan.md` の 8.12 の6 の型別の数え方の入口）
+- **forbidden が1件でも出たら、終了コード 1。目標は 0**（書かれていない所見の「なし」化・指示の「実施済み」化。Modules と同じ基準）。出たら、そのメモとモデルの指示の規則（`worker/src/extract.ts` の `buildSystem`）を見直す。wrong は次に悪い。missing（1タップの手間）と extra（画面の確認で見られる。正しいこともある）は先生が判断する
+- メモは、先生が実際の書き方の型から**架空に書き直したもの**（氏名・ID・日付なし）。実際のメモそのものをこのファイルに入れない（`docs/clinical-use.md`）。結果は `work/` に出す（`.gitignore` 済み）
+- 同じ場面・症候の2件目からは、指示と質問の一覧がキャッシュから読まれる（`usage.cache_read_input_tokens`。1件目だけが書き込み）。待ち時間（ms）も出る
+
 ### 3.4 読み方
 
 | 見えたこと | 次の手 |

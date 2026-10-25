@@ -4,6 +4,7 @@ import { CaseInputError, caseTexts, createTexts, MODE_LABELS, parseCase, parseCr
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
 import { ConvInputError, convStore } from "./convstore.ts";
+import { ExtractInputError, ExtractUpstreamError, guardForms, parseExtractRequest, runExtract } from "./extract.ts";
 import { EvalInputError, evalStore, ID_RE, type D1Rw } from "./evalstore.ts";
 import { RecordInputError, recordStore } from "./recordstore.ts";
 import { scanAll } from "./idguard.ts";
@@ -34,6 +35,8 @@ export interface AppDeps {
   now?: () => Date;
   /** D1 for the evaluation questions and the conversations (evalstore.ts, convstore.ts); unset = those endpoints answer 501 */
   rw?: D1Rw;
+  /** the model for /api/extract (a pasted memo's proposals); unset = `model` */
+  extractModel?: string;
   /** conversations expire this many days after their last turn (0 = never) */
   conversationRetentionDays?: number;
   /** case records (recordstore.ts) expire this many days after their last update (0 = never) */
@@ -212,6 +215,36 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
 
     // Evaluation questions in D1 and a one-question retrieval run (T1-8 on an iPad; doctor's decision 2026-10-24).
     if (path.startsWith("/api/eval/")) return await evalRoutes(req, url, deps);
+
+    // Proposals for a flow's questions from a pasted memo (docs/enhancement-plan.md 8.15).  Stateless: the memo is not stored and not logged.
+    if (path === "/api/extract" && req.method === "POST") {
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid JSON" }, 400);
+      }
+      let parsed;
+      try {
+        parsed = parseExtractRequest(body);
+      } catch (e) {
+        if (e instanceof ExtractInputError) return json({ error: e.message, code: e.code }, e.status);
+        throw e;
+      }
+      // a long pasted text is checked like the question, but there is no "send anyway": the memo is edited instead
+      const refused = identifierRefusal(guardForms(parsed.text), undefined);
+      if (refused) return refused;
+      const capped = await overDailyLimit(deps);
+      if (capped) return capped;
+      try {
+        const model = deps.extractModel ?? deps.model;
+        const r = await runExtract({ apiKey: deps.apiKey, model, apiBase: deps.apiBase, fetchImpl: deps.fetchImpl, signal: req.signal }, parsed);
+        return json({ proposals: r.proposals, dropped: r.dropped, usage: r.usage, model: r.model ?? model });
+      } catch (e) {
+        if (e instanceof ExtractUpstreamError) return json({ error: e.message, code: e.code }, 502);
+        throw e;
+      }
+    }
 
     if (path === "/api/ask" && req.method === "POST") {
       let body: any;

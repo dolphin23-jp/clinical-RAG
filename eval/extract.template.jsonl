@@ -1,0 +1,10 @@
+# Cases for the extraction from a pasted memo (eval/run_extract_eval.ts).  Copy to eval/extract.local.jsonl (ignored by git) and write your own.
+# Each line: id, flow, text (a memo written the way real notes are written; NO name, ID, or date: use "2時間前" etc.),
+#   expect  = the answers the memo supports (question id -> option id / option ids / number / "HH:MM" / the memo's own words for a text question),
+#   must_not = questions the memo does NOT support (it says nothing about them, or a plan, a doubt, the opposite).  A proposal for one of these is
+#   the failure that matters (the target is 0).  Question ids: the dyspnea ones below are in worker/src/extract-catalog.ts.
+# The cases below are invented for the format.
+{"id":"dyspnea-plain","flow":"emergency-department.dyspnea","text":"70代男性。2時間前からの呼吸困難。病着 10:20。呼吸数28、室内気でSpO2 88%。両側でcrackles。体温37.2℃。","expect":{"t_arrival":"10:20","rr":28,"spo2":88,"o2":"ra","lung_exam":["crackles"],"temp":37.2},"must_not":["jvd","skin","consc","pmh"],"note":"all stated; nothing else is"}
+{"id":"dyspnea-negation-target","flow":"emergency-department.dyspnea","text":"胸痛なし。喘鳴は聴かない。既往は特記なし。","expect":{"hx_chest":"none","pmh":["none"]},"must_not":["lung_exam","hx_vol","hx_inf"],"note":"'wheeze is not heard' must not become an option about lungs being normal unless the list has one for it; unmentioned things stay blank"}
+{"id":"dyspnea-order-not-done","flow":"emergency-department.dyspnea","text":"酸素 10L マスクを開始してください。ネブライザー指示。採血とX線をオーダー済み。","expect":{},"must_not":["resp_tx","airway_tx","cxr","pocus"],"note":"orders and plans are not things done (E1)"}
+{"id":"dyspnea-doubt","flow":"emergency-department.dyspnea","text":"心不全の疑い。肺炎かも。胸水はありそう。","expect":{},"must_not":["pmh","hx_inf","cxr","ct_find"],"note":"doubts are not findings"}

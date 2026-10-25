@@ -7,6 +7,7 @@
 // (`structured`) and, with a saved conversation, as the answers themselves (`intake`).  Dates typed or pasted into a text answer are
 // made relative at once (web/date-relative.js): no calendar date is kept.  Every string reaches the DOM through textContent / .value.
 import { relativizeDates } from "./date-relative.js";
+import { initExtract } from "./extract-ui.js";
 import { byPhase, cleanAnswers, contextOf, coreCount, coreMissing, flowChoices, isAnswered, isVisible, renderStructured, setAnswer } from "./intake.js";
 
 const plain = (s) => String(s).replace(/^★\d+\s*/, "").trim();
@@ -35,7 +36,7 @@ export function bindDates(input, onConverted) {
 export const changesNote = (changes, n = 3) =>
   `日付を経過の表現に直しました（元の日付は残しません）: ${changes.slice(0, n).map((c) => `${c.from} → ${c.to}`).join("、")}${changes.length > n ? `、ほか${changes.length - n}件` : ""}`;
 
-export function initIntake({ el, host, context, onChange }) {
+export function initIntake({ el, host, context, onChange, api }) {
   // context(): { sex, age, setting } of the case dialog's own selects
   const root = el("details", "intake");
   const sum = el("summary", null, "場面・症候の質問で入力する（試作）");
@@ -55,7 +56,20 @@ export function initIntake({ el, host, context, onChange }) {
   const dateNote = el("p", "help", "");
   dateNote.setAttribute("role", "status");
   const legacyBox = el("div", "intake-legacy");
-  root.append(sum, intro, pick, status, progress, missingBox, dateNote, body, legacyBox);
+  // "文章から取り込む": proposals from a pasted memo, taken into the answers only one confirmation at a time (web/extract-ui.js)
+  const extract = initExtract({
+    el,
+    api,
+    getFlow: () => flow,
+    getAnswers: () => answers,
+    getContext: () => ctx(),
+    apply: (qid, value) => set(qid, value),
+    jump: (qid) => jump(qid),
+    schemaCommit: () => schema?.FLOW_SCHEMA_SOURCE?.commit ?? "",
+    bindDates,
+    changesNote,
+  });
+  root.append(sum, intro, pick, status, progress, missingBox, extract.node, dateNote, body, legacyBox);
   host.append(root);
 
   let schema = null; // { FLOWS }
@@ -189,6 +203,7 @@ export function initIntake({ el, host, context, onChange }) {
   }
 
   function openFlow(flowId, restored = null) {
+    extract.clear(); // a memo and its proposals belong to the form they were made for
     flow = schema?.FLOWS[flowId] ?? null;
     answers = flow && restored ? restored : {};
     controls = new Map();
@@ -227,6 +242,7 @@ export function initIntake({ el, host, context, onChange }) {
 
   function render() {
     const has = !!flow;
+    extract.sync(has);
     progress.hidden = !has;
     missingBox.hidden = !has;
     body.hidden = !has;
