@@ -157,9 +157,11 @@ test("A04: each answer goes to the field ROUTES gives its question's category; t
 });
 
 test("A04: the answers no field took are kept, after the fields, in the order the flow asked, and counted by why", () => {
-  // the medicines and the family history are patient-background facts that the flow declares as observations: the background field cannot take them
+  // a schema where the medicines and the family history are not classified yet (the state before 2026-10-25, when they were declared observations): the background field could not take them
+  const flow = structuredClone(FLOW);
+  for (const id of ["meds", "fhx"]) flow.questions.find((q: any) => q.id === id).br.cat = "pending";
   const answers = { ...ANSWERS, meds: ["antiht", "alcohol"], fhx: "pos" };
-  const note = A.assemble("A04", { kase: withFlow(KASE, answers), flow: FLOW });
+  const note = A.assemble("A04", { kase: withFlow(KASE, answers, flow), flow });
   assert.equal(note.extras.length, 1);
   assert.equal(note.extras[0].label, R.REST_LABEL);
   assert.match(
@@ -177,6 +179,19 @@ test("A04: the answers no field took are kept, after the fields, in the order th
   assert.match(summary, /どの質問にも付かない時刻・測定条件・理由 1/);
   // without those two answers nothing is left over but the preparation, the disposition and the arrival time
   assert.deepEqual(A.assemble("A04", { kase: withFlow(), flow: FLOW }).routing.reasons, { none: 2, aux: 1 });
+});
+
+test("A04: the medicines and the family history are patient background (context, 2026-10-25): they go to the background field, in the order the flow asked, and none is left over for the structure", () => {
+  const answers = { ...ANSWERS, meds: ["antiht", "alcohol"], fhx: "pos" };
+  const q = (id: string) => FLOW.questions.find((x: any) => x.id === id).br;
+  assert.deepEqual([q("meds"), q("fhx")].map((b: any) => [b.ent, b.cat]), [["context", "medication"], ["context", "history"]]);
+  const note = A.assemble("A04", { kase: withFlow(KASE, answers), flow: FLOW });
+  const bg = note.sections.find((s: any) => s.key === "background");
+  assert.deepEqual(bg.blocks.map((b: any) => b.source), ["history", "routed"]);
+  assert.equal(bg.blocks[1].text, "家族歴：家族歴あり\n既往：高血圧\n内服：降圧薬・利尿薬・血管拡張薬、飲酒");
+  assert.deepEqual(note.routing.reasons, { none: 2, aux: 1 }); // the preparation, the disposition and the arrival time only: nothing is "pending"
+  assert.equal(note.routing.placed, 14);
+  assert.equal(note.routing.rest.length, 3);
 });
 
 test("A04: a time or measurement condition follows the question that declares it, to the same place (the SpO2 and 'on room air' stay together)", () => {
@@ -335,7 +350,7 @@ test("scope: A04 and A01 route; the other types place the answers beside the fin
   assert.equal(outpatientInA04.routing.placed, 0);
 });
 
-test("A01: each answer of the outpatient flow goes to the field ROUTES gives its question's category; what is typed stays as it was; patient-background facts declared as observations are kept, counted", () => {
+test("A01: each answer of the outpatient flow goes to the field ROUTES gives its question's category; what is typed stays as it was; the host factors and the medicines are patient background and go to the background field", () => {
   const note = A.assemble("A01", { kase: withFlow(KASE, OP_ANSWERS, OP_FLOW), flow: OP_FLOW });
   const by = Object.fromEntries(note.sections.map((s: any) => [s.key, s.blocks.map((b: any) => b.source)]));
   assert.deepEqual(by, {
@@ -352,7 +367,7 @@ test("A01: each answer of the outpatient flow goes to the field ROUTES gives its
   const text = (key: string) => note.sections.find((s: any) => s.key === key).blocks.find((b: any) => b.source === "routed").text;
   assert.equal(text("visit"), "紹介状：なし");
   assert.equal(text("hpi"), "主訴：発熱と咳\n期間：急性");
-  assert.equal(text("background"), "既往・ベースライン：高血圧\nアレルギー：なし\n居住：独居");
+  assert.equal(text("background"), "宿主：糖尿病\n既往・ベースライン：高血圧\n薬剤：最近の抗菌薬\nアレルギー：なし\n居住：独居"); // in the order the flow asks
   assert.equal(text("initial"), "第一印象：sick\n体温：38.6 ℃");
   assert.equal(text("exam"), "口腔・咽頭・耳・副鼻腔：咽頭発赤・扁桃腫大");
   assert.equal(text("tests"), "血液・生化学の異常：好中球減少");
@@ -360,11 +375,11 @@ test("A01: each answer of the outpatient flow goes to the field ROUTES gives its
   assert.equal(text("plan"), "実施した検査：血算・白血球分画\n解熱薬の処方：アセトアミノフェン");
   // the typed findings are no longer mixed with the flow's answers in the physical-exam field
   assert.equal(note.sections.find((s: any) => s.key === "exam").blocks[0].text, "Cr 2.4 mg/dL, K 5.8 mEq/L");
-  // the medicines and the host factors are history, declared as observations: the background field takes only patient context, so they are kept after the fields
-  assert.deepEqual(note.routing.reasons, { pending: 2 });
-  assert.deepEqual(note.extras.map((e: any) => e.key), ["scene_rest"]);
-  assert.match(note.extras[0].text, /宿主：糖尿病\n薬剤：最近の抗菌薬/);
-  assert.match(R.routingSummary(note.routing), /15 件のうち、13 件を ROUTES の欄に振り分けました。2 件は欄に結びつかず（カテゴリ未分類 2）/);
+  // the medicines and the host factors are patient background (context, 2026-10-25): nothing is left over
+  assert.deepEqual(note.routing.reasons, {});
+  assert.deepEqual(note.extras.map((e: any) => e.key), []);
+  assert.equal(note.routing.placed, 15);
+  assert.match(R.routingSummary(note.routing), /15 件のうち、15 件を ROUTES の欄に振り分けました。/);
   // an unanswered question adds nothing: the follow-up field says （未入力）, nothing is made normal or negative
   assert.deepEqual(note.unfilled, ["followup"]);
   const fields = A.toText(note).split("■欄に結びつかなかった")[0];

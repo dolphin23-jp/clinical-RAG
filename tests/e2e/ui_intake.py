@@ -296,10 +296,10 @@ with sync_playwright() as pw:
     check("既往・ベースライン：高血圧" in section(op, "既往・薬剤・アレルギー・生活背景"), "A01: the past history goes to its background field")
     check("口腔・咽頭・耳・副鼻腔：咽頭発赤" in section(op, "身体診察"), "A01: the examination answer goes to 身体診察")
     check("解熱薬の処方：アセトアミノフェン" in section(op, "治療・追加検査・説明"), "A01: the treatment goes to the plan field")
-    rest_op = op.split("■欄に結びつかなかった場面・症候の入力\n", 1)[1] if "■欄に結びつかなかった場面・症候の入力\n" in op else ""
-    check("薬剤：最近の抗菌薬" in rest_op and "【外来初診 × 発熱】" in rest_op, "A01: a patient-background fact declared as an observation (the medicines) is kept in the block, not dropped")
+    check("薬剤：最近の抗菌薬" in section(op, "既往・薬剤・アレルギー・生活背景"), "A01: the medicines are patient background (context, 2026-10-25): they go to the background field")
+    check("■欄に結びつかなかった場面・症候の入力" not in op, "A01: every answer found a field: no block is left over")
     info_op = page.locator("#note-info").inner_text()
-    check(re.search(r"場面・症候の入力 6 件のうち、5 件を ROUTES の欄に振り分けました。1 件は欄に結びつかず（カテゴリ未分類 1）", info_op) is not None, f"A01: the screen counts them ({info_op[-140:]})")
+    check(re.search(r"場面・症候の入力 6 件のうち、6 件を ROUTES の欄に振り分けました。", info_op) is not None and "欄に結びつかず" not in info_op, f"A01: the screen counts them: all placed ({info_op[-140:]})")
     page.select_option("#note-type", "A04")
     t_op_a04 = page.locator("#note-text").inner_text()
     check("0 件を ROUTES の欄に振り分けました" in page.locator("#note-info").inner_text() and "■身体診察\n【外来初診 × 発熱】" not in t_op_a04, "and the outpatient flow's answers are not routed into A04's fields")
