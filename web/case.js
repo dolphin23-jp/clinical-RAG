@@ -4,6 +4,7 @@
 // Every string reaches the DOM through textContent / .value.
 import { AGES, FIELDS, MODES, SETTINGS, SEXES, TEXT_KEYS, caseSummary, caseTexts, cleanCase, emptyCase, isEmptyCase } from "./case-model.js";
 import { relativizeDates } from "./date-relative.js";
+import { SCENES, SCENE_LABELS, briefNeed } from "./draft-scenes.js";
 import { scan } from "./id-guard.js";
 import { bindDates, changesNote, initIntake } from "./intake-ui.js";
 
@@ -16,6 +17,13 @@ export function initCase(ctx) {
   const warn = $("#case-warn");
   const msg = $("#case-msg");
   const hooks = { pinned: null, cleared: null }; // the case record follows the pinned case (record-ui.js)
+  // the scene of the assessment/plan draft and the summary of the open record that a scene after the admission takes (docs/enhancement-plan.md 8.16)
+  const sceneRow = $("#case-scene");
+  const sceneSel = $("#scene-select");
+  const sceneHelp = $("#scene-help");
+  const briefBox = $("#scene-brief");
+  const briefPre = $("#scene-brief-text");
+  const record = { linked: () => false, brief: () => null }; // set by app.js (the open record's summary for a scene, or null)
   let current = null; // the pinned case (cleaned) or null
   let attach = true; // free questions carry the pinned case while this is on (the mode buttons always do)
 
@@ -129,7 +137,35 @@ export function initCase(ctx) {
     b.addEventListener("click", () => runMode(m.id));
     modes.append(b);
   }
+  // ---------------------------------------------------------------- the scene of the draft
+  sceneSel.append(new Option("共通の見出し（場面を選ばない）", ""));
+  for (const id of SCENES) sceneSel.append(new Option(SCENE_LABELS[id], id));
+  sceneSel.addEventListener("change", () => refreshScene());
+  briefBox.addEventListener("toggle", () => briefBox.open && refreshScene());
+
+  /** The summary this scene would take now (null when it takes none or no record is open).  Built when asked: it is not kept. */
+  const briefFor = (scene) => (scene && briefNeed(scene) !== "none" ? record.brief(scene, current) : null);
+
+  function refreshScene() {
+    sceneRow.hidden = !current;
+    if (!current) return;
+    const linked = record.linked(current);
+    for (const o of sceneSel.options) o.disabled = !!o.value && briefNeed(o.value) === "record" && !linked; // these cannot be made without the record
+    if (sceneSel.selectedOptions[0]?.disabled) sceneSel.value = "";
+    const scene = sceneSel.value;
+    const need = scene ? briefNeed(scene) : "none";
+    const brief = linked && need !== "none" ? briefFor(scene) : null;
+    if (!scene) sceneHelp.textContent = "「アセスメントとプラン（草案）」だけに効きます。場面を選ぶと、その場面の読み手と目的に合わせた見出しで作ります（共通の見出しのままでも作れます）。";
+    else if (need === "none") sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。症例の記録の要約は渡しません。`;
+    else if (brief) sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。開いている症例の記録（入院${brief.day}日目の時点）の要約を、症例に添えて送ります。送る内容は下で確認できます。${brief.truncated ? ` 長いため、${brief.omitted ? `優先順位の低い問題 ${brief.omitted} 件は渡さず、` : ""}文を短くしています。` : ""}`;
+    else if (need === "optional") sceneHelp.textContent = `${SCENE_LABELS[scene]}の見出しで作ります。症例の記録を開いていないので、症例だけで作ります。`;
+    else sceneHelp.textContent = `${SCENE_LABELS[scene]}の草案には、症例の記録が要ります。「記録」を開いてから選んでください。`;
+    briefBox.hidden = !brief;
+    briefPre.textContent = brief && briefBox.open ? brief.text : "";
+  }
+
   function refresh() {
+    refreshScene();
     bar.hidden = !current;
     modes.hidden = !current;
     document.body.classList.toggle("has-case", !!current);
@@ -167,6 +203,18 @@ export function initCase(ctx) {
     /** record-ui.js: told when a case is pinned (again) and when the pinned case is cleared */
     onPinned: (fn) => (hooks.pinned = fn),
     onCleared: (fn) => (hooks.cleared = fn),
+    /** The scene chosen for the assessment/plan draft ("" = the common headings). */
+    scene: () => (current && !sceneSel.selectedOptions[0]?.disabled ? sceneSel.value : ""),
+    /** The summary of the open record for the chosen scene: { text, day, truncated, omitted } or null.  Built now, from the record as it is. */
+    brief: () => briefFor(current ? sceneSel.value : ""),
+    /** app.js: where the open record's summary comes from (linked(kase): a record is open for this case; brief(scene, kase): its summary). */
+    setRecord(r) {
+      record.linked = r.linked;
+      record.brief = r.brief;
+      refreshScene();
+    },
+    /** The open record changed (opened, made, let go, edited and closed): the scene choices and the summary shown follow it. */
+    refreshScene,
     setBusy(b) {
       for (const x of modes.querySelectorAll("button")) x.disabled = b;
     },

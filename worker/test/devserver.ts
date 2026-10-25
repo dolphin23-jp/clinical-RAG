@@ -171,7 +171,7 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
     return sseBody(evs, 6);
   }
   if (modeLabel && modeLabel !== "症例を踏まえた質問") {
-    const heads = [...sys2.matchAll(/^## (.+)$/gm)].map((m) => m[1]).filter((h) => !h.startsWith("この依頼の型") && !h.startsWith("症例が添えられているとき"));
+    const heads = [...sys2.matchAll(/^## (.+)$/gm)].map((m) => m[1]).filter((h) => !h.startsWith("この依頼の型") && !h.startsWith("症例が添えられているとき") && !h.startsWith("症例の記録が添えられているとき"));
     let k = 0;
     heads.forEach((h, i) => {
       evs.push(...txt(k, `## ${h}\n\n`), stop(k));

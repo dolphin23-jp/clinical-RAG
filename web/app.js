@@ -4,6 +4,7 @@ import { initCreate } from "./create-ui.js";
 import { initNotes } from "./note-ui.js";
 import { initRecords } from "./record-ui.js";
 import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
+import { SCENE_LABELS, briefNeed, isScene } from "./draft-scenes.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
 import { initConversations } from "./conv.js";
@@ -262,7 +263,13 @@ $("#composer").addEventListener("submit", (e) => {
 function runMode(id) {
   if (S.busy) return;
   if (!S.token) return openSettings("最初にアクセストークンを入力してください。");
-  submit(MODES.find((m) => m.id === id).label, id, false);
+  const label = MODES.find((m) => m.id === id).label;
+  // the assessment/plan draft for a scene (docs/enhancement-plan.md 8.16): its headings, and the open record's summary for the scenes that follow a record
+  const scene = id === "assess" ? caseCtl.scene() : "";
+  if (!scene) return submit(label, id, false);
+  const brief = briefNeed(scene) === "none" ? null : caseCtl.brief();
+  if (briefNeed(scene) === "record" && !brief) return caseCtl.refreshScene(); // the choice is disabled without a record; this only keeps a stale choice from being sent
+  submit(`${label}（${SCENE_LABELS[scene]}）`, id, false, { scene, brief: brief?.text ?? "", briefDay: brief?.day ?? null });
 }
 
 /** Identifier-like kinds in the question and (in case mode) in every free-text field of the case. */
@@ -276,18 +283,19 @@ function idHitsOf(texts) {
 }
 
 /** mode: null for a plain question, otherwise the case mode ("ask" for a typed question, or a button's id). */
-function submit(q, mode, confirmed) {
+function submit(q, mode, confirmed, extra = {}) {
   if (S.busy) return;
   const kase = mode ? caseCtl.pinned() : null;
-  const hits = idHits(q, kase);
-  // the doctor already confirmed this case's words and the new question has none of its own
-  const known = !!kase && S.caseAckKey === caseKey(kase) && !scanIdentifiers(q).length;
-  if (hits.length && !confirmed && !known) return openGuard({ q, mode }, hits);
+  // the record's summary is checked like the case: it is sent to the model too
+  const hits = idHitsOf([q, ...(kase ? caseTexts(kase) : []), ...(extra.brief ? [extra.brief] : [])]);
+  // the doctor already confirmed this case's words and the new question (and summary) have none of their own
+  const known = !!kase && S.caseAckKey === caseKey(kase) && !scanIdentifiers(q).length && !(extra.brief && scanIdentifiers(extra.brief).length);
+  if (hits.length && !confirmed && !known) return openGuard({ q, mode, extra }, hits);
   if (!mode || mode === "ask") {
     qEl.value = "";
     autosize();
   }
-  ask(q, hits.length > 0, mode);
+  ask(q, hits.length > 0, mode, null, extra);
 }
 
 /** A creation request ("架空症例を作る"): a theme and wishes, no case. Its free text gets the same identifier check. */
@@ -317,7 +325,7 @@ $("#guard-send").addEventListener("click", () => {
   if (p.create) return submitCreate(p.create, true);
   const kase = p.mode ? caseCtl.pinned() : null;
   if (kase && caseTexts(kase).some((t) => scanIdentifiers(t).length)) S.caseAckKey = caseKey(kase);
-  submit(p.q, p.mode, true);
+  submit(p.q, p.mode, true, p.extra);
 });
 guard.addEventListener("close", () => {
   if (!guardSent) qEl.focus();
@@ -366,7 +374,8 @@ const FICTION_MARK = "架空症例です。実在の患者・症例ではあり�
 const FICTION_COPY_HEAD = "【架空症例（書籍を参考にAIが作成。実在の症例ではありません。数値は例示）】\n";
 
 /** What a turn asked with a case adds to its saved payload (conv.js): the mode and the case exactly as sent. */
-const casePayload = (turn) => (turn.case ? { mode: turn.mode, case: turn.case } : turn.create ? { mode: "create", create: turn.create } : {});
+// (the scene of the draft is kept with it, to say which headings the answer has; the record's summary is not kept: it is sent once and shown in the turn)
+const casePayload = (turn) => (turn.case ? { mode: turn.mode, case: turn.case, ...(turn.scene ? { scene: turn.scene } : {}) } : turn.create ? { mode: "create", create: turn.create } : {});
 
 /** Case-mode drafts have fixed `##` headings: fold the answer into one section per heading (all open; tap a heading to close it). */
 function foldSections(body) {
@@ -417,12 +426,19 @@ function makeTurn(question, caseInfo = null) {
     box.append(el("summary", null, "この質問に付けた症例"));
     const dl = el("dl");
     for (const [k, v] of caseRows(caseInfo.kase)) dl.append(el("dt", null, k), el("dd", null, v));
+    if (caseInfo.scene) dl.append(el("dt", null, "草案の場面"), el("dd", null, SCENE_LABELS[caseInfo.scene] ?? ""));
     box.append(dl);
+    if (caseInfo.brief) {
+      // what the model was sent besides the case (not saved with the conversation: it is shown here for this session only)
+      const sent = el("details", "casebox");
+      sent.append(el("summary", null, `送った症例の記録の要約（入院${caseInfo.briefDay ?? ""}日目の時点）`), el("pre", "scene-brief-text", caseInfo.brief));
+      box.append(sent);
+    }
     a.append(box, el("p", "draftmark", DRAFT_MARK));
   }
   a.append(status, body, notices, numbers, refs, hits, foot);
   root.append(q, a);
-  const turn = { root, status, statusTxt: status.querySelector(".txt"), notices, numbers, saveNote, body, refs, hits, foot, raw: "", sources: new Map(), cites: new Map(), question, queued: false, last: 0, mode: caseInfo?.mode ?? null, case: caseInfo?.kase ?? null, create: caseInfo?.create ?? null };
+  const turn = { root, status, statusTxt: status.querySelector(".txt"), notices, numbers, saveNote, body, refs, hits, foot, raw: "", sources: new Map(), cites: new Map(), question, queued: false, last: 0, mode: caseInfo?.mode ?? null, case: caseInfo?.kase ?? null, scene: caseInfo?.scene ?? "", create: caseInfo?.create ?? null };
   root.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-cite]");
     if (btn) openCite(turn.cites.get(btn.dataset.cite));
@@ -646,7 +662,7 @@ function openConversation(data) {
   let lastCase = null;
   for (const t of data.turns) {
     const p = t.payload || {};
-    const info = p.case ? { mode: typeof p.mode === "string" ? p.mode : "ask", kase: cleanCase(p.case) } : p.create ? { mode: "create", create: cleanCreate(p.create) } : null;
+    const info = p.case ? { mode: typeof p.mode === "string" ? p.mode : "ask", kase: cleanCase(p.case), scene: isScene(p.scene) && p.mode === "assess" ? p.scene : "" } : p.create ? { mode: "create", create: cleanCreate(p.create) } : null;
     if (info?.kase) lastCase = info.kase;
     const turn = makeTurn(t.question, info);
     turn.restored = true;
@@ -696,10 +712,11 @@ function usageText(ev) {
   return `書籍検索${u.book_searches}回${u.web_search_requests ? `・Web検索${u.web_search_requests}回` : ""}・入力${u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens}tok・出力${u.output_tokens}tok・概算 $${usd.toFixed(3)}（約${yen}円）`;
 }
 
-async function ask(question, ack = false, mode = null, create = null) {
+async function ask(question, ack = false, mode = null, create = null, extra = {}) {
   empty.hidden = true;
   const kase = mode && mode !== "create" ? caseCtl.pinned() : null;
-  const turn = makeTurn(question, kase ? { mode, kase } : create ? { mode: "create", create } : null);
+  const scene = kase && mode === "assess" && isScene(extra.scene) ? extra.scene : "";
+  const turn = makeTurn(question, kase ? { mode, kase, scene, brief: scene ? extra.brief : "", briefDay: extra.briefDay } : create ? { mode: "create", create } : null);
   turn.ack = ack;
   $("#thread").append(turn.root);
   turn.root.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -711,7 +728,7 @@ async function ask(question, ack = false, mode = null, create = null) {
   for (const h of recent) history.push({ role: "user", text: h.q }, { role: "assistant", text: h.a.slice(0, 6000) });
   // an earlier question the doctor confirmed is re-sent as history, so the confirmation travels with it
   const acked = ack || recent.some((h) => h.ack);
-  const payload = { question, history, ...(kase ? { mode, case: caseForServer(kase) } : create ? { mode: "create", create } : {}), web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
+  const payload = { question, history, ...(kase ? { mode, case: caseForServer(kase), ...(scene ? { scene, ...(extra.brief ? { record_brief: extra.brief } : {}) } : {}) } : create ? { mode: "create", create } : {}), web: S.web, ...(S.model ? { model: S.model } : {}), ...(S.bookIds.length ? { book_ids: S.bookIds } : {}), ...(acked ? { ack_identifier: true } : {}) };
 
   let finished = false;
   try {
@@ -913,6 +930,9 @@ const conv = initConversations({ api, el, $, openDialog, S, openConversation, sc
 const caseCtl = initCase({ el, $, openDialog, runMode, api });
 const records = initRecords({ api, el, $, openDialog, copyText, caseCtl, hasThread: () => !!document.querySelector(".turn"), newConversation });
 caseCtl.onPinned((k) => records.onCasePinned(k));
+// the scene choices and the summary of the open record that the draft of a scene takes (docs/enhancement-plan.md 8.16)
+caseCtl.setRecord({ linked: (k) => records.hasRecordFor(k), brief: (scene, k) => records.brief(scene, k) });
+records.onChange(() => caseCtl.refreshScene());
 caseCtl.onCleared(() => records.onCaseCleared());
 const notes = initNotes({ el, $, openDialog, copyText, toRecord: (kase, items) => records.addAdopted(kase, items) });
 const creator = initCreate({ el, $, openDialog, copyText, runCreate: (params) => submitCreate(params, false), pinCase: (c) => caseCtl.set(c) });

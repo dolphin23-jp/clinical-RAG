@@ -48,7 +48,7 @@ export const ADM_FIELDS = [
 
 /** The largest record the server keeps (worker/src/recordstore.ts MAX_RECORD_PAYLOAD; a test keeps the two equal), in characters of its JSON. */
 export const RECORD_BUDGET = 400_000;
-export const LIMITS = { title: 80, label: 120, text: 600, reason: 300, adm: 1500, heading: 80, cite: 200, problems: 20, entries: 12, adopted: 60, cites: 6, seen: 12, reading: 40 };
+export const LIMITS = { title: 80, label: 120, text: 600, reason: 300, adm: 1500, heading: 80, cite: 200, problems: 20, entries: 12, adopted: 60, cites: 6, seen: 12, reading: 40, refs: 8, page: 40, section: 100 };
 
 /** Time questions that ask when the problem began (before the arrival, as a rule).  Every other time question is something done in the emergency room. */
 export const PRE_ARRIVAL = new Set(["t_sz", "t_onset", "t_bleed"]);
@@ -74,6 +74,50 @@ const cleanCites = (raw) =>
       return o;
     })
     .filter((o) => o.title || o.url || o.page);
+
+// ---------------------------------------------------------------- the books' pages kept for a problem (docs/enhancement-plan.md 8.16)
+// A problem keeps the pages the doctor chose to leave for it (found by a search, `refs`) and the pages an adopted AI item cited (the
+// `cites` of its entries, kept since stage 2).  Only where to look is kept: a book's title, the page, the section's name; never a
+// line of the book's text.  A page left for a problem says the doctor looked at it, not that the book supports anything written
+// about the problem.  Each carries the day it was added, so a note of an earlier day does not show it (asOf).
+const REF_VIA = new Set(["found"]);
+const cleanTitle = (t) => String(t ?? "").replace(/(\s*［[^］]*］)+\s*$/, "").trim();
+/** The identity of a page: the book's title (without the flags at its end) and the page.  The same page is one page. */
+export const refKey = (r) => `${cleanTitle(r?.title)}|${String(r?.page ?? "").trim()}`;
+
+/** The pages kept for a problem, read back (untrusted shape): known keys, cut to the limits, one per page, at most LIMITS.refs. */
+export function cleanRefs(raw) {
+  const out = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!isObj(r) || out.length >= LIMITS.refs) continue;
+    const title = str(cleanTitle(r.title), LIMITS.cite);
+    const page = str(r.page, LIMITS.page);
+    if (!title || !page || out.some((x) => refKey(x) === refKey({ title, page }))) continue;
+    const section = str(r.section, LIMITS.section);
+    out.push({ title, page, ...(section ? { section } : {}), via: REF_VIA.has(r.via) ? r.via : "found", added: dayNo(r.added) });
+  }
+  return out;
+}
+
+/**
+ * Every book page a problem has, once each: the pages the doctor left (`pinned`, first) and the pages cited by the AI items it carries
+ * (the problem's own, from an adopted problem-list item, and its assessment and plan entries'), with the day each came.  A web citation is not
+ * a book and is not listed.  Returns [{ title, page, section?, via: "found" | "cited", added, pinned }].
+ */
+export function refsOf(p) {
+  const out = [];
+  const add = (c, via, added, pinned) => {
+    if (!isObj(c) || c.kind === "web") return;
+    const title = str(cleanTitle(c.title), LIMITS.cite);
+    const page = str(c.page, LIMITS.page);
+    if (!title || !page || out.some((x) => refKey(x) === refKey({ title, page }))) return;
+    out.push({ title, page, ...(c.section ? { section: str(c.section, LIMITS.section) } : {}), via, added: dayNo(added), pinned });
+  };
+  for (const r of p.refs ?? []) add(r, "found", r.added, true);
+  if (p.ai === true) for (const c of p.cites ?? []) add(c, "cited", p.added, false);
+  for (const e of [...(p.assess ?? []), ...(p.plan ?? [])]) if (e.from === "ai") for (const c of e.cites ?? []) add(c, "cited", e.added, false);
+  return out;
+}
 
 function cleanEntry(raw, isPlan, used) {
   if (!isObj(raw)) return null;
@@ -126,6 +170,7 @@ export function cleanRecord(raw) {
       ...(cleanLog(p.cert_log, (l) => l.certainty === "" || CERT_IDS.has(l.certainty), (l) => ({ certainty: l.certainty })).length ? { cert_log: cleanLog(p.cert_log, (l) => l.certainty === "" || CERT_IDS.has(l.certainty), (l) => ({ certainty: l.certainty })) } : {}),
       ...(p.ai === true ? { ai: true } : {}),
       ...(p.ai === true && cleanCites(p.cites).length ? { cites: cleanCites(p.cites) } : {}),
+      ...(cleanRefs(p.refs).length ? { refs: cleanRefs(p.refs) } : {}),
       assess: (Array.isArray(p.assess) ? p.assess : []).slice(0, LIMITS.entries).map((e) => cleanEntry(e, false, used)).filter(Boolean),
       plan: (Array.isArray(p.plan) ? p.plan : []).slice(0, LIMITS.entries).map((e) => cleanEntry(e, true, used)).filter(Boolean),
     });
@@ -326,6 +371,35 @@ export function setProblem(rec, id, patch) {
     if (c !== p.certainty) p.cert_log = stampLog(p.cert_log, { today: next.course.today, added: p.added ?? 1, item: { certainty: c }, seed: p.certainty ? [{ day: p.added ?? 1, certainty: p.certainty }] : [] });
     p.certainty = c;
   }
+  return next;
+}
+
+/**
+ * Leaves a book's page for a problem (the doctor's act: a search result chosen, or a page the doctor typed in).  `ref`: { title, page, section? }.
+ * The same page is not added twice (also when an adopted item already cites it); a problem keeps at most LIMITS.refs.
+ * Returns { rec, ok, reason }: reason is "bad" (no title or page), "duplicate", "full" or "missing" (no such problem) when ok is false.
+ */
+export function pinRef(rec, problemId, ref) {
+  const next = clone(rec);
+  const p = findProblem(next, problemId);
+  if (!p) return { rec, ok: false, reason: "missing" };
+  const title = str(cleanTitle(ref?.title), LIMITS.cite);
+  const page = str(ref?.page, LIMITS.page);
+  if (!title || !page) return { rec, ok: false, reason: "bad" };
+  if (refsOf(p).some((x) => refKey(x) === refKey({ title, page }))) return { rec, ok: false, reason: "duplicate" };
+  if ((p.refs ?? []).length >= LIMITS.refs) return { rec, ok: false, reason: "full" };
+  const section = str(ref?.section, LIMITS.section);
+  (p.refs ??= []).push({ title, page, ...(section ? { section } : {}), via: "found", added: next.course.today });
+  return { rec: next, ok: true, reason: "" };
+}
+
+/** Takes back a page the doctor left for a problem (by its key).  A page that an adopted item cites goes with that item, not from here. */
+export function unpinRef(rec, problemId, key) {
+  const next = clone(rec);
+  const p = findProblem(next, problemId);
+  if (!p?.refs) return next;
+  p.refs = p.refs.filter((r) => refKey(r) !== key);
+  if (!p.refs.length) delete p.refs;
   return next;
 }
 

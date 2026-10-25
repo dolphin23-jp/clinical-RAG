@@ -100,6 +100,47 @@ export const isEmptyCase = (c: CaseInput): boolean => !(c.complaint || c.vitals 
 /** Every free-text value, for the identifier check.  The choice fields are validated against fixed lists instead. */
 export const caseTexts = (c: CaseInput): string[] => [...(Object.keys(TEXT_LIMITS) as TextKey[]).map((k) => c[k]), c.structured];
 
+// ------------------------------------------------------------------------------------------------ scenes and the record's summary
+// Stage 4b (docs/enhancement-plan.md 8.16).  The assessment/plan draft can be made for a scene (its headings change: prompt.ts SCENE_SECTIONS),
+// and, for the scenes that follow a case record, the record's summary goes with the case.  Twin of web/draft-scenes.js (pinned equal by
+// worker/test/scenes.test.ts).  Neither is stored: they travel with one request, and the summary is not part of the saved case.
+
+export const SCENES = ["ed", "op_first", "adm", "prog", "interim", "dc"] as const;
+export type Scene = (typeof SCENES)[number];
+export const SCENE_LABELS: Record<Scene, string> = {
+  ed: "救急外来",
+  op_first: "外来初診",
+  adm: "病棟・入院時",
+  prog: "病棟・経過",
+  interim: "中間サマリー・転棟",
+  dc: "退院時サマリー",
+};
+/** The scenes whose draft is about the course of a record: a request for one without the record's summary is refused. */
+export const RECORD_SCENES: readonly Scene[] = ["prog", "interim", "dc"];
+/** The scenes whose draft takes the record's summary when there is one (the admission takes it when a record is open; the others need it). */
+export const BRIEF_SCENES: readonly Scene[] = ["adm", "prog", "interim", "dc"];
+/** The most characters of the record's summary (the screen builds it and cuts it to this; twin of BRIEF_LIMIT in web/draft-scenes.js). */
+export const BRIEF_LIMIT = 5000;
+
+export function parseScene(raw: unknown): Scene | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  if (typeof raw === "string" && (SCENES as readonly string[]).includes(raw)) return raw as Scene;
+  throw new CaseInputError(`scene must be one of ${SCENES.join(", ")}`, "bad_scene");
+}
+
+/** The record's summary as text ("" when there is none).  It is data the screen built from the doctor's record; it is checked like every other free text. */
+export function parseBrief(raw: unknown): string {
+  if (raw === undefined || raw === null || raw === "") return "";
+  if (typeof raw !== "string") throw new CaseInputError("record_brief must be a string", "bad_brief");
+  const s = raw.replace(/\r\n?/g, "\n").trim();
+  if (s.length > BRIEF_LIMIT) throw new CaseInputError(`record_brief is longer than ${BRIEF_LIMIT} characters`, "bad_brief");
+  return s;
+}
+
+/** The summary as the model sees it (after the case, before 【依頼】). */
+export const renderBrief = (brief: string): string =>
+  `【症例の記録（先生が記録したもの）】先生がこの症例の記録に書いた問題・評価・計画と、先生が選んだ確度・計画の状態・推移・未完了の課題です。後日の事実は含みません。「（AI草案を採用したもの）」の印の行は、以前の草案を先生が採用した文です。\n${brief}`;
+
 const indent = (s: string) => s.replace(/\n/g, "\n  ");
 
 /** The case as the model sees it (put before the request in the final user message).  Unfilled fields say so. */

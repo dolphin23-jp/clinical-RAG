@@ -1,6 +1,6 @@
 import { dbBackend, evalRetrieval, parseQuestions } from "../../eval/lib.ts";
 import { runAsk, type StreamEvent } from "./anthropic.ts";
-import { CaseInputError, caseTexts, createTexts, MODE_LABELS, parseCase, parseCreate, parseMode, renderCase, renderCreate, type CaseInput, type CreateInput, type Mode } from "./casemode.ts";
+import { CaseInputError, caseTexts, createTexts, MODE_LABELS, BRIEF_SCENES, parseBrief, parseCase, parseCreate, parseMode, parseScene, RECORD_SCENES, renderBrief, renderCase, renderCreate, SCENE_LABELS, type CaseInput, type CreateInput, type Mode, type Scene } from "./casemode.ts";
 import type { Db } from "./db.ts";
 import { splitBlocks, headerText, pageLabel } from "./format.ts";
 import { ConvInputError, convStore } from "./convstore.ts";
@@ -257,20 +257,28 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       let mode: Mode | undefined;
       let kase: CaseInput | null = null;
       let create: CreateInput | null = null; // mode "create": a request for a new fictional case, which carries no case
+      // stage 4b (docs/enhancement-plan.md 8.16): the assessment/plan draft for a scene, and the summary of the case record that follows the case
+      let scene: Scene | undefined;
+      let brief = "";
       try {
         mode = parseMode(body?.mode);
         if (mode === "create") {
           if (body?.case !== undefined && body?.case !== null) return json({ error: "creating a case takes a request, not a case", code: "bad_create" }, 400);
           create = parseCreate(body?.create);
         } else if (body?.case !== undefined && body?.case !== null) kase = parseCase(body.case);
+        scene = parseScene(body?.scene);
+        brief = parseBrief(body?.record_brief);
       } catch (e) {
         if (e instanceof CaseInputError) return json({ error: e.message, code: e.code }, 400);
         throw e;
       }
       if (mode && mode !== "create" && !kase) return json({ error: "mode needs a case", code: "case_required" }, 400);
       if (kase) mode ??= "ask";
+      if (scene && mode !== "assess") return json({ error: "a scene is for the assessment/plan draft only", code: "scene_needs_assess" }, 400);
+      if (brief && !(kase && scene && BRIEF_SCENES.includes(scene))) return json({ error: "the record's summary goes with a case and a scene that follows a record", code: "brief_needs_scene" }, 400);
+      if (scene && RECORD_SCENES.includes(scene) && !brief) return json({ error: `${SCENE_LABELS[scene]}の草案には、症例の記録の要約が要ります。記録を開いてから依頼してください。`, code: "record_required" }, 400);
       let question = typeof body?.question === "string" ? body.question.trim() : "";
-      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
+      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}）` : scene ? `${MODE_LABELS[mode]}（${SCENE_LABELS[scene]}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
       if (!question || question.length > 4000) return json({ error: "question must be 1-4000 characters" }, 400);
       const history = Array.isArray(body.history)
         ? body.history
@@ -280,7 +288,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
         : [];
       // assistant turns are the model's own text (they may quote PMIDs etc.); only what the user typed is checked
       // every free-text field of the case (or of a creation request) is checked like the question (docs/enhancement-plan.md 7.1)
-      const refused = identifierRefusal([question, ...history.filter((h: any) => h.role === "user").map((h: any) => h.text), ...(kase ? caseTexts(kase) : []), ...(create ? createTexts(create) : [])], body.ack_identifier);
+      const refused = identifierRefusal([question, ...history.filter((h: any) => h.role === "user").map((h: any) => h.text), ...(kase ? caseTexts(kase) : []), ...(brief ? [brief] : []), ...(create ? createTexts(create) : [])], body.ack_identifier);
       if (refused) return refused;
       const capped = await overDailyLimit(deps);
       if (capped) return capped;
@@ -296,7 +304,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
             web: !!body.web,
             bookIds,
             model,
-            ...(kase && mode && mode !== "create" ? { caseBlock: renderCase(kase), modeSystem: caseSystem(mode, !!kase.own), hint: caseHint(kase) } : {}),
+            ...(kase && mode && mode !== "create" ? { caseBlock: brief ? `${renderCase(kase)}\n\n${renderBrief(brief)}` : renderCase(kase), modeSystem: caseSystem(mode, !!kase.own, scene, !!brief), hint: caseHint(kase) } : {}),
             ...(create ? { caseBlock: renderCreate(create), modeSystem: createSystem(create), hint: create.theme, checkOverlap: true } : {}),
           },
           emit,

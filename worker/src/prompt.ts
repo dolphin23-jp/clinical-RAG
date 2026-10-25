@@ -1,7 +1,7 @@
 // System prompt.  It encodes (1) the retrieval discipline that makes citations trustworthy and
 // (2) the answering style of a discussion partner for a young physician.  Edit freely: this file is
 // the single place where "how the assistant behaves" lives.
-import type { CreateInput, Mode } from "./casemode.ts";
+import { SCENE_LABELS, type CreateInput, type Mode, type Scene } from "./casemode.ts";
 
 /** The modes that work from a typed case and have a fixed set of headings (not the free question, not case creation). */
 type DraftMode = Exclude<Mode, "ask" | "create">;
@@ -133,11 +133,147 @@ const OWN_BODY: Partial<Record<Mode, string>> = {
   ask: "- 症例に「先生自身のアセスメント（先生の案）」があります。質問に答えるときに、その見立てへの反証も検討します（正誤の判定はしません）。",
 };
 
-/** The second system block for a request that carries a case.  `hasOwn`: the case includes the doctor's own assessment. */
-export function caseSystem(mode: Exclude<Mode, "create">, hasOwn: boolean): string {
-  const body = mode === "ask" ? MODE_ASK : MODE_BODY[mode];
+// ------------------------------------------------------------------------------------------------ scenes (docs/enhancement-plan.md 8.5, 8.16)
+// The assessment/plan draft for a scene: the headings change with the reader and the purpose of the chart note (docs/chart-purposes.md).  The
+// headings are the same list as web/draft-scenes.js SCENE_HEADINGS (pinned equal by worker/test/scenes.test.ts), which also says which part of
+// the chart each heading is when the doctor adopts an item.  A scene changes the headings and what is written under them; it adds no fact.
+
+/** Under the last two headings of every scene (the same as the default draft's). */
+const SCENE_TAIL: { h: string; body: string }[] = [
+  { h: MODE_HEADINGS.assess[4], body: "- 回答に出した用量・閾値・補正式などの数値を、書名・頁つきで一覧にします。出典のないものは【出典未確認・要確認】を付けます。" },
+  { h: MODE_HEADINGS.assess[5], body: "- 検索して手元の書籍に見つからなかった論点。なければ「該当なし」。" },
+];
+const TOP_PROBLEM = "- 入力の事実から立つ問題を、緊急度の高い順に挙げます。冒頭に「いま最も危険なこと」を1行で書きます。";
+
+export const SCENE_READERS: Record<Scene, string> = {
+  ed: "入院を担当する医師と、後日の自分。時刻のある介入と再評価、見逃せない病態を除いた根拠、行き先の根拠が核です。",
+  op_first: "将来の自分と紹介元。主訴と時系列、危険な鑑別を除く根拠、検査は何を区別するか、再受診の基準が核です。",
+  adm: "病棟チーム全員。入院の目的、優先順位のついた問題、問題ごとの評価と計画、コール基準が核です。",
+  prog: "当直医と看護師。前回からの変化、治療への反応、問題ごとの更新と計画の変更の理由、翌日の確認が核です。",
+  interim: "転棟先・次のチーム。経過の転換点、現在の状態、継続する治療、結果待ち、悪化時の連絡が核です。",
+  dc: "退院後に診る医師・転院先。診断と確度、問題ごとの経過、残る課題が核です。",
+};
+
+export const SCENE_SECTIONS: Record<Scene, { h: string; body: string }[]> = {
+  ed: [
+    { h: "問題リスト", body: TOP_PROBLEM },
+    {
+      h: "重症度と安定化（入力の事実に基づく論点。等級は付けない）",
+      body: "- 入力の事実から言える範囲で、重症度の論点（どの所見が重症を示唆し、どの所見が足りないか）と、安定化のために考える介入（気道・呼吸・循環の順に）と再評価の時期を書きます。重症度の等級や点数は決めません。介入は「予定・検討」として書き、実施したとは書きません。時刻のある入力は、入力のとおりに引きます。",
+    },
+    {
+      h: "critical の除外の根拠",
+      body: "- 見逃せない病態（critical）ごとに、除外に使える入力、足りない入力（未確認）、除外できないときに続けること、成り立たなくなる条件（反証）を書きます。入力にない所見をもとに「除外できた」と書きません。",
+    },
+    { h: "検査は何を区別するか", body: "- 検査ごとに、何を区別するためか、結果によって次にどう分かれるかを書きます。数値は出典のあるものだけ書きます。" },
+    {
+      h: "行き先・帰宅条件・申し送り",
+      body: "- 行き先（帰宅・入院・集中治療など）を考える論点、帰宅できる条件とできなくなる条件、入院担当医に伝える事実（入力にあるものだけ。未入力は「未確認」）を書きます。施設の運用に触れたら「施設プロトコルは別途確認」と添えます。",
+    },
+    ...SCENE_TAIL,
+  ],
+  op_first: [
+    { h: "問題リスト", body: TOP_PROBLEM },
+    {
+      h: "鑑別と除外の根拠（critical を先に）",
+      body: "- critical な鑑別を先に、次に common な鑑別を挙げ、それぞれ、支持する入力、支持しない・足りない入力、除外に使える所見、成り立たなくなる条件を書きます。陰性所見は、入力で評価されたものだけを根拠にします（聞いていない・測っていないものは「未確認」）。事前確率の数値は、出典がなければ書きません。",
+    },
+    {
+      h: "検査の目的（何を区別するか）",
+      body: "- 検査・治療・指導ごとに、何を区別する・変えるためか、結果による次の分岐を書きます。治療は適応・用量・投与速度を、出典のある範囲で書きます。",
+    },
+    { h: "再受診の基準", body: "- どうなったら再受診・救急受診が必要か（待てる条件と待てなくなる条件）、次回の受診で確かめること。" },
+    ...SCENE_TAIL,
+  ],
+  adm: [
+    {
+      h: "問題リスト（優先順位つき）",
+      body: "- 入力の事実と、記録にある問題から、入院中に扱う問題を優先順位の高い順に挙げます。冒頭に「いま最も危険なこと」を1行で書きます。記録にある問題と同じものは、記録の名前で書きます。",
+    },
+    { h: "各問題の評価", body: "- 問題ごとに、支持する入力、支持しない入力・足りない入力、成り立たなくなる条件（反証）、代替仮説、見落としやすい点を書きます。" },
+    {
+      h: "各問題の計画",
+      body: "- 問題ごとに、検査（何を区別するためか）、治療、モニタリング、再評価の時期と分岐を、予定・検討として書きます。治療は適応・用量・投与速度・腎機能での調整を、出典のある範囲で書きます。",
+    },
+    {
+      h: "治療目標・退院条件",
+      body: "- 入院中の治療の目標（決めるのは先生。論点として）と、退院できる条件の論点。治療の上限・代理意思決定者は、入力にあるものだけ書き、ないものは「未確認」とします。",
+    },
+    { h: "コール基準", body: "- 当直医・看護師が医師を呼ぶ基準（どの所見・経過になったら誰を呼ぶか）。待てる条件と待てなくなる条件。" },
+    ...SCENE_TAIL,
+  ],
+  prog: [
+    {
+      h: "前回からの変化（記録の要約から）",
+      body: "- 【症例の記録】にある、前回までの計画の状態、先生が選んだ推移、その日の先生の記録から、変化を整理します。記録にない変化は書かず、「記録にない」と書きます。数値は入力のとおりに書きます。",
+    },
+    {
+      h: "問題ごとの更新",
+      body: "- 問題ごとに、記録の評価に照らして、見直す点・追加で確かめる点・成り立たなくなった可能性を書きます。推移（改善・不変・悪化）は決めません。選ぶのは先生です。",
+    },
+    {
+      h: "計画の変更案と、その理由",
+      body: "- 「予定・検討」のままの計画について、続ける・変える・中止を検討する論点とその理由を書きます。実施・変更・中止を決めたとは書きません。",
+    },
+    { h: "新しく立つ問題", body: "- 記録の問題にない、新しく立てるべき問題があれば挙げます。なければ「該当なし」と書きます。" },
+    { h: "翌日の確認・コール条件", body: "- 翌日に確かめること、医師を呼ぶ条件。" },
+    ...SCENE_TAIL,
+  ],
+  interim: [
+    {
+      h: "経過の要約（転換点を軸に）",
+      body: "- 【症例の記録】にある転換点・問題・計画の状態・推移から、次のチームに伝える経過を要約します。記録にないことを足しません。",
+    },
+    { h: "問題ごとの現在の評価", body: "- 問題ごとの現在の評価と、見直す点。診断の確度は、先生が選んだものを変えません。" },
+    {
+      h: "継続する計画と結果待ち",
+      body: "- 継続する治療・モニタリングと、結果待ち・未完了の課題。担当・期限は書かず、先生の記録にあるものだけを引きます。",
+    },
+    { h: "悪化時の再評価・連絡条件", body: "- 悪化のサインと、そのときの再評価・連絡の論点。" },
+    ...SCENE_TAIL,
+  ],
+  dc: [
+    {
+      h: "経過の要約（問題別）",
+      body: "- 【症例の記録】にある問題ごとの経過（確度・推移・計画の結果）を要約します。記録にない転帰や、後日の事実を足しません。",
+    },
+    {
+      h: "診断ごとの根拠",
+      body: "- 診断（先生が主病名・副病名とした問題）ごとに、その診断を支持した入力と、支持しない入力・残る不確かさを書きます。書籍の記載があれば引用します。診断の確度は、先生が選んだものを変えません。",
+    },
+    {
+      h: "残る課題（何を。担当・期限は先生が決める）",
+      body: "- 退院後に残る課題（結果待ち・フォロー・服薬の見直しの論点）を、何を確かめるかだけ書きます。担当と期限は書きません。",
+    },
+    ...SCENE_TAIL,
+  ],
+};
+
+/** Added to the second system block when the record's summary goes with the case (web/record-brief.js builds the summary). */
+export const BRIEF_RULES = `## 症例の記録が添えられているとき
+- 質問の【症例の記録（先生が記録したもの）】は、先生がこの症例の記録に書いた問題・評価・計画と、先生が選んだ確度・計画の状態・推移・未完了の課題です。後日の事実は含まれません。記録にない経過・検査結果・実施を、あるものとして書いてはいけません。記録の「未選択」「未記入」は、そのまま未記入として扱い、推測で補いません。
+- 「（AI草案を採用したもの）」の印の行は、以前の草案を先生が採用した文です。新しい事実の根拠にしたり、書籍の記述として引用したりしません。見直す対象として扱います。
+- 計画の「実施」「変更」「中止」は、先生が記録したものだけです。「予定・検討」は、実施されたことを意味しません。記録に「実施」のない処置を、実施済みとして書きません。
+- 先生がすでに立てた問題・計画を繰り返さず、足りない点・見直す点・記録と食い違う点を優先して書きます。`;
+
+function sceneBody(scene: Scene): string {
+  const secs = SCENE_SECTIONS[scene];
+  return [
+    "## この依頼の型: アセスメントとプラン（草案）",
+    `場面: ${SCENE_LABELS[scene]}。読み手: ${SCENE_READERS[scene]}`,
+    "次の見出しを、この順に、そのまま使って書きます。",
+    ...secs.flatMap((s) => [`## ${s.h}`, s.body]),
+  ].join("\n");
+}
+
+/**
+ * The second system block for a request that carries a case.  `hasOwn`: the case includes the doctor's own assessment.  `scene` (assess only):
+ * the draft's headings for that scene instead of the common ones.  `hasBrief`: the record's summary goes with the case.
+ */
+export function caseSystem(mode: Exclude<Mode, "create">, hasOwn: boolean, scene?: Scene, hasBrief = false): string {
+  const body = mode === "ask" ? MODE_ASK : mode === "assess" && scene ? sceneBody(scene) : MODE_BODY[mode];
   const own = hasOwn ? OWN_BODY[mode] : undefined;
-  return [CASE_RULES, body, ...(own ? [own] : [])].join("\n\n");
+  return [CASE_RULES, ...(hasBrief ? [BRIEF_RULES] : []), body, ...(own ? [own] : [])].join("\n\n");
 }
 
 // ------------------------------------------------------------------------------------------------ creating a fictional case

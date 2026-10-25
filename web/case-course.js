@@ -395,6 +395,11 @@ export function asOf(rec, n) {
     const c = logAt(p.cert_log, day);
     p.certainty = c ? c.certainty : p.cert_log?.length ? "" : p.certainty;
     for (const which of ["assess", "plan"]) p[which] = p[which].filter((e) => (e.added ?? 1) <= day);
+    if (p.refs) {
+      // a book's page the doctor left after day n was not there on day n
+      p.refs = p.refs.filter((r) => (r.added ?? 1) <= day);
+      if (!p.refs.length) delete p.refs;
+    }
     for (const e of p.plan) {
       const s = logAt(e.log, day);
       if (s) {
