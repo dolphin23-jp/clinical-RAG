@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { before, test } from "node:test";
 import type { Db } from "../src/db.ts";
 import { rrf, searchChunkIds, searchParents } from "../src/search.ts";
 import { DICTIONARY, expandQueries, MAX_RELATED, MAX_SYNONYMS } from "../src/synonyms.ts";
-import { buildFixtureDb, openDb } from "./nodeDb.ts";
+import { handle } from "../src/handler.ts";
+import { buildFixtureDb, openDb, REPO } from "./nodeDb.ts";
 
 let db: Db;
 before(() => {
@@ -43,6 +48,28 @@ test("reliability warning and transcriber flags travel with results", async () =
   const codes = p.notes.map((n) => n.code);
   assert.ok(codes.includes("W_RELIABILITY"), JSON.stringify(codes));
   assert.ok(codes.includes("I_TRANSCRIBER_FLAG"), JSON.stringify(codes));
+});
+
+test("a conversion log (ingest conversion-log) travels with the sections it concerns, and counts as an open issue for the book", async () => {
+  const path = buildFixtureDb();
+  const log = join(mkdtempSync(join(tmpdir(), "cl-")), "log.jsonl");
+  writeFileSync(log, [{ chapter: 2, section: "B", pages: "12-14", status: "mismatch", note: "表の1行が原本と不一致" }, { chapter: 2, section: "A", status: "verified" }].map((o) => JSON.stringify(o)).join("\n"));
+  execFileSync("python3", ["-m", "ingest", "conversion-log", "--db", path, "fx", log], { cwd: REPO, stdio: "pipe" });
+  const withLog = openDb(path);
+  const r = await searchParents(withLog, ["架空症候群"]);
+  const logNotes = (p: any) => p.notes.filter((n: any) => n.source === "conversion-log");
+  const treatment = r.filter((p) => String(p.section_title).includes("治療"));
+  const concept = r.filter((p) => String(p.section_title).includes("概念"));
+  assert.ok(treatment.length >= 1 && concept.length >= 1, "both sections were found");
+  for (const p of treatment) {
+    assert.deepEqual([...new Set(logNotes(p).map((n: any) => n.code))], ["CL_MISMATCH"], "the section with the mismatch carries the warning");
+    assert.match(logNotes(p)[0].message, /原本との不一致が見つかっている.*p\.12-14.*表の1行が原本と不一致/);
+  }
+  for (const p of concept) assert.deepEqual(logNotes(p), [], "the section that was verified carries nothing from the log");
+  // the book list counts it among the open issues (warn)
+  const books: any = await (await handle(new Request("http://x/api/books", { headers: { authorization: "Bearer test-token-0123456789abcdef" } }), { db: withLog, apiKey: "k", appToken: "test-token-0123456789abcdef", model: "m" })).json();
+  const plain: any = await (await handle(new Request("http://x/api/books", { headers: { authorization: "Bearer test-token-0123456789abcdef" } }), { db, apiKey: "k", appToken: "test-token-0123456789abcdef", model: "m" })).json();
+  assert.equal(books.books[0].open_issues, plain.books[0].open_issues + 1);
 });
 
 test("citations resolve to reference entries with PMIDs", async () => {

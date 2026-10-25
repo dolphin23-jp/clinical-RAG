@@ -5,8 +5,8 @@ import { runAsk, type StreamEvent } from "../src/anthropic.ts";
 import type { Db } from "../src/db.ts";
 import { handle, type AppDeps } from "../src/handler.ts";
 import { DEFAULT_WEB_DOMAINS, SYSTEM_PROMPT } from "../src/prompt.ts";
-import { d1Counter, jstDay, type AskCounter, type D1Like } from "../src/usage.ts";
-import { buildFixtureDb, openDb } from "./nodeDb.ts";
+import { USAGE_KINDS, d1Counter, jstDay, type AskCounter, type D1Like, type UsageKind } from "../src/usage.ts";
+import { buildFixtureDb, openDb, openRw } from "./nodeDb.ts";
 
 let db: Db;
 before(() => {
@@ -499,23 +499,129 @@ test("daily cap: refused (identifier) and search-only requests are not counted; 
   await broken.text();
 });
 
-test("daily cap: the D1 counter SQL stores only the day and a count, and counts per day", async () => {
-  const d = new DatabaseSync(":memory:");
-  const d1: D1Like = {
-    prepare(sql: string) {
-      const st = d.prepare(sql);
-      return {
-        bind: (...v: unknown[]) => ({ first: async <T>() => (st.get(...(v as any[])) as T) ?? null }),
-        run: async () => st.run(),
-      };
-    },
-  };
-  const c = d1Counter(d1);
+test("daily cap: the D1 counter SQL stores only the day and numbers, and counts per day", async () => {
+  const rw = openRw();
+  const c = d1Counter(rw);
   assert.equal(await c.increment("2026-10-25"), 1);
   assert.equal(await c.increment("2026-10-25"), 2);
   assert.equal(await c.increment("2026-10-26"), 1);
-  const cols = (d.prepare("PRAGMA table_info(usage_daily)").all() as any[]).map((r) => r.name);
-  assert.deepEqual(cols, ["day", "asks"]);
+  const info = rw.raw.prepare("PRAGMA table_info(usage_daily)").all() as any[];
+  assert.deepEqual(info.map((r) => r.name), ["day", "asks", ...USAGE_KINDS]);
+  // nothing but the day is text: every other column is an integer that cannot be empty
+  assert.deepEqual(info.filter((r) => r.type !== "INTEGER").map((r) => r.name), ["day"]);
+  assert.ok(info.filter((r) => r.name !== "day").every((r) => r.notnull === 1));
+});
+
+// ---------------------------------------------------------------------------------- how the answers went, per day (F4)
+test("daily counts: the columns are added to the table that already exists, its counts are kept, and a day with no ask still gets its row", async () => {
+  const rw = openRw();
+  rw.raw.exec("CREATE TABLE usage_daily (day TEXT PRIMARY KEY, asks INTEGER NOT NULL); INSERT INTO usage_daily VALUES ('2026-10-24', 7)"); // production before F4
+  const c = d1Counter(rw);
+  await c.note!("2026-10-24", ["no_hits", "no_cite"]);
+  await c.note!("2026-10-24", ["no_cite"]);
+  await c.note!("2026-10-25", ["num_flag"]); // a day with no cap: no increment before
+  await c.note!("2026-10-25", []); // nothing to add: no write
+  assert.equal(await c.increment("2026-10-25"), 1);
+  const rows = rw.raw.prepare("SELECT * FROM usage_daily ORDER BY day").all() as any[];
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { day: "2026-10-24", asks: 7, no_search: 0, no_hits: 1, no_cite: 2, num_flag: 0 },
+    { day: "2026-10-25", asks: 1, no_search: 0, no_hits: 0, no_cite: 0, num_flag: 1 },
+  ]);
+  // a second counter over the same table (another isolate, after the columns exist) works and does not fail on the ALTER
+  const again = d1Counter(rw);
+  await again.note!("2026-10-24", ["no_search"]);
+  assert.equal(((rw.raw.prepare("SELECT no_search FROM usage_daily WHERE day='2026-10-24'").get() as any).no_search), 1);
+});
+
+function textTurn(text: string, source?: string): Ev[] {
+  return [
+    ["message_start", { type: "message_start", message: { usage: { input_tokens: 900, cache_read_input_tokens: 50 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }],
+    ...(source
+      ? ([["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "citations_delta", citation: { type: "search_result_location", source, title: "t", cited_text: "…", search_result_index: 0, start_block_index: 1, end_block_index: 2 } } }]] as Ev[])
+      : []),
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 40 } }],
+    ["message_stop", { type: "message_stop" }],
+  ];
+}
+const src = (b: any) => b.messages.at(-1).content[0].content[0].source;
+
+/** A counter that remembers what it was told (the real SQL is tested above). */
+function noting(failNote = false) {
+  const notes: Array<[string, UsageKind[]]> = [];
+  let asks = 0;
+  const counter: AskCounter = {
+    async increment() {
+      return ++asks;
+    },
+    async note(day, kinds) {
+      if (failNote) throw new Error("D1 down");
+      notes.push([day, [...kinds]]);
+    },
+  };
+  return { counter, notes };
+}
+async function askWith(script: ((body: any) => Ev[] | Response)[], extra: Partial<AppDeps> = {}, body: object = { question: "ゼルニア値" }) {
+  const api = mockApi(script);
+  const r = await handle(post("/api/ask", body), app({ fetchImpl: api.fetchImpl, now: () => new Date("2026-10-24T15:30:00Z"), ...extra }));
+  const text = await r.text();
+  return { api, status: r.status, text };
+}
+
+test("daily counts: a cited answer from the books counts nothing; the day is Japan time", async () => {
+  const { counter, notes } = noting();
+  const r = await askWith([() => toolUseTurn(["ゼルニア値"]), (b) => answerTurn(src(b))], { counter, dailyAskLimit: 100 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(notes, [["2026-10-25", []]]);
+});
+
+test("daily counts: answered without searching -> no_search (and no_cite when nothing is cited)", async () => {
+  const { counter, notes } = noting();
+  await askWith([() => textTurn("一般論としてはこうです。"), () => textTurn("一般論としてはこうです。")], { counter });
+  assert.deepEqual(notes.map((n) => n[1]), [["no_search", "no_cite"]]);
+});
+
+test("daily counts: searched, found nothing -> no_hits (and no_cite)", async () => {
+  const { counter, notes } = noting();
+  await askWith([() => toolUseTurn(["zzzz存在しない語"]), () => textTurn("書籍には記載が見つかりませんでした。")], { counter });
+  assert.deepEqual(notes.map((n) => n[1]), [["no_hits", "no_cite"]]);
+});
+
+test("daily counts: searched and found, but cited nothing -> no_cite only", async () => {
+  const { counter, notes } = noting();
+  await askWith([() => toolUseTurn(["ゼルニア値"]), () => textTurn("見つかった節からは言い切れません。")], { counter });
+  assert.deepEqual(notes.map((n) => n[1]), [["no_cite"]]);
+});
+
+test("daily counts: a number the books do not contain -> num_flag", async () => {
+  const { counter, notes } = noting();
+  await askWith([() => toolUseTurn(["ゼルニア値"]), (b) => textTurn("ゼルニア値が低ければ 999 mg を使う。", src(b))], { counter });
+  assert.deepEqual(notes.map((n) => n[1]), [["num_flag"]]);
+});
+
+test("daily counts: a counter that fails does not touch the answer; a failed answer and a made-up case are not counted", async () => {
+  const bad = noting(true);
+  const r = await askWith([() => toolUseTurn(["ゼルニア値"]), (b) => answerTurn(src(b))], { counter: bad.counter });
+  assert.equal(r.status, 200);
+  assert.match(r.text, /"t":"final"/);
+  assert.doesNotMatch(r.text, /D1 down/);
+  const down = noting();
+  const failed = await askWith([() => new Response("boom", { status: 500 })], { counter: down.counter });
+  assert.match(failed.text, /"t":"(error|degraded)"/);
+  assert.deepEqual(down.notes, []);
+  const made = noting();
+  await askWith([() => textTurn("## 導入文\n\nx\n")], { counter: made.counter }, { mode: "create", create: { theme: "腎前性AKI", setting: "救急", level: "標準", goal: "", pitfall: true } });
+  assert.deepEqual(made.notes, []);
+});
+
+test("daily counts: what is handed to the counter is four yes/no values, never text from the question or the answer", async () => {
+  const { counter, notes } = noting();
+  await askWith([() => toolUseTurn(["ゼルニア値"]), (b) => textTurn("ゼルニア値が低ければ 999 mg を使う。", src(b))], { counter }, { question: "ゼルニア値が低い70代男性、K 6.8" });
+  const flat = JSON.stringify(notes);
+  assert.doesNotMatch(flat, /ゼルニア|70代|6\.8|999/);
+  for (const [, kinds] of notes) for (const k of kinds) assert.ok((USAGE_KINDS as readonly string[]).includes(k));
 });
 
 // ---------------------------------------------------------------------------------- prompt (clinical-use 2.5-2.7)

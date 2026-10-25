@@ -293,6 +293,27 @@ export const CREATE_RULES = `## 架空症例を作るとき
 /** The `##` headings a created case must have, in order (web/case-create.js reads the case by these). */
 export const CREATE_HEADINGS = ["導入文", "症例の入力用", "所見の表", "見立て", "落とし穴", "教訓", "書籍に見つからなかった点"];
 
+/**
+ * The course of a created case after the admission (docs/enhancement-plan.md 8.20): written only when the request asks for days.  A heading of its
+ * own, before the last one; under it one `### 入院N日目` per day, with these parts, in this order (the last day also has 転帰).  Twin of
+ * web/case-create.js COURSE_HEADING / COURSE_PARTS (pinned equal by the tests).
+ */
+export const COURSE_HEADING = "入院後の経過";
+export const COURSE_PARTS = ["できごと", "症状", "所見・検査（数値は例示）", "治療・処置（用量は書かない）"];
+export const COURSE_LAST_PART = "転帰";
+
+export const COURSE_RULES = `## 入院後の経過を作るとき
+- 依頼に「入院後の経過」があるときだけ書きます。症例が入院した場合の、**日ごとの架空の経過案**です。先生が、日ごとの記載（その日の経過の記録）を練習するための材料で、実在の患者の経過ではありません。
+- 経過は、書籍が述べる**典型的な経過**（改善・増悪・合併症、検査値の動き、治療への反応、回復までの目安）に沿って組み立てます。書く前に search_books で、その病態の経過を確かめます。書籍の症例の経過を写したり、焼き直したりしません。
+- 日は「入院N日目」（入院した日が1日目）だけで書きます。年月日は書きません。
+- 各日に書くのは、**その日までに起きたこと**だけです。後の日に分かることを、前の日に書きません。前の日の値や治療と、その日の所見が、つながって動くようにします（検査値は少しずつ動き、治療と食い違わないように）。
+- 数値は例示です。**用量・投与速度・診断基準の閾値は書きません。** 薬は一般名で、「開始した」「中止した」「変更した」までにとどめます。
+- 各日に、「正しい対応」「見立て」「評価」は書きません。できごと・症状・所見・行った治療・処置という**事実**だけです（その日の評価・計画は、先生が自分で考えます）。
+- 指定された日の見出しと項目名は、そのまま使い、順序を変えません。該当がない項目にも「なし」と書きます。`;
+
+/** The days a created case's course has: the heading of each, "入院1日目" … */
+export const courseDayHeading = (n: number): string => `入院${n}日目`;
+
 /** The seven lines under "症例の入力用", whose names the screen reads to fill the case dialog. */
 export const CREATE_INPUT_LABELS = ["年齢", "性別", "場面", "主訴と経過", "バイタル", "所見・検査", "既往・内服"];
 
@@ -320,12 +341,23 @@ ${CREATE_INPUT_LABELS.map((l) => `- ${l}: ${INPUT_HINT[l]}`).join("\n")}
 ## ${CREATE_HEADINGS[4]}
 - ${c.pitfall ? "見逃しやすい点・思い込みやすい点を1〜2つ。どの所見で気づけるか。" : "「なし」と書く。"}
 ## ${CREATE_HEADINGS[5]}
-- 1〜3文。
+- 1〜3文。${c.days ? courseBlock(c.days) : ""}
 ## ${CREATE_HEADINGS[6]}
 - 検索して手元の書籍に見つからなかった論点。なければ「該当なし」。
 
 難しさ「${c.level}」: ${LEVEL_TEXT[c.level] ?? LEVEL_TEXT["標準"]}`,
+    ...(c.days ? [COURSE_RULES] : []),
   ].join("\n\n");
+}
+
+/** The course part of the form (written after 教訓, before 書籍に見つからなかった点): one block per day, in order. */
+function courseBlock(days: number): string {
+  const day = (n: number) =>
+    [`### ${courseDayHeading(n)}`, ...COURSE_PARTS.map((p) => `- ${p}: …`), ...(n === days ? [`- ${COURSE_LAST_PART}: 退院・転棟・入院継続などの、その日の終わりの状況を1行`] : [])].join("\n");
+  return `
+## ${COURSE_HEADING}
+入院${days}日目まで、日ごとに、次の形で書きます。
+${Array.from({ length: days }, (_, i) => day(i + 1)).join("\n")}`;
 }
 
 const INPUT_HINT: Record<string, string> = {

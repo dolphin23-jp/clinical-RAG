@@ -236,30 +236,74 @@ with sync_playwright() as pw:
     check("妊娠" not in asks[-1]["case"]["structured"], "and not when the sex is changed to male (the question is gone)")
 
     # 12. the chart note (docs/enhancement-plan.md 8.18): A04 sends each answer to the field ROUTES gives its question's category (question -> cat -> ROUTES);
-    #     what no field takes stays in a block of its own, counted on the screen; the other types keep the stopgap (the answers beside the findings)
+    #     what no field takes stays in a block of its own, counted on the screen; a note type that the flow's categories do not belong to keeps the text whole
     page.click("#casebar-note")
     dlg = page.locator("#note")
     expect(dlg).to_be_visible()
     text = page.locator("#note-text").inner_text()
     check(page.input_value("#note-type") == "A04", "the emergency note is the one offered first")
-    initial = text.split("■初期評価・ABCDE\n", 1)[1].split("\n■", 1)[0] if "■初期評価・ABCDE\n" in text else ""
-    check("［場面・症候の入力（フローの質問への答え）］\n体温：38.4 ℃" in initial, "the temperature (the E slot, category abcde) goes to the field ROUTES gives it: 初期評価・ABCDE")
-    exam = text.split("■身体診察\n", 1)[1].split("\n■", 1)[0] if "■身体診察\n" in text else ""
+    section = lambda t, head: t.split(f"■{head}\n", 1)[1].split("\n■", 1)[0] if f"■{head}\n" in t else ""  # noqa: E731
+    initial = section(text, "初期評価・ABCDE")
+    check("［場面・症候の入力（フローの質問への答え）］\n第一印象：sick\n体温：38.4 ℃" in initial, "the first impression (O) and the temperature (the E slot, category abcde) go to the field ROUTES gives them: 初期評価・ABCDE")
+    hpi = section(text, "現病歴")
+    check("発症様式：徐々に発症" in hpi and "随伴症状：嘔気" in hpi, "the history of the present illness (slot 12, about the complaint) goes to 現病歴")
+    arrival = section(text, "来院情報")
+    check("日前" in arrival and "120/80" in arrival, f"what the ambulance crew said (hand-over, slot 4) goes to 来院情報, dates already relative ({arrival[:80]})")
+    exam = section(text, "身体診察")
     check("体温" not in exam and "第一印象" not in exam and "（未入力）" in exam, "the physical-exam field does not hold the answers (it says （未入力） when nothing else was typed there)")
     rest = text.split("■欄に結びつかなかった場面・症候の入力\n", 1)[1] if "■欄に結びつかなかった場面・症候の入力\n" in text else ""
-    check("【救急外来 × 腹痛】" in rest and "第一印象：sick" in rest and "病着：21:40" in rest and "発症様式：徐々に発症" in rest and "随伴症状：嘔気" in rest,
-          "the answers no field took are kept in a block of their own, headed by the scene and symptom (none is dropped)")
-    check("体温" not in rest and text.count("体温：38.4 ℃") == 1, "an answer is written once: the temperature is in its field only")
+    check("【救急外来 × 腹痛】" in rest and "病着：21:40" in rest, "the answers no field took are kept in a block of their own, headed by the scene and symptom (none is dropped)")
+    check("体温" not in rest and "第一印象" not in rest and text.count("体温：38.4 ℃") == 1 and text.count("第一印象：sick") == 1, "an answer is written once: it is in its field only")
     check(text.index("■欄に結びつかなかった場面・症候の入力") > text.index("■身体診察"), "the block comes after the fields")
     check("ここにない項目は未確認で、陰性・正常を意味しません" in rest, "and it says what is absent from it is unchecked, not negative or normal")
     info = page.locator("#note-info").inner_text()
-    check(re.search(r"場面・症候の入力 \d+ 件のうち、1 件を ROUTES の欄に振り分けました", info) is not None and "カテゴリ未分類" in info, f"the screen says how many answers went to a field and why the others did not ({info[-120:]})")
+    check(re.search(r"場面・症候の入力 \d+ 件のうち、\d+ 件を ROUTES の欄に振り分けました", info) is not None and "どの質問にも付かない時刻・測定条件・理由" in info and "カテゴリ未分類" not in info, f"the screen says how many answers went to a field and why the others did not ({info[-160:]})")
     check("未入力の中核項目" not in text and "陰性ではありません" not in text, "but not the notes meant for the model")
     page.screenshot(path=str(OUT / "04_note.png"))
+    # the emergency flow's answers belong to A04: in A01 the text is kept whole in the block, nothing is routed by a guess
     page.select_option("#note-type", "A01")
     t_a01 = page.locator("#note-text").inner_text()
-    check("■身体診察\n【救急外来 × 腹痛】" in t_a01 and "■欄に結びつかなかった" not in t_a01, "the outpatient first-visit note still places the answers beside the findings (its routing waits for the upstream)")
+    info_a01 = page.locator("#note-info").inner_text()
+    check("■身体診察\n【救急外来 × 腹痛】" not in t_a01 and "■欄に結びつかなかった場面・症候の入力" in t_a01 and "第一印象：sick" in t_a01.split("■欄に結びつかなかった")[1], "the emergency flow's answers are not routed into A01's fields: the text is kept whole in the block")
+    check("0 件を ROUTES の欄に振り分けました" in info_a01 and "文のまま" in info_a01, f"and the screen says so ({info_a01[-120:]})")
     page.select_option("#note-type", "A04")
+    page.keyboard.press("Escape")
+
+    # 12b. the outpatient first visit (A01) routes its own flow's answers the same way (clinical-modules gave that flow categories on 2026-10-25)
+    OP = "outpatient-first-visit.fever"
+    page.click("#btn-new")
+    page.click("#btn-case")
+    if page.locator("details.intake").get_attribute("open") is None:
+        page.locator("details.intake > summary").first.click()
+    page.select_option("#intake-flow", OP)
+    open_all()
+    chip("first", "sick").click()
+    chip("duration", "acute").click()
+    q("pmh_text").locator("textarea").fill("高血圧")
+    chip("meds", "abx_recent").click()
+    chip("exam_head", "pharynx_red").click()
+    chip("antipyretic_tx", "acetaminophen").click()
+    page.fill("#case-age", "34")
+    page.select_option("#case-setting", "外来")
+    page.fill("#case-complaint", "発熱")
+    page.click("#case-pin")
+    page.click("#casebar-note")
+    expect(page.locator("#note")).to_be_visible()
+    page.select_option("#note-type", "A01")
+    op = page.locator("#note-text").inner_text()
+    check("第一印象：sick" in section(op, "初期安全評価"), "A01: the first impression goes to 初期安全評価")
+    check("期間：急性" in section(op, "現病歴・時間経過"), "A01: the history goes to 現病歴・時間経過")
+    check("既往・ベースライン：高血圧" in section(op, "既往・薬剤・アレルギー・生活背景"), "A01: the past history goes to its background field")
+    check("口腔・咽頭・耳・副鼻腔：咽頭発赤" in section(op, "身体診察"), "A01: the examination answer goes to 身体診察")
+    check("解熱薬の処方：アセトアミノフェン" in section(op, "治療・追加検査・説明"), "A01: the treatment goes to the plan field")
+    rest_op = op.split("■欄に結びつかなかった場面・症候の入力\n", 1)[1] if "■欄に結びつかなかった場面・症候の入力\n" in op else ""
+    check("薬剤：最近の抗菌薬" in rest_op and "【外来初診 × 発熱】" in rest_op, "A01: a patient-background fact declared as an observation (the medicines) is kept in the block, not dropped")
+    info_op = page.locator("#note-info").inner_text()
+    check(re.search(r"場面・症候の入力 6 件のうち、5 件を ROUTES の欄に振り分けました。1 件は欄に結びつかず（カテゴリ未分類 1）", info_op) is not None, f"A01: the screen counts them ({info_op[-140:]})")
+    page.select_option("#note-type", "A04")
+    t_op_a04 = page.locator("#note-text").inner_text()
+    check("0 件を ROUTES の欄に振り分けました" in page.locator("#note-info").inner_text() and "■身体診察\n【外来初診 × 発熱】" not in t_op_a04, "and the outpatient flow's answers are not routed into A04's fields")
+    page.screenshot(path=str(OUT / "04b_note_a01.png"))
     page.keyboard.press("Escape")
 
     # 13. nothing is kept in the browser's own storage

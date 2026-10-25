@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { CATALOG_SOURCE } from "../worker/src/extract-catalog.ts";
 import { ExtractInputError, ExtractUpstreamError, parseExtractRequest, runExtract } from "../worker/src/extract.ts";
 import { parseCases, scoreCase, summarize, type CaseScore, type GotProposal } from "./extract_lib.ts";
+import { accessHeaders } from "./lib.ts";
 
 const args: string[] = process.argv.slice(2);
 const opt = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
@@ -68,7 +69,7 @@ async function extractOne(c: { flow: string; text: string }): Promise<Got> {
   if (!local) {
     const res = await fetch(`${(apiBase as string).replace(/\/$/, "")}/api/extract`, {
       method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...accessHeaders() },
       body: JSON.stringify({ flow: c.flow, schema: FLOW_SCHEMA_SOURCE.commit, text: c.text }),
     });
     const j: any = await res.json().catch(() => ({}));

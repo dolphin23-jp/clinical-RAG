@@ -166,7 +166,18 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
     put("## 所見の表\n\n| 項目 | 値 | 根拠 |\n|---|---|---|\n| ゼルニア値 | 18 | 典型的に低下する |", cd(k, cite(A, 1, 2)));
     put("\n| Cr | 2.4 mg/dL | [推論] |\n\n");
     put(`## 見立て\n\n- 想定する診断は架空症候群。鑑別は感染に伴う腎前性AKI。${dose}\n\n`);
-    put("## 落とし穴\n\n- 内服薬の関与を聞かないと、原因を見誤る。\n\n## 教訓\n\n- 典型的な低下に加えて、背景の薬剤を確かめる。\n\n## 書籍に見つからなかった点\n\n- 該当なし\n");
+    put("## 落とし穴\n\n- 内服薬の関与を聞かないと、原因を見誤る。\n\n## 教訓\n\n- 典型的な低下に加えて、背景の薬剤を確かめる。\n\n");
+    // a course after the admission, when the request asks for days (__lastday__ in the theme leaves the last day out, so the screen's "missing day" notice can be seen)
+    const days = Number(/入院後の経過: 入院(\d+)日目まで/.exec(asked)?.[1] ?? 0);
+    if (days) {
+      const shown = /__lastday__/.test(theme) ? days - 1 : days;
+      let course = "## 入院後の経過\n\n";
+      for (let n = 1; n <= shown; n++) {
+        course += `### 入院${n}日目\n- できごと: ${n === 1 ? "入院し、補液を始めた" : `${n}日目の診察。補液を続けた`}\n- 症状: ${n < 3 ? "発熱と咳が続く" : "咳は軽くなった"}\n- 所見・検査（数値は例示）: Cr ${(2.4 - 0.3 * (n - 1)).toFixed(1)} mg/dL\n- 治療・処置（用量は書かない）: 補液を継続\n${n === days ? "- 転帰: 入院継続\n" : ""}\n`;
+      }
+      put(course);
+    }
+    put("## 書籍に見つからなかった点\n\n- 該当なし\n");
     evs.push(md("end_turn", 300), ["message_stop", { type: "message_stop" }]);
     return sseBody(evs, 6);
   }

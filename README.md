@@ -43,7 +43,8 @@ Cloudflare Worker ──────────────►  Anthropic Messa
 | 場面・症候の質問での入力（試作） | 「症例」の画面の年齢・性別の下で、場面と症候（救急外来 × 胸痛・腹痛・失神など12、外来初診 × 発熱）を選ぶと、clinical-modules のフローの質問が段階ごとに出る（中核を前に、残りは畳む）。選択・数値・時刻・短い文で入れ、**未入力の中核の質問を一覧で出す（未確認。陰性にしない）**。日付を書くと「4日前」「入院3日目」へ自動で直す（原文は残さない）。答えは症例に付いて質問に使われ、会話と一緒に保存されて開き直すと戻る。取り込むのは質問の構造だけ（`scripts/import_flow_schema.py`。規則・鑑別は取り込まない） | 症例の入力を場面ごとの型にし、抜けを見えるようにするため。医師の決定（`docs/clinical-use.md` の 1e）。鑑別・危険・検査の提案はしない。数値は記録するだけ |
 | 文章からの取り込み（試作） | 「場面・症候の質問で入力する」の中で、メモを貼ると、そのフローの質問への答えの**提案**を、**元の文の該当箇所つき**で出す。**先生が確認して「入れる」を押したものだけ**が答えに入る（陰性・時刻・行った処置・否定や予定の言い方のあるものは1件ずつ。どれも最初は選ばれていない。入力済みの答えは上書きしない）。メモに書かれていない項目は提案せず、**判断・方針は聞かない**。貼った文章は**保存しない**（識別情報らしき文字があれば送らない。日付は送る前に「N日前」へ） | 入力の重さを減らす（質問を探す手間）。医師の決定（`docs/clinical-use.md` の 1e）。設計は `docs/enhancement-plan.md` の 8.12・8.15。Claude を1回呼ぶ（`/api/extract`）が、保存は増えない。**本物のAPIでの確認はまだ**（`eval/run_extract_eval.ts` で測る） |
 | 症例の記録（救急 → 入院時 → 経過・退院） | ヘッダーの「症例の記録」と、固定中の症例の横の「記録」。固定した症例を**サーバーに保存する記録**にして、開き直せる（最後の更新から60日で自動的に消え、「終える」で消せる）。救急: 場面・症候の質問に入れた時刻を**病着からの分**で並べる（判定しない）、未入力・結果待ち・決めていない項目を**数えて**出す（判定ではない）。入院時: 回答の「症例の記録へ」で採用した項目を、**先生が1件ずつ**問題の評価・計画に付ける（自動では写さない。AI 由来の印と出典は保つ。計画は「予定・検討」で着き、「実施」は先生が選んだときだけ）。問題には安定した番号と、先生が選ぶ診断の確度。入院時の記載（A05）は記録から決定論で組み立てる。**入院後は、日ごとの記録・問題ごとの推移（先生が選んだものだけ）・課題（担当・期限）を足し、病棟の経過（A06）・中間サマリー（A07）・退院時サマリー（A08）を、その日までに先生が記録した判断だけから、AI を使わずに組み立てる**（退院時サマリーは、先生が退院を決めたときだけ） | 診察をまたいで残る症例の記録にし、入院時・経過・退院時の記載を救急の続きとして書くため。医師の決定（`docs/clinical-use.md` の 1e）。設計は `docs/enhancement-plan.md` の 8.13・8.14。書き込み先は `case_records` が増える（保存の入口で識別情報の検査・版の検査） |
-| 架空症例の作成 | 「症例」の中の「書籍から架空症例を作る」で、テーマ（病名・症候）・場面・難しさ・学ばせたいこと・落とし穴の有無から、書籍が示す典型的な所見をもとに**新しい架空症例**を作る（導入文・症例の入力用・所見の表・見立て・落とし穴・教訓。診断は「見立て」にだけ書かれ、最初は畳まれる）。書籍の症例文を写していないかを機械で検査（30字以上の一致を警告し、Modules 用の下書きのコピーを止める）。作った症例は「症例モードに入れる」で、自分のアセスメントと草案の見比べに使える。clinical-modules の訓練症例（`drills/*.toml`）の下書きも出す（`[case.answers]` は作らない） | 書籍を参考にした訓練用の架空症例を作るため。医師の決定（`docs/clinical-use.md` の 1d の④）。数値は例示で、閾値・用量は書かせない |
+| 外来の記録（初診 → 再診） | 「症例の記録」で、外来の記録を作る（固定した外来の症例を初診として、または**再診から**始めて**前回の方針を貼る**）。日は「基準日」と「基準日からN日後」だけで、日付は入れない。再診では、前回の計画の結果（実施・変更・中止は先生が選ぶ。記録のないものは「予定のまま」）・その日の先生の言葉・問題ごとの推移（選ばなければ空欄）・課題を記録し、**再診の記載（外来再診 A02）と初診の記載（A01）**を AI を使わずに組み立てる（その日より後に記録したことは入らない）。保存の期間は60日のまま（長く空いたら再診から始め直す）。Casebook へは送れない（外来の受診には受診日の暦日が要るため）。外来再診の場面（AI の草案）は未作成 | 入院の記録と同じ保存・識別情報の検査・版の確認の上に載せた。実機での使い心地は未確認 |
+| 架空症例の作成 | 「症例」の中の「書籍から架空症例を作る」で、テーマ（病名・症候）・場面・難しさ・学ばせたいこと・落とし穴の有無から、書籍が示す典型的な所見をもとに**新しい架空症例**を作る（導入文・症例の入力用・所見の表・見立て・落とし穴・教訓。診断は「見立て」にだけ書かれ、最初は畳まれる）。書籍の症例文を写していないかを機械で検査（30字以上の一致を警告し、Modules 用の下書きのコピーを止める）。作った症例は「症例モードに入れる」で、自分のアセスメントと草案の見比べに使える。clinical-modules の訓練症例（`drills/*.toml`）の下書きも出す（`[case.answers]` は作らない）。依頼に日数（3〜14日）を付けると、**入院後の日ごとの経過**（できごと・症状・所見と検査〔数値は例示〕・治療と処置〔用量は書かない〕。書籍の典型的な経過に沿う架空の経過）も作り、画面は**1日ずつ**見せる（日ごとの記載の練習。本物の API での確認はまだない） | 書籍を参考にした訓練用の架空症例を作るため。医師の決定（`docs/clinical-use.md` の 1d の④）。数値は例示で、閾値・用量は書かせない |
 | 数値の突き合わせ・薄い表示 | 回答中の数値を、検索結果の本文と機械で突き合わせ（引用の中／検索結果の中／どこにもない）、書籍の引用がない文を薄く表示する | 用量の誤りを、モデルの自己申告の印だけに頼らず見つけるため。判定ではなく注意 |
 | 失敗時の振る舞い | 回答の生成が失敗しても、見つかった節（なければ質問の内容語で検索し直した節）を出す。途中までの回答は残す | 回答が出ないときも、書籍を引ける状態を保つため |
 
@@ -56,7 +57,7 @@ ingest/      Markdown → 検証 → SQLite（Python 3.11+、PyYAML のみ）
 schema.sql   テーブルと FTS5 定義
 worker/      Cloudflare Worker（TypeScript）と Node 製テスト
   src/       handler / anthropic(ツールループ) / search / format / prompt(システムプロンプト) / db / tokenize
-  test/      node:test（362件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
+  test/      node:test（396件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
 web/         PWA（ビルド不要、外部ライブラリ無し）
 eval/        評価（run_eval.ts 検索・run_ask_eval.ts 回答・lib.ts、clinical.template.jsonl、smoke 22問）。手順は docs/evaluation.md
 scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）、sample_numeric.py（数値の転写誤り率の作業表と集計）
@@ -73,6 +74,7 @@ docs/        FORMAT.md（転写の書式）、clinical-use.md（実臨床の参�
 ```bash
 python3 -m ingest validate rk4 chapters/ch01.md chapters/ch02.md          # 検証だけ。error があれば直す
 python3 -m ingest build --db library.sqlite rk4 chapters/*.md             # 章単位で冪等に追加
+python3 -m ingest conversion-log --db library.sqlite rk4 log.jsonl        # 変換ログ（照合の状況）を警告として載せる（任意。docs/FORMAT.md の 7）
 python3 -m ingest.export_sql library.sqlite d1/                           # D1 用 SQL に書き出す
 ```
 
@@ -122,7 +124,9 @@ npx wrangler secret put APP_TOKEN          # 16文字以上の長いランダム
 npx wrangler deploy
 ```
 
-`/api/ask` の1日の上限は `wrangler.jsonc` の `DAILY_ASK_LIMIT`（日本時間で数える。仮の値 100、`"0"` で上限なし）。回数は D1 の `usage_daily`（日付と回数だけ）に Worker が自分で作って数えます。`/api/extract`（文章からの取り込み）も、同じ数に数えます。取り込みだけ別のモデルにしたいときは、`wrangler.jsonc` に `EXTRACT_MODEL` を足します（未設定なら `MODEL`）。
+`/api/ask` の1日の上限は `wrangler.jsonc` の `DAILY_ASK_LIMIT`（日本時間で数える。仮の値 100、`"0"` で上限なし）。回数は D1 の `usage_daily`（日付と整数だけ）に Worker が自分で作って数えます。同じ表に、回答の様子を日ごとに数える4つの整数（書籍を検索せずに回答／検索して1節も見つからない／書籍の引用がない／書籍に見つからない数値がある）も入ります（質問・回答の文字は入れません）。
+
+**Cloudflare Access の JWT の検証（任意）**: Access で守るなら、`ACCESS_TEAM_DOMAIN`（`<チーム名>.cloudflareaccess.com`）と `ACCESS_AUD`（アプリの Audience tag）を**両方**設定します（`wrangler secret put` か `vars`。値は Cloudflare の画面にあります）。設定すると、`/api/health` と `/api/search` 以外の `/api/` が、アプリのトークンに加えて Access の JWT を要求します（`/api/search` は、サービスバインディングで呼ぶ clinical-modules のため、アプリのトークンだけです）。片方だけの設定は、全部 500 で断ります。評価の道具（`eval/`）を Access の背後の Worker に向けるときは、Access のサービストークンを `CF_ACCESS_CLIENT_ID`・`CF_ACCESS_CLIENT_SECRET` の環境変数で渡します。設定しなければ、今までどおりアプリのトークンだけです。`/api/extract`（文章からの取り込み）も、同じ数に数えます。取り込みだけ別のモデルにしたいときは、`wrangler.jsonc` に `EXTRACT_MODEL` を足します（未設定なら `MODEL`）。
 
 表示された URL を iPhone / iPad の Safari で開き、共有 → 「ホーム画面に追加」。初回に設定画面でアクセストークンを入力します
 （この端末のブラウザにだけ保存）。会話は、1往復ごとにサーバー（D1）に保存され、ヘッダーの「会話」から開き直せます（最後のやりとりから 30 日で自動的に消えます。識別情報の確認を通した質問は保存されません。`docs/clinical-use.md` の 1d）。URL は推測されにくいものにし、可能なら Cloudflare Access を前段に置いてください。
@@ -140,7 +144,7 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（362件）
+cd worker && node --test test/*.test.ts            # TS テスト（396件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
@@ -157,6 +161,7 @@ python3 tests/e2e/ui_extract.py http://localhost:8787 /tmp/uextract # 文章か�
 python3 tests/e2e/ui_casebook.py http://localhost:8787 /tmp/ucasebook # Casebook へ送る（折りたたみ・項目・実/架空の選び・パケットの読み戻し・印は取り込んだとき・送信後に直した項目）
 python3 tests/e2e/ui_record.py http://localhost:8787 /tmp/urecord # 症例の記録（時間軸・引き継ぎ・問題の板・A05・経過・A06〜A08・自動保存・版の競合・終える）
 python3 tests/e2e/ui_scene.py http://localhost:8787 /tmp/uscene   # 場面別の草案・記録の要約・問題ごとの書籍の根拠（要約は送る前に見える・会話に残らない・頁は先生が残す）
+python3 tests/e2e/ui_outpatient.py http://localhost:8787 /tmp/uoutpatient # 外来の記録（初診／再診から・前回の方針を貼る・基準日からの日数・再診の記載 A02・Casebook には出ない）
 # 記載の型と、その欄への振り分け表 ROUTES を取り込み直す（clinical-modules のチェックアウトから。--check で差があれば終了コード1）
 python3 scripts/import_note_types.py --modules ../clinical-modules
 # 場面・症候の質問の構造と、各質問のカテゴリ cat を取り込み直す（同上。規則・鑑別は取り込まない）
@@ -179,7 +184,7 @@ npx wrangler dev --local
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 82 件・TypeScript 362 件のテスト、型チェック（2026-10-25 に手元で再実行）。`wrangler deploy --dry-run`（設定とバンドル）は 2026-10-24 時点。
+- Python 94 件・TypeScript 396 件のテスト、型チェック（2026-10-25 に手元で再実行）。`wrangler deploy --dry-run`（設定とバンドル）は 2026-10-24 時点。
 - 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。
@@ -209,7 +214,7 @@ Sonnet 5.5（入力 $2 / 出力 $10 per MTok）で 1 質問あたり概ね 5〜1
 - 文献（参考文献リスト）は既定で検索対象外。PMID は節の全文表示から PubMed へ飛べます。
 - 図の「図中の文字・構造」は転写者の記述で、検索はできるが引用してはいけない扱い。
 - 転写の誤りは検出できません（`validate` は形式の検査）。重要な数値は必ず原本で再確認する運用が前提です。
-- 変換ログ（章ごとの照合状況）の取り込みは未実装（`issues` テーブルに `source='conversion-log'` として載せる設計）。
+- 変換ログ（章ごとの照合状況）の取り込みは実装済み（`python3 -m ingest conversion-log`。`issues` に `source='conversion-log'`）。ただし**実物の変換ログの形式は見ていない**ので、読む形は `docs/FORMAT.md` の 7 の JSON lines に決めてあり、作る側の出力からの変換が別に要ります。
 - 取り込み時に API を使う改善案: 文脈付き索引（Haiku 5.5 でチャンクごとの要約）、頁画像と本文の突き合わせによる誤転写の検出（Batch API で半額）。
 
 ## 安全・プライバシー・著作権

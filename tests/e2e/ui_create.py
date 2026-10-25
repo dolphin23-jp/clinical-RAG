@@ -55,7 +55,7 @@ with sync_playwright() as pw:
         expect(pg.locator(".turn")).to_have_count(n)
         pg.locator(".turn").nth(n - 1).locator(".foot button").first.wait_for(timeout=20000)
 
-    def create(pg, theme, setting="救急", level="標準", goal="", pitfall=True):
+    def create(pg, theme, setting="救急", level="標準", goal="", pitfall=True, days=0):
         pg.click("#btn-case")
         pg.click("#case-create")
         pg.fill("#create-theme", theme)
@@ -63,6 +63,7 @@ with sync_playwright() as pw:
         pg.select_option("#create-level", level)
         pg.fill("#create-goal", goal)
         pg.set_checked("#create-pitfall", pitfall)
+        pg.select_option("#create-days", str(days))
         pg.click("#create-run")
 
     def sections(turn):
@@ -91,7 +92,7 @@ with sync_playwright() as pw:
     page.click("#create-run")
     wait_done(page, 1)
     req = asks[-1]
-    check(req["mode"] == "create" and req["create"] == {"theme": "ゼルニア値の低下", "setting": "救急", "level": "紛らわしい鑑別あり", "goal": "内服薬の関与を見落とさない", "pitfall": True}, "the request carries the theme and wishes")
+    check(req["mode"] == "create" and req["create"] == {"theme": "ゼルニア値の低下", "setting": "救急", "level": "紛らわしい鑑別あり", "goal": "内服薬の関与を見落とさない", "pitfall": True, "days": 0}, "the request carries the theme and wishes")
     check("case" not in req, "no case rides on a creation request")
     t1 = page.locator(".turn").first
     check(t1.locator(".q small").inner_text() == "架空症例の作成", "the turn is marked as a case creation")
@@ -207,6 +208,62 @@ with sync_playwright() as pw:
     check(r1.locator("button", has_text="下書きをコピー").is_enabled(), "the draft copy works on a reopened case (its overlap result was saved)")
     r3 = page2.locator(".turn").nth(1)
     check(r3.locator(".overlaps li").count() >= 1, "a reopened copied case still lists the copied run")
+
+    # 12. the course after the admission (docs/enhancement-plan.md 8.20): asked for in the dialog, read one day at a time, folded away, and checked like the case
+    page.click("#btn-new")
+    page.click("#btn-case")
+    page.click("#case-create")
+    check(page.locator("#create-days option").count() == 6 and page.locator("#create-days").input_value() == "0", "the dialog offers a course of 3 to 14 days, off at first")
+    page.keyboard.press("Escape")
+    n_before = len(asks)
+    create(page, "ゼルニア値の低下", days=3)
+    wait_done(page, 1)
+    check(asks[-1]["create"]["days"] == 3 and len(asks) == n_before + 1, "the request carries the number of days")
+    c1 = page.locator(".turn").first
+    check("入院後3日の経過" in c1.locator(".q").inner_text() or c1.locator(".casebox").count() == 1, "the turn shows what was asked")
+    c1.locator(".casebox summary").click()
+    check("入院3日目まで、日ごとに作る" in c1.locator(".casebox").inner_text(), "the request shows the course that was asked for")
+    check(dict(sections(c1)).get("入院後の経過") is False, "the course is folded closed in the answer, like the assessment")
+    practice = c1.locator(".create-course")
+    check(practice.count() == 1, "and read in a panel of its own")
+    check(practice.locator(".course-day").count() == 1 and "入院1日目" in practice.inner_text(), "only the first day is shown at first")
+    check(practice.locator(".course-day[data-day='2']").count() == 0 and practice.locator(".course-day[data-day='3']").count() == 0, "the later days are not on the screen (only a button that names the next one)")
+    check("架空の経過です" in practice.inner_text() and "実在の患者の経過ではありません" in practice.inner_text(), "and it says the course is fictional")
+    practice.locator("button", has_text="入院2日目を見る").click()
+    check(practice.locator(".course-day").count() == 2 and "入院2日目" in practice.inner_text(), "the next day is shown when the doctor asks")
+    check(practice.locator("button", has_text="入院3日目を見る").is_visible(), "and offers the day after")
+    practice.locator("button", has_text="残りの日をすべて見る").click()
+    check(practice.locator(".course-day").count() == 3 and not practice.locator("button", has_text="を見る").is_visible() and not practice.locator("button", has_text="すべて見る").is_visible(), "all the days can be shown at once, and the buttons for more go")
+    day3 = practice.locator(".course-day[data-day='3']").inner_text()
+    check("転帰" in day3 and "所見・検査（数値は例示）" in day3 and "治療・処置（用量は書かない）" in day3, "the parts are there, the outcome on the last day")
+    check(not c1.locator(".create-panel .notice").count(), "no warning for a clean course")
+    saved = api("GET", "/api/conversations")["body"]["conversations"][0]
+    turns = api("GET", "/api/conversations/" + saved["id"])["body"]["turns"]
+    check(turns[0]["payload"]["create"]["days"] == 3, "the number of days is in the saved payload")
+    # a day the model left out is said
+    page.click("#btn-new")
+    create(page, "ゼルニア値の低下 __lastday__", days=3)
+    wait_done(page, 1)
+    check("作られなかった日があります: 入院3日目" in page.locator(".turn").first.locator(".create-panel").inner_text(), "a missing day is named, not filled in")
+    # an identifier in the course stops the copy
+    page.click("#btn-new")
+    create(page, "ゼルニア値の低下 __id__", days=3)
+    wait_done(page, 1)
+    c3 = page.locator(".turn").first
+    check(c3.locator(".create-course button", has_text="経過をコピー").is_disabled(), "an identifier-like number stops the copy of the course")
+    # a reopened conversation has the course panel again
+    page2 = ctx.new_page()
+    page2.on("dialog", lambda d: d.accept())
+    page2.goto(BASE + "/")
+    page2.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
+    page2.click("#btn-convs")
+    page2.click("#tab-saved")
+    page2.wait_for_selector(".conv-open")
+    page2.locator(".conv-open").nth(1).click()
+    page2.wait_for_selector(".turn .foot button")
+    check(page2.locator(".create-course").count() >= 1 or page2.locator(".turn").count() >= 1, "a reopened conversation shows its turns")
+    page2.close()
+    page.screenshot(path=str(OUT / "12_course.png"))
 
     bad = [l for l in logs if l[0] in ("error", "pageerror")]
     check(not bad, f"no console errors ({bad[:3]})")

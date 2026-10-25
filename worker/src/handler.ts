@@ -12,7 +12,8 @@ import { numericWorksheet } from "./numsample.ts";
 import { caseSystem, createSystem } from "./prompt.ts";
 import { getParent, searchParents } from "./search.ts";
 import { expandQueries } from "./synonyms.ts";
-import { jstDay, type AskCounter } from "./usage.ts";
+import { jstDay, type AskCounter, type UsageKind } from "./usage.ts";
+import type { AccessVerifier } from "./access.ts";
 
 export interface PageStore {
   get(key: string): Promise<{ body: ReadableStream | ArrayBuffer | null; contentType?: string } | null>;
@@ -41,7 +42,14 @@ export interface AppDeps {
   conversationRetentionDays?: number;
   /** case records (recordstore.ts) expire this many days after their last update (0 = never) */
   caseRecordRetentionDays?: number;
+  /** Cloudflare Access JWT check (access.ts), for every /api/ path except /api/health and /api/search; unset = the app token only */
+  access?: AccessVerifier;
+  /** set when the Access settings are half there: every /api/ request is then refused (500) instead of running without the second lock */
+  accessProblem?: string;
 }
+
+/** Called by clinical-modules through a service binding, which carries no Access token (docs/enhancement-plan.md T1-2): the app token is its only lock. */
+const ACCESS_EXEMPT = new Set(["/api/search"]);
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
 
@@ -95,6 +103,24 @@ async function overDailyLimit(deps: AppDeps): Promise<Response | null> {
   return json({ error: `1日の利用上限（${limit}回）に達しました。日本時間の0時に戻ります。`, code: "daily_limit", limit }, 429);
 }
 
+/**
+ * The daily counts of how an answer went (usage.ts USAGE_KINDS).  Only a finished answer is counted (a failed one has no shape), a made-up case is not an
+ * answer from the books, and a failure to write never reaches the doctor.  Nothing of the question or the answer is passed on: four yes/no values.
+ */
+async function noteUsage(deps: AppDeps, final: Extract<StreamEvent, { t: "final" }>, found: boolean): Promise<void> {
+  if (!deps.counter?.note) return;
+  const kinds: UsageKind[] = [];
+  if (!final.searched_books) kinds.push("no_search");
+  else if (!found) kinds.push("no_hits");
+  if (!final.blocks.some((b) => b.citations.some((c) => c.kind === "book"))) kinds.push("no_cite");
+  if (final.numbers.some((n) => n.status === "not_found")) kinds.push("num_flag");
+  try {
+    await deps.counter.note(jstDay(deps.now?.() ?? new Date()), kinds);
+  } catch {
+    // best effort, like the cap: the counts are for the doctor's own reading of how the tool does, not for the answer
+  }
+}
+
 export async function handle(req: Request, deps: AppDeps): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -103,7 +129,12 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
   }
   if (path === "/api/health") return json({ ok: true });
   if (!deps.appToken || deps.appToken.length < 16) return json({ error: "server misconfigured: APP_TOKEN must be set (>= 16 chars)" }, 500);
+  if (deps.accessProblem) return json({ error: deps.accessProblem }, 500);
   if (!authorized(req, deps.appToken)) return json({ error: "unauthorized" }, 401);
+  if (deps.access && !ACCESS_EXEMPT.has(path)) {
+    const why = await deps.access.check(req);
+    if (why) return json({ error: "unauthorized", code: "access", reason: why }, 401);
+  }
 
   try {
     if (path === "/api/books" && req.method === "GET") {
@@ -278,7 +309,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       if (brief && !(kase && scene && BRIEF_SCENES.includes(scene))) return json({ error: "the record's summary goes with a case and a scene that follows a record", code: "brief_needs_scene" }, 400);
       if (scene && RECORD_SCENES.includes(scene) && !brief) return json({ error: `${SCENE_LABELS[scene]}の草案には、症例の記録の要約が要ります。記録を開いてから依頼してください。`, code: "record_required" }, 400);
       let question = typeof body?.question === "string" ? body.question.trim() : "";
-      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}）` : scene ? `${MODE_LABELS[mode]}（${SCENE_LABELS[scene]}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
+      if (!question && mode && mode !== "ask") question = create ? `${MODE_LABELS.create}（${create.theme}${create.days ? `・入院後${create.days}日の経過` : ""}）` : scene ? `${MODE_LABELS[mode]}（${SCENE_LABELS[scene]}）` : MODE_LABELS[mode]; // a mode button sends no text of its own
       if (!question || question.length > 4000) return json({ error: "question must be 1-4000 characters" }, 400);
       const history = Array.isArray(body.history)
         ? body.history
@@ -295,7 +326,15 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
       const allowed = deps.allowedModels?.length ? deps.allowedModels : [deps.model];
       const model = typeof body.model === "string" && allowed.includes(body.model) ? body.model : deps.model;
       const bookIds = Array.isArray(body.book_ids) ? body.book_ids.map(String).slice(0, 20) : undefined;
-      return sse(req, async (emit) => {
+      return sse(req, async (rawEmit) => {
+        // how the answer went, counted per day without keeping anything of it (usage.ts): seen on the way out, written after the answer is complete
+        let found = false;
+        let final: Extract<StreamEvent, { t: "final" }> | null = null;
+        const emit = (e: StreamEvent) => {
+          if (e.t === "sources" && e.items.length) found = true;
+          if (e.t === "final") final = e;
+          rawEmit(e);
+        };
         await runAsk(
           { db: deps.db, apiKey: deps.apiKey, model, webDomains: deps.webDomains, fetchImpl: deps.fetchImpl, apiBase: deps.apiBase, signal: req.signal },
           {
@@ -309,6 +348,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
           },
           emit,
         );
+        if (final && !create) await noteUsage(deps, final, found);
       });
     }
     return json({ error: "not found" }, 404);
