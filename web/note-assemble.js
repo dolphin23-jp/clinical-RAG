@@ -6,14 +6,15 @@
 // required field with nothing to put in says （未入力）; it is not filled with prose.  A conditional field with nothing is left out.
 // A plan item is a proposal: it is labelled as such and is never placed in a field for what was already done.
 import { ageText } from "./case-model.js";
+import { dayLabelFor } from "./case-course.js";
 import { sceneHeadingRole } from "./draft-scenes.js";
 import { REST_LABEL, REST_NOTE, ROUTED_LABEL, answeredText, restText, routeAnswers } from "./note-route.js";
 import { NOTE_TYPES } from "./note-types.js";
 
 /** The types offered, in picker order.  The others are imported (note-types.js) but not wired yet. */
 export const ENABLED = ["A04", "A01", "A05", "A06", "A08", "B02", "B06"];
-/** Offered only from a case record (web/record-notes.js, with its own `fill`): the interim summary has nothing to take from a typed case alone. */
-export const RECORD_ONLY = ["A07"];
+/** Offered only from a case record (web/record-notes.js, with its own `fill`): the interim summary has nothing to take from a typed case alone; nor has the revisit note (A02). */
+export const RECORD_ONLY = ["A07", "A02"];
 
 export const UNFILLED = "（未入力）";
 export const AI_MARK = "〔AI草案〕";
@@ -82,6 +83,7 @@ export const FILL = {
  */
 export const RECORD_FILL = {
   A06: { context: ["b:day_context"], interval: ["b:day_interval"], subjective: ["b:day_subjective"], objective: ["b:day_objective"], overall: ["b:day_overall"], problem_ap: ["b:day_ap"], general: ["b:day_general"], handover: ["b:day_handover"] },
+  A02: { context: ["b:rv_context"], previous_plan: ["b:rv_previous"], interval: ["b:rv_interval"], subjective: ["b:rv_subjective"], objective: ["b:rv_objective"], problem_ap: ["b:rv_ap"], followup: ["b:rv_followup"] },
   A07: { context: ["b:sum_context"], admission: ["ctx", "b:route", "b:summary"], course: ["b:sum_course"], condition: ["b:sum_condition"], problems: ["b:sum_ap"], ongoing: ["b:sum_ongoing"], pending: ["b:sum_pending"], contingency: ["b:outlook"], handover: ["b:sum_handover"] },
   A08: { context: ["b:dc_context"], diagnoses: ["b:dc_dx"], hpi: ["complaint", "b:route"], initial: ["vitals", "findings", "structured"], course: ["b:dc_course"], procedures: ["b:dc_procedures"], condition: ["b:dc_state"], medications: ["b:dc_meds"], followup: ["b:dc_followup"], unresolved: ["b:dc_tasks"] },
 };
@@ -175,7 +177,7 @@ export function assemble(typeId, { kase = {}, items = [], board = null, fill: fi
   // an adopted item whose role has no field in this type is reported, never silently dropped
   const unplaced = adopted.filter((i) => !used.has(i));
   const asOf = Number.isInteger(board?.asOf) ? board.asOf : null;
-  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, extras, routing, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf };
+  return { type: { id: type.id, title: type.title, version: type.version, status: type.status }, sections, extras, routing, adopted: used.size + boardAi, unplaced: unplaced.length, unfilled, omitted, asOf, ...(board?.outpatient === true ? { outpatient: true } : {}) };
 }
 
 const ADM_LABELS = { route: "入院の経路・目的（先生の入力）", summary: "Clinical Summary（先生の入力）", baseline: "ベースライン（先生の入力）", general: "全身管理・治療目標・予防（先生の入力）", outlook: "再評価・退院条件・申し送り（先生の入力）" };
@@ -220,8 +222,10 @@ const citeLine = (c) => (c.kind === "web" ? `Web: ${c.title || c.url || ""}`.tri
  * 【出典未確認・要確認】 on a number is always kept: it is a warning about the number, not a mark of origin.
  */
 export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
+  // a day is "入院N日目" in an admission's notes and "基準日からN日後" in an outpatient record's (case-course.js dayLabelFor)
+  const dl = (n) => dayLabelFor({ kind: note.outpatient ? "outpatient" : "inpatient" }, n);
   const out = [`【${note.type.title}】下書き`, BLANK_HEADER];
-  if (note.asOf) out.push(`※入院${note.asOf}日目の時点の記録です。確度・計画の状態・推移・課題の完了は、その日までに記録したものだけです。文章（問題名・評価・計画・先生が入力した文）は、最後に編集したものです。`);
+  if (note.asOf) out.push(`※${dl(note.asOf)}の時点の記録です。確度・計画の状態・推移・課題の完了は、その日までに記録したものだけです。文章（問題名・評価・計画・先生が入力した文）は、最後に編集したものです。`);
   if (aiMark && note.adopted) out.push(AI_NOTICE);
   out.push("");
   const cites = new Map();
@@ -270,8 +274,8 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
       } else if (b.kind === "turns") {
         out.push(`［${b.label}］`);
         for (const t of b.days) {
-          if (!t.lines.length && !t.trends.length) out.push(`入院${t.day}日目: ${UNFILLED}`);
-          else out.push(`入院${t.day}日目:`);
+          if (!t.lines.length && !t.trends.length) out.push(`${dl(t.day)}: ${UNFILLED}`);
+          else out.push(`${dl(t.day)}:`);
           for (const l of t.lines) out.push(`・${l.label}: ${l.text}`);
           for (const r of t.trends) out.push(`・推移 ${refName(r.problem, r.ai)}: ${trendText(r)}`);
         }
@@ -302,10 +306,10 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
       } else if (b.kind === "ap") {
         b.problems.forEach((p, n) => {
           out.push(`［${n + 1}. ${problemName(p, !!b.markProblems)}］`);
-          if (p.trend && (p.trend.stateLabel || p.trend.note)) out.push(`推移（入院${p.trend.day}日目）: ${trendText(p.trend)}`);
+          if (p.trend && (p.trend.stateLabel || p.trend.note)) out.push(`推移（${dl(p.trend.day)}）: ${trendText(p.trend)}`);
           if (p.history?.length) {
             out.push("推移の記録:");
-            for (const h of p.history) out.push(`・入院${h.day}日目 ${trendText(h)}`);
+            for (const h of p.history) out.push(`・${dl(h.day)} ${trendText(h)}`);
           }
           // a named problem with nothing recorded for it (the discharge summary lists every named problem): blank, not filled in
           if (!p.assess.length && !p.plan.length && !p.history?.length && !(p.trend && (p.trend.stateLabel || p.trend.note))) out.push(UNFILLED);

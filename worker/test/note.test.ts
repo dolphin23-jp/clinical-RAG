@@ -477,7 +477,9 @@ test("pins: the assembly and the note screen never send, save, export, print or 
   }
   // nothing from the AI side is imported by the assembly: it is deterministic
   const asm = readFileSync(web("note-assemble.js"), "utf-8");
-  assert.deepEqual([...asm.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./case-model.js", "./draft-scenes.js", "./note-route.js", "./note-types.js"]);
+  assert.deepEqual([...asm.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./case-model.js", "./case-course.js", "./draft-scenes.js", "./note-route.js", "./note-types.js"]);
+  // the one thing taken from the course is how a day is called ("入院N日目" or "基準日からN日後"): case-course.js imports nothing at all
+  assert.deepEqual([...readFileSync(web("case-course.js"), "utf-8").matchAll(/^import /gm)], []);
   // the routing reads the question structure and the table, and nothing else: pure functions
   assert.deepEqual([...readFileSync(web("note-route.js"), "utf-8").matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./intake.js", "./note-types.js"]);
   // the scenes' headings are plain data: they import nothing at all (docs/enhancement-plan.md 8.16)

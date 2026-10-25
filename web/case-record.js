@@ -11,7 +11,7 @@
 //  8. No date: the time axis is minutes from the arrival (or the clock time of the encounter); "入院N日目" comes with the later encounters.
 // Checks (checks()) count what is blank or undecided; they are notes, not judgements.
 import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
-import { DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, cleanLog, courseChecks, dayNo, dropEmptyDays, emptyCourse, stampLog } from "./case-course.js";
+import { ALL_DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, cleanLog, courseChecks, dayNo, dropEmptyDays, emptyCourse, stampLog } from "./case-course.js";
 import { cleanCasebook } from "./casebook-state.js";
 import { relativizeDates } from "./date-relative.js";
 import { contextOf, coreMissing, cleanAnswers, isAnswered, isVisible, lineText, shortLabel } from "./intake.js";
@@ -198,14 +198,16 @@ export function cleanRecord(raw) {
   const reading = {};
   for (const [k, v] of isObj(raw.ed.reading) ? Object.entries(raw.ed.reading).slice(0, LIMITS.reading) : []) if (QID.test(k) && READINGS.has(v)) reading[k] = v;
   const course = cleanCourse(raw.course, problems.map((p) => p.id));
-  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, course, casebook: cleanCasebook(raw.casebook), seq: { p: 0, i: 0, a: 0, k: 0, m: 0 } };
+  // an outpatient record (docs/enhancement-plan.md 8.19) says so; an admission record carries no `kind` (as every record did before)
+  const outpatient = raw.kind === "outpatient";
+  const rec = { v: RECORD_VERSION, ...(outpatient ? { kind: "outpatient", start: raw.start === "revisit" ? "revisit" : "first" } : {}), title: str(raw.title, LIMITS.title) || recordTitle(kase, outpatient ? "outpatient" : "inpatient"), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, course, casebook: cleanCasebook(raw.casebook), seq: { p: 0, i: 0, a: 0, k: 0, m: 0 } };
   rec.seq = seqOf(rec, raw.seq);
   return rec;
 }
 
 /** The title shown in the list: the case's one-line summary (no date). */
-export function recordTitle(kase) {
-  return (caseSummary(kase) || "症例").slice(0, LIMITS.title);
+export function recordTitle(kase, kind = "inpatient") {
+  return `${kind === "outpatient" ? "外来: " : ""}${caseSummary(kase) || "症例"}`.slice(0, LIMITS.title);
 }
 
 /** A short fingerprint of a case (the hash of its text): stored instead of the text, to tell whether a turn was asked with this record's case. */
@@ -221,10 +223,20 @@ export function caseHash(kase) {
 /** Whether a case is one this record has had (the current one or an earlier version of it).  Not proof of the same patient: a hint to ask. */
 export const isRecordCase = (rec, kase) => rec.ed.seen.includes(caseHash(cleanCase(kase)));
 
-export function newRecord(kase) {
+/**
+ * A record of a case.  `kind: "outpatient"` makes an outpatient record (8.19): its day 1 is the base day, and `start` says how it began: "first" (the
+ * case is the first visit) or "revisit" (the first visit was made elsewhere; the record begins at a revisit, the doctor pastes the plan of the last
+ * visit, and the working day is the day after the base day).
+ */
+export function newRecord(kase, { kind = "inpatient", start = "first" } = {}) {
   const c = cleanCase(kase);
-  return cleanRecord({ v: RECORD_VERSION, title: recordTitle(c), ed: { case: c, adopted: [], seen: [], reading: {} }, adm: {}, problems: [], contingency: [], course: emptyCourse(), seq: {} });
+  const course = emptyCourse();
+  if (kind === "outpatient" && start === "revisit") course.today = 2;
+  return cleanRecord({ v: RECORD_VERSION, ...(kind === "outpatient" ? { kind, start } : {}), title: recordTitle(c, kind), ed: { case: c, adopted: [], seen: [], reading: {} }, adm: {}, problems: [], contingency: [], course, seq: {} });
 }
+
+/** Whether a record is an outpatient record (first visit and revisits); every other record is an admission's. */
+export const isOutpatient = (rec) => rec?.kind === "outpatient";
 
 // ---------------------------------------------------------------- no calendar date is kept
 /**
@@ -269,7 +281,7 @@ function relativize(rec, now) {
   for (const e of next.contingency) fix(e, "text");
   for (const a of next.ed.adopted) fix(a, "text");
   for (const d of next.course.days) {
-    for (const f of DAY_FIELDS) fix(d, f.key);
+    for (const f of ALL_DAY_FIELDS) fix(d, f.key);
     for (const t of Object.values(d.trend)) fix(t, "note");
   }
   for (const k of next.course.tasks) for (const key of ["text", "owner", "due"]) fix(k, key);
@@ -287,7 +299,7 @@ function relativize(rec, now) {
 export function setCase(rec, kase) {
   const next = clone(rec);
   next.ed.case = cleanCase(kase);
-  next.title = recordTitle(next.ed.case);
+  next.title = recordTitle(next.ed.case, next.kind);
   const h = caseHash(next.ed.case);
   next.ed.seen = [...next.ed.seen.filter((x) => x !== h), h].slice(-LIMITS.seen);
   return next;
@@ -418,6 +430,35 @@ export function addEntry(rec, problemId, which, text = "") {
   if (which === "plan") e.state = "planned";
   listOf(p, which).push(e);
   return { rec: next, id };
+}
+
+/**
+ * The plan of the last visit, pasted by the doctor (an outpatient record that began at a revisit: the last visit is not in this record).  Each
+ * non-empty line becomes a plan entry of the problem, "planned", the doctor's own words, dated the base day (day 1: it came before the revisit).
+ * `problemId` null makes a new problem for them (named by `label`, if given).  Lines past the room (LIMITS.entries a problem) are not added.
+ * Returns { rec, added, left, id } (`left`: the lines that did not fit; `id`: the problem they went to).  The doctor's act: nothing calls this by itself.
+ */
+export function pastePlan(rec, problemId, text, label = "") {
+  const next = clone(rec);
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:[-・*•]|\d+[.)）])\s*/, "").trim())
+    .filter(Boolean);
+  let p = problemId ? findProblem(next, problemId) : null;
+  if (problemId && !p) return { rec, added: 0, left: lines.length, id: null };
+  if (!p) {
+    if (next.problems.length >= LIMITS.problems) return { rec, added: 0, left: lines.length, id: null };
+    const id = nextId(next, "p");
+    p = { id, label: str(label, LIMITS.label), certainty: "", from: "typed", added: 1, assess: [], plan: [] };
+    next.problems.push(p);
+  }
+  let added = 0;
+  for (const line of lines) {
+    if (p.plan.length >= LIMITS.entries) break;
+    p.plan.push({ id: nextId(next, "i"), text: str(line, LIMITS.text), from: "typed", added: 1, state: "planned" });
+    added++;
+  }
+  return { rec: next, added, left: lines.length - added, id: p.id };
 }
 
 /** Changes an entry's text, and for a plan entry its state and reason.  A state other than the three is ignored. */
@@ -689,10 +730,11 @@ const ROLE_LABEL = { problems: "問題リスト", assessment: "各問題の評�
 export function checks(rec, FLOWS) {
   const out = [];
   const add = (id, text, items = []) => out.push({ id, text, items });
+  const outpatient = isOutpatient(rec);
   const fa = flowOf(rec, FLOWS);
   if (fa) {
     const miss = coreMissing(fa.flow, fa.answers, rec.ed.case);
-    if (miss.length) add("core_missing", `救急の中核の質問のうち、未入力（未確認。陰性ではありません）が ${miss.length} 件`, miss.map((m) => shortLabel(m.label)));
+    if (miss.length) add("core_missing", `${outpatient ? "初診" : "救急"}の中核の質問のうち、未入力（未確認。陰性ではありません）が ${miss.length} 件`, miss.map((m) => shortLabel(m.label)));
     const w = waiting(fa.flow, fa.answers, rec.ed.case);
     const pend = w.filter((x) => x.kind === "pend");
     const wait = w.filter((x) => x.kind === "wait");
@@ -702,7 +744,7 @@ export function checks(rec, FLOWS) {
     if (guessed.length) add("assumed_times", `時刻だけでは決められず、仮の読み方をした時刻が ${guessed.length} 件（時間軸で読み方を選べます）`, guessed.map((r) => r.label));
   }
   const undecided = rec.ed.adopted.filter((a) => !a.to);
-  if (undecided.length) add("undecided", `救急で採用した項目のうち、入院時へ持ってくるか決めていないものが ${undecided.length} 件`, undecided.map((a) => `${ROLE_LABEL[a.role] ?? a.role}: ${a.text.slice(0, 30)}`));
+  if (undecided.length) add("undecided", `${outpatient ? "初診" : "救急"}で採用した項目のうち、${outpatient ? "問題の板" : "入院時"}へ持ってくるか決めていないものが ${undecided.length} 件`, undecided.map((a) => `${ROLE_LABEL[a.role] ?? a.role}: ${a.text.slice(0, 30)}`));
   const unnamed = rec.problems.filter((p) => !p.label);
   if (unnamed.length) add("unnamed", `名前のない問題が ${unnamed.length} 件（評価・計画のある問題は、記載には「（名前なし）」として入ります）`, []);
   const noCert = rec.problems.filter((p) => p.label && !p.certainty);
@@ -711,11 +753,13 @@ export function checks(rec, FLOWS) {
   if (noAssess.length) add("no_assessment", `評価を書いていない問題が ${noAssess.length} 件`, noAssess.map((p) => p.label));
   const noPlan = rec.problems.filter((p) => p.label && !p.plan.length);
   if (noPlan.length) add("no_plan", `計画を書いていない問題が ${noPlan.length} 件`, noPlan.map((p) => p.label));
-  if (!rec.problems.length) add("no_problems", "問題がまだありません（入院時の記載の「Problem List」は未入力になります）");
+  if (!rec.problems.length) add("no_problems", outpatient ? "問題がまだありません（再診の記載の「Problem別 Assessment・Plan」は未入力になります）" : "問題がまだありません（入院時の記載の「Problem List」は未入力になります）");
   out.push(...courseChecks(rec)); // what the course leaves blank or undecided on the working day (case-course.js)
   const size = JSON.stringify(rec).length;
   if (size >= RECORD_BUDGET * 0.7) add("size", `この記録の大きさは、保存できる上限の ${Math.round((size / RECORD_BUDGET) * 100)}% です（上限を超えると保存できません。古い日の記録や、使わない課題・処方を消すと小さくなります）`);
-  const note = admissionNote(rec);
-  if (note.unfilled.length) add("unfilled", `入院時の記載の必須欄が「（未入力）」のまま: ${note.unfilled.length} 個`, note.sections.filter((s) => s.empty && s.requirement === "required").map((s) => s.label));
+  if (!outpatient) {
+    const note = admissionNote(rec);
+    if (note.unfilled.length) add("unfilled", `入院時の記載の必須欄が「（未入力）」のまま: ${note.unfilled.length} 個`, note.sections.filter((s) => s.empty && s.requirement === "required").map((s) => s.label));
+  }
   return out;
 }

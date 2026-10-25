@@ -35,6 +35,26 @@ export const DAY_FIELDS = [
   { key: "general", label: "栄養・活動・デバイス・退院調整", max: 800, note: "A06 の「栄養・活動・デバイス・退院調整」" },
   { key: "handover", label: "翌日の確認・再評価・コール条件", max: 800, note: "A06 の「翌日確認・再評価・コール条件」" },
 ];
+/**
+ * The doctor's own texts of one visit of an outpatient record, in the order of the revisit note (A02).  The keys that A06 also has are the same
+ * keys (a day's entry is one object), so a record keeps one list of days; `purpose` is the only key of its own.
+ */
+export const OUTPATIENT_DAY_FIELDS = [
+  { key: "purpose", label: "再診の目的", max: 600, note: "A02 の「再診目的」" },
+  { key: "interval", label: "前回からの経過", max: 1000, note: "A02 の「前回からの経過」" },
+  { key: "subjective", label: "現在の症状", max: 600, note: "A02 の「現在の症状」" },
+  { key: "objective", label: "所見・検査の推移（記録するだけ）", max: 1500, note: "A02 の「所見・検査トレンド」" },
+  { key: "handover", label: "再診・再検査・悪化時の対応", max: 800, note: "A02 の「再診・再検査・悪化時対応」" },
+];
+/** Every key a day's entry can hold: the inpatient fields and the one of the outpatient visit that the inpatient ones lack. */
+export const ALL_DAY_FIELDS = [...DAY_FIELDS, ...OUTPATIENT_DAY_FIELDS.filter((f) => !DAY_FIELDS.some((x) => x.key === f.key))];
+
+/**
+ * How a day is called in a record: "入院N日目" for an admission (the admission day is 1); for an outpatient record, "基準日" (day 1: the first visit,
+ * or the visit before the record began) and "基準日からN日後" (day N+1).  A relative number either way: no calendar date is kept.
+ */
+export const dayLabelFor = (rec, n) => (rec?.kind === "outpatient" ? (n <= 1 ? "基準日" : `基準日から${n - 1}日後`) : `入院${n}日目`);
+
 /** What the doctor writes for an interim summary / transfer note (A07); built around the days marked as turning points. */
 export const SUMMARY_FIELDS = [
   { key: "context", label: "転棟先・引継ぎの理由", max: 800, note: "A07 の「転棟先・引継ぎ理由」" },
@@ -112,7 +132,7 @@ export function cleanCourse(raw, problemIds) {
     if (!isObj(d) || !Number.isInteger(d.day) || dayNo(d.day, 0) === 0 || seen.has(d.day)) continue;
     seen.add(d.day);
     const day = { day: d.day };
-    for (const f of DAY_FIELDS) day[f.key] = str(d[f.key], f.max);
+    for (const f of ALL_DAY_FIELDS) day[f.key] = str(d[f.key], f.max);
     day.turning = d.turning === true;
     day.trend = {};
     for (const [pid, t] of isObj(d.trend) ? Object.entries(d.trend) : []) {
@@ -180,7 +200,7 @@ export function setToday(rec, n) {
 /** The day after the last day that has an entry, or after today (the larger): "次の日へ". */
 export const nextDay = (rec) => Math.min(COURSE_LIMITS.maxDay, Math.max(rec.course.today, ...rec.course.days.map((d) => d.day)) + 1);
 
-const emptyDay = (n) => ({ day: n, ...Object.fromEntries(DAY_FIELDS.map((f) => [f.key, ""])), turning: false, trend: {} });
+const emptyDay = (n) => ({ day: n, ...Object.fromEntries(ALL_DAY_FIELDS.map((f) => [f.key, ""])), turning: false, trend: {} });
 
 function dayOf(next, n, create = true) {
   let d = next.course.days.find((x) => x.day === n);
@@ -195,7 +215,7 @@ function dayOf(next, n, create = true) {
 /** Whether something can be written for day n: it already has an entry, or there is room for one (COURSE_LIMITS.days). */
 export const canWriteDay = (rec, n) => dayNo(n, 0) > 0 && (rec.course.days.some((d) => d.day === n) || rec.course.days.length < COURSE_LIMITS.days);
 
-const isEmptyDay = (d) => DAY_FIELDS.every((f) => !d[f.key]) && !d.turning && !Object.keys(d.trend).length;
+const isEmptyDay = (d) => ALL_DAY_FIELDS.every((f) => !d[f.key]) && !d.turning && !Object.keys(d.trend).length;
 /** A day that holds nothing (no text, no trend, no mark) is not kept: it would only use up the room for days. */
 const pruneDay = (next, d) => {
   if (d && isEmptyDay(d)) next.course.days = next.course.days.filter((x) => x !== d);
@@ -209,7 +229,7 @@ export function dropEmptyDays(next) {
 /** Sets one of a day's texts (DAY_FIELDS).  The day is made when it has none; a day left with nothing is removed. */
 export function setDayField(rec, n, key, text) {
   const next = clone(rec);
-  const f = DAY_FIELDS.find((x) => x.key === key);
+  const f = ALL_DAY_FIELDS.find((x) => x.key === key);
   const t = f ? str(text, f.max) : "";
   const d = f && dayNo(n, 0) ? dayOf(next, n, !!t) : null;
   if (d) {
@@ -429,6 +449,8 @@ export function asOf(rec, n) {
 export function courseChecks(rec) {
   const v = asOf(rec, rec.course.today);
   const today = v.course.today;
+  const outpatient = rec.kind === "outpatient";
+  const dl = (n) => dayLabelFor(rec, n);
   const out = [];
   const add = (id, text, items = []) => out.push({ id, text, items });
   const name = (p) => p.label || "（名前なし）";
@@ -440,17 +462,17 @@ export function courseChecks(rec) {
       if ((e.state === "changed" || e.state === "stopped") && !e.reason) reasonless.push(`${name(p)}: ${e.text.slice(0, 30)}`);
     }
   }
-  if (planned.length) add("plan_unrecorded", `前の日までに立てた計画のうち、実施・変更・中止のどれも記録していないものが ${planned.length} 件（予定のまま）`, planned);
+  if (planned.length) add("plan_unrecorded", `${outpatient ? "前回までに" : "前の日までに"}立てた計画のうち、実施・変更・中止のどれも記録していないものが ${planned.length} 件（予定のまま）`, planned);
   if (reasonless.length) add("plan_reason", `変更・中止の理由を書いていない計画が ${reasonless.length} 件`, reasonless);
   const day = v.course.days.find((d) => d.day === today);
   if (day) {
     const untrended = v.problems.filter((p) => (p.label || p.assess.length || p.plan.length) && !(day.trend[p.id]?.state));
-    if (untrended.length) add("trend_missing", `入院${today}日目の推移（改善・不変・悪化）を選んでいない問題が ${untrended.length} 件（選ばなければ「未評価」です）`, untrended.map(name));
+    if (untrended.length) add("trend_missing", `${dl(today)}の推移（改善・不変・悪化）を選んでいない問題が ${untrended.length} 件（選ばなければ「未評価」です）`, untrended.map(name));
   }
   const open = v.course.tasks.filter((k) => k.state === "open" && k.text);
   if (open.length) add("tasks_open", `未完了の課題が ${open.length} 件`, open.map((k) => `${TASK_KINDS.find((x) => x.id === k.kind)?.label ? `${TASK_KINDS.find((x) => x.id === k.kind).label}: ` : ""}${k.text.slice(0, 30)}`));
   const loose = open.filter((k) => !k.owner || !k.due);
-  if (loose.length) add("tasks_incomplete", `${v.course.discharge.decided ? "退院時サマリーの「未解決」に載る課題のうち、" : ""}担当者または期限が未入力の課題が ${loose.length} 件`, loose.map((k) => `${k.text.slice(0, 30)}（${k.owner ? "" : "担当者"}${!k.owner && !k.due ? "・" : ""}${k.due ? "" : "期限"}）`));
+  if (loose.length) add("tasks_incomplete", `${!outpatient && v.course.discharge.decided ? "退院時サマリーの「未解決」に載る課題のうち、" : ""}担当者または期限が未入力の課題が ${loose.length} 件`, loose.map((k) => `${k.text.slice(0, 30)}（${k.owner ? "" : "担当者"}${!k.owner && !k.due ? "・" : ""}${k.due ? "" : "期限"}）`));
   const meds = rec.course.discharge.meds.filter((m) => m.text && (m.change === "changed" || m.change === "stopped") && !m.reason);
   if (meds.length) add("meds_reason", `変更・中止の理由を書いていない退院時の処方が ${meds.length} 件`, meds.map((m) => m.text.slice(0, 30)));
   const unset = rec.course.discharge.meds.filter((m) => m.text && !m.change);

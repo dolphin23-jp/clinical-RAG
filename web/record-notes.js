@@ -1,10 +1,11 @@
 // The notes built from a case record after the admission (docs/enhancement-plan.md 8.5, 8.14): the daily progress note (A06), the interim
-// summary / transfer note (A07) and the discharge summary (A08).  Pure functions: no DOM, no network, no storage, no AI.
+// summary / transfer note (A07) and the discharge summary (A08); and, for an outpatient record (8.19), the first-visit note (A01) and the revisit
+// note (A02).  Pure functions: no DOM, no network, no storage, no AI.
 // Each is built from the record AS IT STOOD on that day (asOf, case-course.js): nothing recorded later is in it; a blank is "（未入力）",
 // not a sentence; what the doctor chose (a trend, a plan's state, a certainty, what happened to a medication) is shown as chosen and what
 // was not chosen is shown as not chosen.  The discharge summary exists only once the doctor has decided the discharge and its day.
 import { CERTAINTY, refsOf, relativizeRecord } from "./case-record.js";
-import { DAY_FIELDS, MED_CHANGES, TASK_KINDS, TREND, asOf, dayNo } from "./case-course.js";
+import { DAY_FIELDS, MED_CHANGES, OUTPATIENT_DAY_FIELDS, TASK_KINDS, TREND, asOf, dayLabelFor, dayNo } from "./case-course.js";
 import { RECORD_FILL, UNFILLED, assemble } from "./note-assemble.js";
 
 const labelOf = (list, id) => list.find((x) => x.id === id)?.label ?? "";
@@ -141,4 +142,55 @@ export function dischargeNote(rec) {
     dc_tasks: tasksBlock(view),
   };
   return assemble("A08", { kase: view.ed.case, items: [], board: { adm: view.adm, contingency: view.contingency, problems: view.problems, fields, asOf: dc.day }, fill: RECORD_FILL.A08 });
+}
+
+// ---------------------------------------------------------------- an outpatient record (docs/enhancement-plan.md 8.19)
+/** The visit before `day`: the latest earlier day that has an entry (a visit the doctor recorded), else the base day (day 1). */
+export function previousVisit(rec, day) {
+  let prev = 1;
+  for (const d of rec.course.days) if (d.day < day && d.day > prev) prev = d.day;
+  return Math.min(prev, Math.max(1, day - 1));
+}
+
+/**
+ * The revisit note (A02) for a day (default: the working day), from the record as it stood on that day.  "前回方針と実施結果" is the plan that was
+ * there at the last visit, each entry with what the doctor has recorded about it since (done / changed / stopped and why) — an entry with nothing
+ * recorded is shown as still planned, never as done or as not done.  "Problem別" holds today's assessments and the plans made today, with the trend the
+ * doctor chose (blank when not chosen).  A blank field is （未入力）; nothing is written that the doctor did not record.
+ */
+export function revisitNote(rec, today = rec.course.today) {
+  const day = dayNo(today, rec.course.today);
+  const view = viewAt(rec, day);
+  const prev = previousVisit(rec, day);
+  const d = view.course.days.find((x) => x.day === day);
+  const dl = (n) => dayLabelFor(rec, n);
+  const fields = {
+    rv_context: [...caseBlock("visit.when", "再診の日（先生の記録）", `${dl(day)}${prev < day ? `（前回: ${dl(prev)}）` : ""}`), ...(d ? caseBlock("day.purpose", "再診の目的（先生の入力）", d.purpose) : [])],
+  };
+  for (const f of OUTPATIENT_DAY_FIELDS) if (f.key !== "purpose") fields[`rv_${f.key}`] = d ? caseBlock(`day.${f.key}`, `${f.label}（先生の入力）`, d[f.key]) : [];
+  // the plan of the last visit (entries added by then), in the state the doctor had recorded by this day
+  const before = view.problems
+    .map((p) => ({ ...p, label: nameOf(p), certaintyLabel: labelOf(CERTAINTY, p.certainty), assess: [], plan: p.plan.filter((e) => (e.added ?? 1) <= prev), trend: null }))
+    .filter((p) => p.plan.length);
+  fields.rv_previous = before.length ? [{ kind: "ap", label: "前回方針と、その後に先生が記録した結果", problems: before, markProblems: true }] : [];
+  // today: the assessments there are, the plans made today, and the trend chosen today
+  const todays = problemsFor(view)
+    .map((p) => ({ ...p, plan: p.plan.filter((e) => (e.added ?? 1) > prev) }))
+    .filter((p) => p.assess.length || p.plan.length || p.trend);
+  fields.rv_ap = apBlock(todays);
+  fields.rv_followup = [...(d ? caseBlock("day.handover", "再診・再検査・悪化時の対応（先生の入力）", d.handover) : []), ...tasksBlock(view)];
+  if (view.contingency.length) fields.rv_followup = [...fields.rv_followup, { kind: "contingency", label: "コンサルト・医師コールの基準（草案）", entries: view.contingency }];
+  return assemble("A02", { kase: view.ed.case, items: [], board: { adm: {}, contingency: view.contingency, problems: view.problems, fields, asOf: day, outpatient: true }, fill: RECORD_FILL.A02 });
+}
+
+/**
+ * The first-visit note (A01) of an outpatient record that began at a first visit: the case as typed (and its flow answers, routed to A01's fields
+ * when `flow` is the flow they were entered in), and the adopted draft items the doctor carried to the board.  The base day's view: nothing recorded
+ * on a later day is in it.  null for a record that began at a revisit (the first visit is not in the record).
+ */
+export function firstVisitNote(rec, flow = null) {
+  if (rec.kind !== "outpatient" || rec.start !== "first") return null;
+  const view = viewAt(rec, 1);
+  const items = view.ed.adopted.filter((a) => a.to && a.to !== "none").map((a) => ({ role: a.role, heading: a.heading, text: a.text, cites: a.cites }));
+  return assemble("A01", { kase: view.ed.case, items, flow });
 }
