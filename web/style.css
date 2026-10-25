@@ -448,3 +448,19 @@ details.extract-same > summary, details.extract-hidden > summary { min-height: 4
 .extract-same-item, .extract-hidden-item { padding: 4px 0; font-size: 13px; }
 .extract-hidden-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .extract-around { margin-top: 2px; font-size: 12px; color: var(--muted); }
+
+/* the scene of the assessment/plan draft and the record's summary it takes (stage 4b) */
+.scene-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; padding: 4px 0; font-size: 13px; }
+.scene-label { color: var(--muted); font-weight: 600; }
+.scene-row select { min-height: 36px; max-width: 100%; }
+.scene-row .help, .scene-row details { grid-column: 1 / -1; margin: 0; }
+.scene-brief-text { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 4px 0 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+
+/* the books' pages kept for a problem (stage 4b) */
+.rec-refs { margin-top: 6px; }
+.rec-ref { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13px; }
+.rec-ref-title { font-weight: 600; word-break: break-word; }
+.rec-ref-sec, .rec-ref-day { color: var(--muted); font-size: 12px; }
+.rec-ref-snippet { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.rec-found { margin-top: 6px; }
+

@@ -3,7 +3,7 @@
 // Each is built from the record AS IT STOOD on that day (asOf, case-course.js): nothing recorded later is in it; a blank is "（未入力）",
 // not a sentence; what the doctor chose (a trend, a plan's state, a certainty, what happened to a medication) is shown as chosen and what
 // was not chosen is shown as not chosen.  The discharge summary exists only once the doctor has decided the discharge and its day.
-import { CERTAINTY, relativizeRecord } from "./case-record.js";
+import { CERTAINTY, refsOf, relativizeRecord } from "./case-record.js";
 import { DAY_FIELDS, MED_CHANGES, TASK_KINDS, TREND, asOf, dayNo } from "./case-course.js";
 import { RECORD_FILL, UNFILLED, assemble } from "./note-assemble.js";
 
@@ -108,7 +108,8 @@ export function interimNote(rec, today = rec.course.today) {
 // ---------------------------------------------------------------- A08: the discharge summary
 /** The problems the doctor classed as main / sub diagnosis (with the certainty chosen by the discharge day), and those not classed. */
 function dxBlock(view) {
-  const ps = view.problems.filter(hasContent).map((p) => ({ ...p, label: nameOf(p), certaintyLabel: labelOf(CERTAINTY, p.certainty) }));
+  // refList: the books' pages kept for the problem by the day (docs/enhancement-plan.md 8.16): where the doctor looked, not a statement the books support
+  const ps = view.problems.filter(hasContent).map((p) => ({ ...p, label: nameOf(p), certaintyLabel: labelOf(CERTAINTY, p.certainty), refList: refsOf(p) }));
   const main = ps.filter((p) => p.dx === "main");
   const sub = ps.filter((p) => p.dx === "sub");
   if (!main.length && !sub.length) return [];

@@ -5,6 +5,7 @@
 // ticked, the draft's "確認すべき数値" / "書籍に見つからなかった点" / "先生の案との差" sections, a date, a patient ID or a name.  A
 // required field with nothing to put in says （未入力）; it is not filled with prose.  A conditional field with nothing is left out.
 // A plan item is a proposal: it is labelled as such and is never placed in a field for what was already done.
+import { sceneHeadingRole } from "./draft-scenes.js";
 import { NOTE_TYPES } from "./note-types.js";
 
 /** The types offered, in picker order.  The others are imported (note-types.js) but not wired yet. */
@@ -21,6 +22,9 @@ export const AI_NOTICE = `※${AI_MARK}の印がある項目は、AI（書籍の
 /** The headings of a problem's plan entries by what the doctor recorded (an AI item is never "done": only the doctor sets that). */
 export const PLAN_HEADINGS = { planned: "計画（予定・検討。実施の記録ではありません）", done: "実施（医師の記録）", changed: "変更（医師の記録）", stopped: "中止・しない" };
 export const CARRIED_MARK = "〔救急から〕";
+/** The books' pages kept for a diagnosis (docs/enhancement-plan.md 8.16): where the doctor looked, never a statement that the books support the note. */
+export const REFS_NOTE = "先生が残した頁・採用した草案の引用の頁です。この記載の内容を書籍が支える確認ではありません";
+export const REF_VIA_LABEL = { found: "先生が検索で残した頁", cited: "採用した草案の引用" };
 
 /** The typed case's parts, as sources for a field. */
 export const SOURCE_LABELS = {
@@ -46,11 +50,11 @@ export const NOT_ADOPTABLE = ["確認すべき数値", "書籍に見つからな
 /** "## 初期プラン（検査・治療…）" -> "初期プラン": the part before the first bracket, without numbering. */
 const baseOf = (h) => String(h).replace(/^[\s#\d.)０-９・-]+/, "").split(/[（(]/)[0].trim();
 
-/** The role of a draft section heading, or null when it is not adoptable. */
+/** The role of a draft section heading (the common draft's, or a scene's: web/draft-scenes.js), or null when it is not adoptable. */
 export function headingRole(heading) {
   const b = baseOf(heading);
   for (const [id, r] of Object.entries(ROLES)) if (r.heading === b) return id;
-  return null;
+  return sceneHeadingRole(b);
 }
 
 /**
@@ -272,7 +276,14 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
         for (const [heading, list] of [["主病名", b.main], ["副病名", b.sub]]) {
           if (!list.length) continue;
           out.push(`${heading}:`);
-          list.forEach((p, n) => out.push(`${n + 1}. ${problemName(p, true, `確度: ${p.certaintyLabel || "未選択"}`)}`));
+          list.forEach((p, n) => {
+            out.push(`${n + 1}. ${problemName(p, true, `確度: ${p.certaintyLabel || "未選択"}`)}`);
+            // the pages kept for the diagnosis are source marks: the copy that leaves the marks out leaves them out too
+            if (sourceMarks && p.refList?.length) {
+              out.push(`   書籍の根拠（${REFS_NOTE}）:`);
+              for (const r of p.refList) out.push(`   ・${r.title} ${r.page}${r.section ? `（${r.section}）` : ""}［${REF_VIA_LABEL[r.via] ?? ""}］`);
+            }
+          });
         }
         if (b.other.length) out.push(`区分を選んでいない問題: ${b.other.map((o) => refName(o.label, o.ai)).join("、")}`);
       } else if (b.kind === "ap") {

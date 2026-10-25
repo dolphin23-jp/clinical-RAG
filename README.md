@@ -154,6 +154,7 @@ python3 tests/e2e/ui_create.py http://localhost:8787 /tmp/ucreate # 架空症例
 python3 tests/e2e/ui_intake.py http://localhost:8787 /tmp/uintake # 場面・症候の質問での入力（中核の未入力・日付の相対化・保存と復元）
 python3 tests/e2e/ui_extract.py http://localhost:8787 /tmp/uextract # 文章からの取り込み（提案は確認まで入らない・まとめて/1件ずつ・上書きしない・識別情報は送らない・保存しない）
 python3 tests/e2e/ui_record.py http://localhost:8787 /tmp/urecord # 症例の記録（時間軸・引き継ぎ・問題の板・A05・経過・A06〜A08・自動保存・版の競合・終える）
+python3 tests/e2e/ui_scene.py http://localhost:8787 /tmp/uscene   # 場面別の草案・記録の要約・問題ごとの書籍の根拠（要約は送る前に見える・会話に残らない・頁は先生が残す）
 # 記載の型を取り込み直す（clinical-modules のチェックアウトから。--check で差があれば終了コード1）
 python3 scripts/import_note_types.py --modules ../clinical-modules
 # 場面・症候の質問の構造を取り込み直す（同上。規則・鑑別は取り込まない）

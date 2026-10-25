@@ -70,6 +70,15 @@
 
 <form id="composer" autocomplete="off">
   <div id="case-modes" class="chips modes" role="group" aria-label="症例への依頼" hidden></div>
+  <div id="case-scene" class="scene-row" hidden>
+    <label for="scene-select" class="scene-label">草案の場面</label>
+    <select id="scene-select" aria-describedby="scene-help"></select>
+    <p id="scene-help" class="help" role="status"></p>
+    <details id="scene-brief" hidden>
+      <summary>草案に渡す記録の要約（送る内容）</summary>
+      <pre id="scene-brief-text" class="scene-brief-text"></pre>
+    </details>
+  </div>
   <div class="chips">
     <button type="button" id="chip-web" class="chip" aria-pressed="false">Web検索</button>
     <button type="button" id="chip-books" class="chip">書籍: すべて</button>

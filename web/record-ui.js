@@ -9,10 +9,11 @@
 // Every string reaches the DOM through textContent / .value.
 import { caseKey } from "./case-model.js";
 import { scan } from "./id-guard.js";
-import { AI_MARK, ROLES, toText } from "./note-assemble.js";
+import { AI_MARK, REFS_NOTE, REF_VIA_LABEL, ROLES, toText } from "./note-assemble.js";
 import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, MED_CHANGES, SUMMARY_FIELDS, TASK_KINDS, TREND, addMed, addTask, asOf, canWriteDay, nextDay, removeDay, removeMed, removeTask, setDayField, setDayTurning, setDischarge, setMed, setSummary, setTask, setToday, setTrend, trendAt } from "./case-course.js";
 import { dischargeNote, interimNote, progressNote } from "./record-notes.js";
-import { ADM_FIELDS, CERTAINTY, DX_CLASSES, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline, waiting } from "./case-record.js";
+import { briefDay, recordBrief } from "./record-brief.js";
+import { ADM_FIELDS, CERTAINTY, DX_CLASSES, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, pinRef, refKey, refsOf, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline, unpinRef, waiting } from "./case-record.js";
 import { bindDates, changesNote } from "./intake-ui.js";
 
 const SAVE_DELAY = 1200;
@@ -47,7 +48,7 @@ export function initRecords(ctx) {
   let FLOWS = null;
   // gen: which opened record this is (a response for an earlier one is ignored); pending: the save in flight; unconfirmed: what was sent
   // since the last answer we read (a write whose answer was lost may have landed); unlinking: the pinned case was cleared and the record is being let go
-  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true }, noteDay: null, sumDay: null, open: {} };
+  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true }, noteDay: null, sumDay: null, open: {}, refSearch: {} };
   let derived = null; // { checks, preview, progress, interim, discharge } nodes that change while typing
   let dateNote = null;
 
@@ -118,6 +119,7 @@ export function initRecords(ctx) {
     S.rec = rec;
     S.save = "saved";
     S.unconfirmed = [];
+    S.refSearch = {};
     say("");
     caseCtl.set(rec.ed.case, { keepLink: true });
     markLinked();
@@ -267,6 +269,7 @@ export function initRecords(ctx) {
     S.save = "saved";
     S.noteDay = S.sumDay = null;
     S.open = {};
+    S.refSearch = {};
     markLinked();
   }
 
@@ -299,6 +302,23 @@ export function initRecords(ctx) {
     b.classList.toggle("linked", !!S.rec);
     const note = $("#case-linked");
     if (note) note.hidden = !S.rec; // the case dialog says the pinned case is the open record's
+    const now = S.rec ? S.id : null;
+    if (now !== lastLinked) {
+      lastLinked = now;
+      changed();
+    }
+  };
+  let lastLinked = null;
+  // the scene choices of the draft follow the open record (case.js): told when a record is opened, made or let go, and when the dialog closes
+  const listeners = [];
+  const changed = () => {
+    for (const f of listeners) {
+      try {
+        f();
+      } catch {
+        /* a listener's failure never reaches the record */
+      }
+    }
   };
   const mutate = (fn) => {
     S.rec = fn(S.rec);
@@ -556,7 +576,12 @@ export function initRecords(ctx) {
     label.value = p.label;
     label.placeholder = "問題名（例: 腎前性AKI）";
     label.setAttribute("aria-label", `問題${i + 1}の名前`);
-    label.addEventListener("input", () => mutate((r) => setProblem(r, p.id, { label: label.value })));
+    label.addEventListener("input", () => {
+      mutate((r) => setProblem(r, p.id, { label: label.value }));
+      // the search by the problem's name follows what is typed
+      const find = card.querySelector("[data-act=find-refs]");
+      if (find && !S.refSearch[p.id]?.busy) find.disabled = !searchWords(label.value);
+    });
     bindDates(label, (changes) => (dateNote.textContent = changesNote(changes)));
     head.append(label);
     if (p.from === "ed") head.append(el("span", "rec-tag", "救急から"));
@@ -606,7 +631,89 @@ export function initRecords(ctx) {
     card.append(el("div", "rec-sub", "計画"));
     for (const e of p.plan) card.append(entryRow(p, "plan", e));
     card.append(btn("＋ 計画を足す", "btn rec-small", () => mutateAndRender((r) => addEntry(r, p.id, "plan", "").rec)));
+    card.append(refsSection(p));
     return card;
+  }
+
+  // ---------------------------------------------------------------- the books' pages kept for a problem (docs/enhancement-plan.md 8.16)
+  const REF_FULL = { bad: "題名か頁がないため、残せません", duplicate: "この頁は、すでにこの問題にあります", full: `残せる頁は、1つの問題に ${LIMITS.refs} 件までです`, missing: "この問題は見つかりません" };
+  /** The words a search starts from: the problem's name without the marks of origin ([推論] etc.). */
+  const searchWords = (label) => String(label ?? "").replace(/\s*\[(?:推論|標準・出典未確認|施設依存)\]/g, "").replace(/\s+/g, " ").trim().slice(0, 200);
+
+  async function findRefs(p) {
+    // the name as it is now in the record (the card was drawn before the doctor last typed)
+    const q = searchWords(S.rec?.problems.find((x) => x.id === p.id)?.label);
+    if (!q) return;
+    const kinds = new Set(scan(q).map((h) => h.label));
+    if (kinds.size) {
+      S.refSearch[p.id] = { msg: `患者を特定できる情報の可能性があるため、検索しません（${[...kinds].join("、")}）。問題の名前を直してください。` };
+      return render();
+    }
+    const gen = S.gen;
+    S.refSearch[p.id] = { busy: true };
+    render();
+    const r = await call("/api/search", { method: "POST", body: JSON.stringify({ queries: [q], parents: 6 }) });
+    if (S.gen !== gen || !S.rec) return; // another record was opened while this was on its way
+    S.refSearch[p.id] = r.ok ? { query: q, results: (r.j.results ?? []).slice(0, 6) } : { msg: r.j.error || "検索できませんでした" };
+    render();
+  }
+
+  /** Leaves a found page for the problem: the doctor's act.  Only the book's title, the page and the section's name are kept, never the text. */
+  function keepRef(p, hit) {
+    const out = pinRef(S.rec, p.id, { title: hit.book_title, page: hit.page_label, section: String(hit.path ?? "") });
+    if (out.ok) {
+      S.rec = out.rec;
+      touch();
+      say("");
+    } else say(REF_FULL[out.reason] ?? "残せませんでした", "err");
+    render();
+  }
+
+  function refsSection(p) {
+    const box = el("div", "rec-refs");
+    box.dataset.refs = p.id;
+    box.append(el("div", "rec-sub", "書籍の根拠（どこを見たか）"));
+    const refs = refsOf(p);
+    if (!refs.length) box.append(el("p", "help", "まだありません。「書籍を引く」で、この問題の名前で手元の書籍を検索し、見た頁を残せます。残した頁は、後の日にも見られ、退院時サマリーの診断ごとに出せます。"));
+    for (const r of refs) {
+      const row = el("div", "rec-ref");
+      row.dataset.key = refKey(r);
+      row.append(el("span", "rec-ref-title", `${r.title} ${r.page}`));
+      if (r.section) row.append(el("span", "rec-ref-sec", r.section));
+      row.append(el("span", "rec-tag", REF_VIA_LABEL[r.via] ?? ""), el("span", "rec-ref-day", `入院${r.added}日目`));
+      if (r.pinned) row.append(btn("外す", "btn rec-small", () => mutateAndRender((rec) => unpinRef(rec, p.id, refKey(r)))));
+      box.append(row);
+    }
+    if (refs.length) box.append(el("p", "help", `${REFS_NOTE}。`));
+    const st = S.refSearch[p.id];
+    const find = btn(st?.busy ? "検索しています…" : "書籍を引く", "btn rec-small", () => findRefs(p));
+    find.dataset.act = "find-refs";
+    find.disabled = !searchWords(p.label) || !!st?.busy;
+    if (!searchWords(p.label)) find.title = "問題の名前を入れると、その名前で検索できます";
+    box.append(find);
+    if (st?.msg) box.append(el("p", "msg err", st.msg));
+    if (st?.results) {
+      const list = el("div", "rec-found");
+      list.append(el("p", "help", st.results.length ? `「${st.query}」で見つかった節（近い順）。頁を残すと、題名・頁・節の名前だけを記録に残します（本文は残しません）。` : `「${st.query}」では、手元の書籍に見つかりませんでした。`));
+      for (const hit of st.results) {
+        const row = el("div", "rec-ref found");
+        const kept = refsOf(p).some((x) => refKey(x) === refKey({ title: hit.book_title, page: hit.page_label }));
+        row.append(el("span", "rec-ref-title", `${hit.book_title ?? ""} ${hit.page_label ?? ""}`), el("span", "rec-ref-sec", String(hit.path ?? "")));
+        const keep = btn(kept ? "残してあります" : "この問題の根拠に残す", "btn rec-small", () => keepRef(p, hit));
+        keep.dataset.act = "keep-ref";
+        keep.disabled = kept || !hit.page_label || !hit.book_title;
+        if (!hit.page_label) keep.title = "頁の情報がないため残せません";
+        row.append(keep);
+        if (hit.snippet) {
+          const more = el("details", "rec-ref-snippet");
+          more.append(el("summary", null, "節の冒頭"), el("p", null, String(hit.snippet)));
+          row.append(more);
+        }
+        list.append(row);
+      }
+      box.append(list);
+    }
+    return box;
   }
 
   function entryRow(p, which, e) {
@@ -1029,15 +1136,31 @@ export function initRecords(ctx) {
   dlg.addEventListener("close", () => {
     flush();
     S.msg = "";
+    changed();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flush();
   });
 
+  /** The open record when it is the pinned case's: a record of another case is never summarised for this one. */
+  const recordFor = (kase) => (S.rec && S.id && !S.unlinking && kase && isRecordCase(S.rec, kase) ? S.rec : null);
+
   return {
     open,
     /** the id of the record the pinned case belongs to, or null */
     linked: () => S.id,
+    /** whether a record is open for this case (the draft of a scene after the admission can be made) */
+    hasRecordFor: (kase) => !!recordFor(kase),
+    /**
+     * The summary of the open record for a scene's draft (web/record-brief.js): { text, day, truncated, omitted } or null.  Built from the record as it
+     * is on the screen now (not what was last saved), as of the working day (the discharge day for the discharge summary once it is decided).
+     */
+    brief(scene, kase) {
+      const rec = recordFor(kase);
+      return rec ? recordBrief(rec, briefDay(rec, scene)) : null;
+    },
+    /** told when the open record changes (case.js refreshes the scene choices) */
+    onChange: (fn) => listeners.push(fn),
     /**
      * The pinned case was pinned again.  When it belongs to the open record, the record follows it; a different age or sex says it may be
      * another patient: the doctor decides (OK updates this record, cancel lets the record go and keeps the case pinned on its own).

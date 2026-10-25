@@ -181,13 +181,15 @@ test("draft sections: the four chart-content headings map to roles; the draft's 
 // ---------------------------------------------------------------------------------- the screen code sends and keeps nothing
 test("pins: the assembly and the note screen never send, save, export, print or share; they only copy (through the app's clipboard helper)", () => {
   const forbidden = /\bfetch\s*\(|XMLHttpRequest|sendBeacon|localStorage|sessionStorage|indexedDB|\bprint\s*\(|navigator\.share|createObjectURL|new Blob|\bdownload\b|window\.open|navigator\.clipboard|innerHTML|\beval\s*\(|new Function/;
-  for (const f of ["note-assemble.js", "note-ui.js", "note-types.js"]) {
+  for (const f of ["note-assemble.js", "note-ui.js", "note-types.js", "draft-scenes.js"]) {
     const code = readFileSync(web(f), "utf-8").replace(/\/\/.*$/gm, "");
     assert.doesNotMatch(code, forbidden, f);
   }
   // nothing from the AI side is imported by the assembly: it is deterministic
   const asm = readFileSync(web("note-assemble.js"), "utf-8");
-  assert.deepEqual([...asm.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./note-types.js"]);
+  assert.deepEqual([...asm.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]), ["./draft-scenes.js", "./note-types.js"]);
+  // the scenes' headings are plain data: they import nothing at all (docs/enhancement-plan.md 8.16)
+  assert.deepEqual([...readFileSync(web("draft-scenes.js"), "utf-8").matchAll(/^import /gm)], []);
   const ui = readFileSync(web("note-ui.js"), "utf-8");
   assert.deepEqual([...ui.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1]).sort(), ["./note-assemble.js", "./note-types.js"]);
 });

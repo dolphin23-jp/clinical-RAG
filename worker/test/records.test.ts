@@ -193,13 +193,15 @@ test("the store has no logging, reads no model, and the Worker never reads a rec
   assert.doesNotMatch(ask, /recordstore|case_records/);
 });
 
-test("the record screen keeps nothing in the browser's own storage and talks only to /api/records", () => {
+test("the record screen keeps nothing in the browser's own storage and talks only to /api/records, plus the search (retrieval only, no model) for a problem's book pages", () => {
   const ui = readFileSync(join(REPO, "web", "record-ui.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
   assert.doesNotMatch(ui, /localStorage|sessionStorage|indexedDB|caches\./);
   const paths = [...ui.matchAll(/`(\/api\/[^`]*)`|"(\/api\/[^"]*)"/g)].map((m) => (m[1] ?? m[2]).replace(/\$\{[^}]*\}/g, "{id}"));
-  assert.deepEqual([...new Set(paths)].sort(), ["/api/records", "/api/records/{id}"]);
+  // stage 4b (docs/enhancement-plan.md 8.16): the search by a problem's name (/api/search: no model is called) is the one other path
+  assert.deepEqual([...new Set(paths)].sort(), ["/api/records", "/api/records/{id}", "/api/search"]);
+  assert.equal((ui.match(/\/api\/search/g) ?? []).length, 1, "one call site");
   // no AI: the screen never asks the model, and the model module never reads a record
-  assert.doesNotMatch(ui, /\/api\/ask|\/api\/search/);
+  assert.doesNotMatch(ui, /\/api\/ask|\/api\/extract/);
   const model = readFileSync(join(REPO, "web", "case-record.js"), "utf-8");
   assert.doesNotMatch(model, /import .* from "\.\/(app|record-ui|conv)\.js"/);
 });
