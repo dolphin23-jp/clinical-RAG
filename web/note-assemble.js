@@ -183,8 +183,14 @@ function boardBlocks(board, src) {
   }
   return out;
 }
-const countAi = (b) =>
-  (b.kind === "ap" ? b.problems.flatMap((p) => [...p.assess, ...p.plan]) : b.kind === "contingency" ? b.entries : b.kind === "list" ? b.problems : b.kind === "dx" ? [...b.main, ...b.sub] : []).filter((e) => e.from === "ai" || e.ai === true).length;
+const isAi = (e) => e.from === "ai" || e.ai === true;
+const countAi = (b) => {
+  if (b.kind === "ap") return [...b.problems.flatMap((p) => [...p.assess, ...p.plan]), ...(b.markProblems ? b.problems : [])].filter(isAi).length;
+  if (b.kind === "dx") return [...b.main, ...b.sub, ...b.other].filter(isAi).length;
+  if (b.kind === "turns") return b.days.flatMap((d) => d.trends).filter(isAi).length;
+  if (b.kind === "tasks") return b.tasks.filter((k) => k.problemAi).length;
+  return (b.kind === "contingency" ? b.entries : b.kind === "list" ? b.problems : []).filter(isAi).length;
+};
 
 const TAG_RE = /\s*\[(?:推論|標準・出典未確認|施設依存)\]/g;
 
@@ -198,7 +204,7 @@ const citeLine = (c) => (c.kind === "web" ? `Web: ${c.title || c.url || ""}`.tri
  */
 export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
   const out = [`【${note.type.title}】下書き`, BLANK_HEADER];
-  if (note.asOf) out.push(`※入院${note.asOf}日目の時点の記録です。それより後に記録したことは入っていません。`);
+  if (note.asOf) out.push(`※入院${note.asOf}日目の時点の記録です。確度・計画の状態・推移・課題の完了は、その日までに記録したものだけです。文章（問題名・評価・計画・先生が入力した文）は、最後に編集したものです。`);
   if (aiMark && note.adopted) out.push(AI_NOTICE);
   out.push("");
   const cites = new Map();
@@ -218,6 +224,8 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
   const withReason = (e, line) => (e.reason ? `${line}（理由: ${e.reason}）` : line);
   /** What the doctor chose and wrote for a trend: "改善", "改善 — note", or the note alone; a trend with neither is not printed. */
   const trendText = (t) => `${t.stateLabel ?? ""}${t.note ? `${t.stateLabel ? " — " : ""}${t.note}` : ""}`;
+  /** A problem named inside another line (a trend, a task, the problems not classed): the AI mark when the name is an AI draft's, the tags only while the marks are kept. */
+  const refName = (name, ai) => `${ai && aiMark ? AI_MARK : ""}${sourceMarks ? name : String(name).replace(TAG_RE, "")}`;
   /** A problem's heading text: "label（certainty）", with the AI mark and the citations when the label is an AI draft's and the marks are kept. */
   const problemName = (p, withMarks, certainty = p.certaintyLabel) => {
     let label = String(p.label);
@@ -248,11 +256,11 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
           if (!t.lines.length && !t.trends.length) out.push(`入院${t.day}日目: ${UNFILLED}`);
           else out.push(`入院${t.day}日目:`);
           for (const l of t.lines) out.push(`・${l.label}: ${l.text}`);
-          for (const r of t.trends) out.push(`・推移 ${r.problem}: ${trendText(r)}`);
+          for (const r of t.trends) out.push(`・推移 ${refName(r.problem, r.ai)}: ${trendText(r)}`);
         }
       } else if (b.kind === "tasks") {
         out.push(`［${b.label}］`);
-        for (const k of b.tasks) out.push(`・${k.kindLabel ? `${k.kindLabel}: ` : ""}${k.text}（担当: ${k.owner || "未入力"}／期限: ${k.due || "未入力"}）${k.problem ? ` ［${k.problem}］` : ""}`);
+        for (const k of b.tasks) out.push(`・${k.kindLabel ? `${k.kindLabel}: ` : ""}${k.text}（担当: ${k.owner || "未入力"}／期限: ${k.due || "未入力"}）${k.problem ? ` ［${refName(k.problem, k.problemAi)}］` : ""}`);
       } else if (b.kind === "meds") {
         out.push(`［${b.label}］`);
         for (const m of b.meds) {
@@ -266,10 +274,10 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
           out.push(`${heading}:`);
           list.forEach((p, n) => out.push(`${n + 1}. ${problemName(p, true, `確度: ${p.certaintyLabel || "未選択"}`)}`));
         }
-        if (b.other.length) out.push(`区分を選んでいない問題: ${b.other.join("、")}`);
+        if (b.other.length) out.push(`区分を選んでいない問題: ${b.other.map((o) => refName(o.label, o.ai)).join("、")}`);
       } else if (b.kind === "ap") {
         b.problems.forEach((p, n) => {
-          out.push(`［${n + 1}. ${problemName(p, false)}］`);
+          out.push(`［${n + 1}. ${problemName(p, !!b.markProblems)}］`);
           if (p.trend && (p.trend.stateLabel || p.trend.note)) out.push(`推移（入院${p.trend.day}日目）: ${trendText(p.trend)}`);
           if (p.history?.length) {
             out.push("推移の記録:");

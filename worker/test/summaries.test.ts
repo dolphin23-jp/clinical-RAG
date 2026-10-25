@@ -167,7 +167,7 @@ test("interim summary: only from a record; as of its day (nothing later), turnin
   assert.throws(() => A.assemble("A07", {}), /not offered/, "the typed-case picker does not offer A07");
   assert.ok(!A.ENABLED.includes("A07"));
   const t4 = interim(r, 4);
-  assert.match(t4, /^【転棟・中間サマリ】下書き\n［日付］　［患者ID］　［氏名］\n※入院4日目の時点の記録です。それより後に記録したことは入っていません。/);
+  assert.match(t4, /^【転棟・中間サマリ】下書き\n［日付］　［患者ID］　［氏名］\n※入院4日目の時点の記録です。確度・計画の状態・推移・課題の完了は、その日までに記録したものだけです。文章（問題名・評価・計画・先生が入力した文）は、最後に編集したものです。/);
   assert.match(part(t4, "転棟先・引継ぎ理由"), /一般病棟へ転棟/);
   assert.match(part(t4, "入院理由・初期病態"), /70代・男性・救急[\s\S]*脱水と腎機能の評価・加療のため/);
   assert.match(part(t4, "これまでの経過と転換点"), /入院3日目:\n・前回からのイベント: 夜間に発熱\n・推移 腎前性AKI: 悪化 — 尿量低下/);

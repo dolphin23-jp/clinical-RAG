@@ -63,7 +63,7 @@ test("cleanCourse: days are unique and in order, trends and tasks name only the 
   assert.equal(c.days[1].turning, true);
   assert.deepEqual(c.days[1].trend, { p1: { state: "worse", note: "咳が増えた" } }, "an unknown problem is dropped; an unknown state with no note, and an empty trend, are not kept (blank)");
   assert.deepEqual(c.days[0].trend, { p1: { state: "improved" } });
-  assert.deepEqual(c.tasks.map((k: any) => [k.id, k.kind, k.owner, k.due, k.added, k.state, k.closed, k.problem]), [["k1", "result", "担当医", "入院5日目", 2, "done", 4, "p1"], ["k2", "other", "", "", 1, "open", undefined, undefined]]);
+  assert.deepEqual(c.tasks.map((k: any) => [k.id, k.kind, k.owner, k.due, k.added, k.state, k.closed, k.problem]), [["k1", "result", "担当医", "入院5日目", 2, "done", 4, "p1"], ["k2", "", "", "", 1, "open", undefined, undefined]]);
   assert.deepEqual(C.cleanCourse(null, []), C.emptyCourse());
   assert.deepEqual(C.emptyCourse().days, []);
   assert.deepEqual(C.cleanCourse({ today: 0 }, []).today, 1);
@@ -155,16 +155,16 @@ test("trend: improved / unchanged / worse only when chosen; none is 'not assesse
   assert.deepEqual(C.asOf(r, 3).problems[0].trend, { day: 2, state: "improved", note: "解熱した" }, "day 3 has none of its own: the latest one before it, with its day");
   assert.deepEqual(C.asOf(r, 5).problems[0].trend, { day: 4, state: "worse" });
   // taking the choice back leaves nothing (blank), and a note alone is kept with no state
-  assert.deepEqual(C.setTrend(r, 4, "p1", "").course.days[1].trend, {});
+  assert.deepEqual(C.setTrend(r, 4, "p1", "").course.days.map((d: any) => d.day), [2], "the only choice of a day taken back: the day holds nothing and is not kept");
   const noteOnly = C.setTrend(C.setTrend(r, 4, "p1", ""), 4, "p1", undefined, "経過を見る");
   assert.deepEqual(noteOnly.course.days[1].trend, { p1: { state: "", note: "経過を見る" } });
-  assert.equal(C.setTrend(r, 4, "p1", "sideways").course.days[1].trend.p1, undefined, "a state that is not one of the three is blank (and with no note, nothing is kept)");
+  assert.equal(C.setTrend(r, 4, "p1", "sideways").course.days.find((d: any) => d.day === 4), undefined, "a state that is not one of the three is blank (and with no note, nothing is kept)");
   assert.deepEqual(C.setTrend(noteOnly, 4, "p1", "sideways").course.days[1].trend.p1, { state: "", note: "経過を見る" });
   assert.equal(snap(C.setTrend(r, 4, "p9", "worse")), snap(r), "an unknown problem is ignored");
   // removing a problem takes its trends and task links with it
   let k = C.addTask(r, { text: "x", problem: "p1" }).rec;
   k = R.removeProblem(k, "p1");
-  assert.deepEqual(k.course.days.map((d: any) => d.trend), [{}, {}]);
+  assert.deepEqual(k.course.days, [], "and a day that held nothing else goes with them");
   assert.equal(k.course.tasks[0].problem, undefined);
 });
 
@@ -175,7 +175,7 @@ test("tasks: stamped with the working day; done is the doctor's and stamps its d
   r = made.rec;
   assert.equal(made.id, "k1");
   assert.deepEqual(r.course.tasks[0], { id: "k1", text: "頭部 CT の結果", kind: "result", owner: "担当医", due: "入院3日目", added: 2, state: "open", problem: "p1" });
-  assert.deepEqual(C.addTask(r, { text: "x", kind: "nonsense", problem: "p9" }).rec.course.tasks[1], { id: "k2", text: "x", kind: "other", owner: "", due: "", added: 2, state: "open" });
+  assert.deepEqual(C.addTask(r, { text: "x", kind: "nonsense", problem: "p9" }).rec.course.tasks[1], { id: "k2", text: "x", kind: "", owner: "", due: "", added: 2, state: "open" }, "a kind that was not chosen stays blank");
   r = C.setToday(r, 4);
   const done = C.setTask(r, "k1", { state: "done" });
   assert.deepEqual([done.course.tasks[0].state, done.course.tasks[0].closed], ["done", 4]);
