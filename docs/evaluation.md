@@ -114,6 +114,17 @@ MEDBOOK_TOKEN=... node --no-warnings eval/run_extract_eval.ts --api https://<wor
 - メモは、先生が実際の書き方の型から**架空に書き直したもの**（氏名・ID・日付なし）。実際のメモそのものをこのファイルに入れない（`docs/clinical-use.md`）。結果は `work/` に出す（`.gitignore` 済み）
 - 同じ場面・症候の2件目からは、指示と質問の一覧がキャッシュから読まれる（`usage.cache_read_input_tokens`。1件目だけが書き込み）。待ち時間（ms）も出る
 
+**Worker をデプロイせずに測る（`--local`）**
+
+```bash
+ANTHROPIC_API_KEY=... node --no-warnings eval/run_extract_eval.ts --local eval/extract.invented.jsonl --verbose --out work/extract_eval.json
+```
+
+- Anthropic API に直接つなぐ。指示・スキーマ・答えの検査は Worker と**同じコード**（`worker/src/extract.ts`）なので、モデルの振る舞いと、検査が残す割合（`dropped` の数も出る）は同じに測れる。測れないのは Worker の経路（合言葉・1日の上限・Worker の環境変数 `EXTRACT_MODEL`）で、そちらは上の `--api` で確かめる。`MEDBOOK_TOKEN` も、デプロイも要らない。1日の上限には数えない
+- 鍵は環境変数だけ（既定 `ANTHROPIC_API_KEY`。別の名前なら `--key-env NAME`）。画面にも `--out` にも出さず、Anthropic の API 以外へ送らない（テストが検査する）。モデルは `--model`（既定は `EXTRACT_MODEL`、なければ Worker の既定の `claude-sonnet-5-5`）
+- 結果には、入力・出力・キャッシュのトークン数、1件あたりの時間（平均と最大）、答えたモデルが出る。費用は、これと API の料金表から先生が見積もる（ここでは金額にしない）
+- `eval/extract.invented.jsonl`: 作成者が新しく書いた架空のメモ15件（呼吸困難・胸痛・失神・発熱・頭痛。支えるもの、否定、予定・指示、疑い、一部だけ聞いた陰性、別の人の情報、2つの姿勢の血圧、2つの体温）。**最初の1回を、先生のメモなしで測るためのもの**で、先生の書き方の測りではない（先生の書き方は `extract.local.jsonl` で測る）。`worker/test/extract-cases.test.ts` が、全ての質問・選択肢・数値・時刻が質問の一覧とメモに合うことを検査する（id の綴りの誤りは、的中しない「欠落」として紛れるため）
+
 ### 3.4 読み方
 
 | 見えたこと | 次の手 |
