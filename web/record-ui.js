@@ -10,7 +10,9 @@
 import { caseKey } from "./case-model.js";
 import { scan } from "./id-guard.js";
 import { AI_MARK, ROLES, toText } from "./note-assemble.js";
-import { ADM_FIELDS, CERTAINTY, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline } from "./case-record.js";
+import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, MED_CHANGES, SUMMARY_FIELDS, TASK_KINDS, TREND, addMed, addTask, asOf, nextDay, removeDay, removeMed, removeTask, setDayField, setDayTurning, setDischarge, setMed, setSummary, setTask, setToday, setTrend, trendAt } from "./case-course.js";
+import { dischargeNote, interimNote, progressNote } from "./record-notes.js";
+import { ADM_FIELDS, CERTAINTY, DX_CLASSES, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline, waiting } from "./case-record.js";
 import { bindDates, changesNote } from "./intake-ui.js";
 
 const SAVE_DELAY = 1200;
@@ -45,8 +47,8 @@ export function initRecords(ctx) {
   let FLOWS = null;
   // gen: which opened record this is (a response for an earlier one is ignored); pending: the save in flight; unconfirmed: what was sent
   // since the last answer we read (a write whose answer was lost may have landed); unlinking: the pinned case was cleared and the record is being let go
-  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true } };
-  let derived = null; // { checks, preview } nodes that change while typing
+  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true }, noteDay: null, sumDay: null, open: {} };
+  let derived = null; // { checks, preview, progress, interim, discharge } nodes that change while typing
   let dateNote = null;
 
   const btn = (label, cls, onClick) => {
@@ -263,6 +265,8 @@ export function initRecords(ctx) {
     S.list = null;
     S.unconfirmed = [];
     S.save = "saved";
+    S.noteDay = S.sumDay = null;
+    S.open = {};
     markLinked();
   }
 
@@ -396,6 +400,8 @@ export function initRecords(ctx) {
 
     renderEd(rec);
     renderAdmission(rec);
+    renderCourse(rec);
+    renderSummaries(rec);
 
     const end = el("div", "btn-row");
     end.append(btn("この症例を終える（削除）", "btn danger", endRecord));
@@ -405,7 +411,8 @@ export function initRecords(ctx) {
 
   const sec = (title, open = true) => {
     const d = el("details", "rec-sec");
-    d.open = open;
+    d.open = S.open[title] ?? open; // a section the doctor opened or closed stays so when the screen is redrawn
+    d.addEventListener("toggle", () => (S.open[title] = d.open));
     d.append(el("summary", null, title));
     return d;
   };
@@ -579,6 +586,19 @@ export function initRecords(ctx) {
       cert.append(b);
     }
     card.append(cert);
+    const dx = el("div", "chips rec-cert rec-dx");
+    dx.setAttribute("role", "group");
+    dx.setAttribute("aria-label", "退院時サマリーでの扱い");
+    dx.append(el("span", "rec-cert-label", "退院時サマリーでの扱い"));
+    for (const c of DX_CLASSES) {
+      const b = el("button", "chip", c.label);
+      b.type = "button";
+      b.dataset.opt = c.id;
+      b.setAttribute("aria-pressed", String(p.dx === c.id));
+      b.addEventListener("click", () => mutateAndRender((r) => setProblem(r, p.id, { dx: p.dx === c.id ? "" : c.id })));
+      dx.append(b);
+    }
+    card.append(dx);
 
     card.append(el("div", "rec-sub", "評価"));
     for (const e of p.assess) card.append(entryRow(p, "assess", e));
@@ -635,6 +655,304 @@ export function initRecords(ctx) {
     return row;
   }
 
+  // ------------------------------------------- the course: one entry per hospital day
+  /** A text input or textarea that writes into the record as the doctor types (dates are made relative when pasted or left). */
+  function textField(tag, value, max, onInput, label, cls) {
+    const input = el(tag, cls);
+    if (tag === "input") input.type = "text";
+    else input.rows = 2;
+    input.maxLength = max;
+    input.value = value;
+    input.setAttribute("autocomplete", "off");
+    if (label) input.setAttribute("aria-label", label);
+    input.addEventListener("input", () => onInput(input.value));
+    bindDates(input, (changes) => (dateNote.textContent = changesNote(changes)));
+    return input;
+  }
+  const dayLabel = (n) => `入院${n}日目`;
+  const trendText = (t) => (t ? `${dayLabel(t.day)} ${TREND.find((x) => x.id === t.state)?.label ?? ""}${t.note ? `（${t.note}）` : ""}` : "");
+
+  function renderCourse(rec) {
+    const d = sec("経過（日ごと・課題）");
+    const today = rec.course.today;
+    d.append(el("p", "help", "時間は「入院N日目」だけで記録します（入院した日が1日目。日付は入れません）。ここで記録した推移・計画の結果・診断の確度の変更は、いまの日の記録として残り、**前の日の記載には出ません**（その日の時点の記録から記載を作ります）。推移は、先生が選んだものだけが入ります（選ばなければ「未評価」で、「不変」にはなりません）。"));
+
+    // the working day
+    const bar = el("div", "rec-daybar");
+    bar.append(el("span", "rec-daybar-label", `いまの日: ${dayLabel(today)}`));
+    const prev = btn("← 前の日", "btn rec-small", () => mutateAndRender((r) => setToday(r, today - 1)));
+    prev.disabled = today <= 1;
+    const next = btn(`${dayLabel(nextDay(rec))}へ →`, "btn rec-small primary", () => {
+      S.noteDay = S.sumDay = null;
+      mutateAndRender((r) => setToday(r, nextDay(r)));
+    });
+    next.dataset.act = "next-day";
+    bar.append(prev, next);
+    d.append(bar);
+    if (rec.course.days.length) {
+      const chips = el("div", "chips rec-days");
+      chips.setAttribute("role", "group");
+      chips.setAttribute("aria-label", "記録のある日");
+      for (const x of rec.course.days) {
+        const b = el("button", "chip", `${x.day}日目${x.turning ? "★" : ""}`);
+        b.type = "button";
+        b.dataset.day = String(x.day);
+        b.setAttribute("aria-pressed", String(x.day === today));
+        b.addEventListener("click", () => {
+          S.noteDay = S.sumDay = null;
+          mutateAndRender((r) => setToday(r, x.day));
+        });
+        chips.append(b);
+      }
+      d.append(chips);
+    }
+    const view = asOf(rec, today);
+    const day = view.course.days.find((x) => x.day === today);
+
+    // 1. the plans of earlier days: what happened to them
+    d.append(el("h4", "rec-sub", "前の日までの計画の結果"));
+    const open = view.problems.flatMap((p) => p.plan.filter((e) => e.state === "planned" && (e.added ?? 1) < today).map((e) => [p, e]));
+    if (!open.length) d.append(el("p", "help", "前の日までに立てた計画で、結果を記録していないもの（予定のまま）はありません。"));
+    for (const [p, e] of open) {
+      const row = el("div", "rec-entry rec-outcome");
+      row.dataset.i = e.id;
+      row.append(el("div", "rec-outcome-text", `${p.label || "（名前なし）"}: ${e.text}`), el("div", "rec-cite", `入院${e.added ?? 1}日目に予定。結果は、先生が選んだとおりに記録します。`));
+      const why = textField("input", "", LIMITS.reason, () => {}, "理由・補足（任意）", "rec-reason");
+      why.placeholder = "理由・補足（任意。変更・中止のときは書いてください）";
+      const chips = el("div", "chips rec-state");
+      for (const st of PLAN_STATES.filter((x) => x.id !== "planned")) {
+        const b = el("button", "chip", st.label);
+        b.type = "button";
+        b.dataset.opt = st.id;
+        b.addEventListener("click", () => mutateAndRender((r) => setEntry(r, p.id, "plan", e.id, { state: st.id, ...(why.value.trim() ? { reason: why.value } : {}) })));
+        chips.append(b);
+      }
+      row.append(why, chips);
+      d.append(row);
+    }
+
+    // 2. the day's own texts
+    d.append(el("h4", "rec-sub", `${dayLabel(today)}の記録（先生の入力）`));
+    for (const f of DAY_FIELDS) {
+      const lab = el("label", "field", f.label);
+      const ta = textField("textarea", day?.[f.key] ?? "", f.max, (v) => mutate((r) => (v || r.course.days.some((x) => x.day === today) ? setDayField(r, today, f.key, v) : r)), f.label, "case-text rec-day-text");
+      ta.dataset.key = f.key;
+      lab.append(ta);
+      d.append(lab);
+    }
+    const turn = el("label", "rec-turn");
+    const cb = el("input");
+    cb.type = "checkbox";
+    cb.checked = !!day?.turning;
+    cb.dataset.act = "turning";
+    cb.addEventListener("change", () => mutateAndRender((r) => setDayTurning(r, today, cb.checked)));
+    turn.append(cb, el("span", null, `${dayLabel(today)}を、経過の転換点としてマークする（中間サマリー・退院時サマリーの「経過」に入ります）`));
+    d.append(turn);
+    if (day) {
+      const rm = btn(`${dayLabel(today)}の記録を消す`, "btn rec-small danger", () => {
+        if (confirm(`${dayLabel(today)}の記録（文・推移）を消します。よいですか？`)) mutateAndRender((r) => removeDay(r, today));
+      });
+      d.append(rm);
+    }
+
+    // 3. how each problem is going: the doctor's reading, blank when not chosen
+    d.append(el("h4", "rec-sub", `問題ごとの推移（${dayLabel(today)}）`));
+    const named = view.problems.filter((p) => p.label || p.assess.length || p.plan.length);
+    if (!named.length) d.append(el("p", "help", "問題がまだありません（上の「入院時」で足します）。"));
+    for (const p of named) {
+      const row = el("div", "rec-trend");
+      row.dataset.p = p.id;
+      row.append(el("span", "rec-trend-name", p.label || "（名前なし）"));
+      const cur = day?.trend[p.id] ?? { state: "", note: "" };
+      const chips = el("div", "chips");
+      chips.setAttribute("role", "group");
+      chips.setAttribute("aria-label", `${p.label || "問題"}の推移`);
+      for (const t of TREND) {
+        const b = el("button", "chip", t.label);
+        b.type = "button";
+        b.dataset.opt = t.id;
+        b.setAttribute("aria-pressed", String(cur.state === t.id));
+        b.addEventListener("click", () => mutateAndRender((r) => setTrend(r, today, p.id, cur.state === t.id ? "" : t.id)));
+        chips.append(b);
+      }
+      row.append(chips);
+      const note = textField("input", cur.note ?? "", LIMITS.reason, (v) => mutate((r) => setTrend(r, today, p.id, undefined, v)), `${p.label || "問題"}の推移のメモ`, "rec-reason");
+      note.placeholder = "メモ（任意）";
+      row.append(note);
+      const before = trendAt(rec, p.id, today - 1);
+      if (before) row.append(el("span", "rec-cite", `前回: ${trendText(before)}`));
+      d.append(row);
+    }
+
+    // 4. tasks
+    d.append(el("h4", "rec-sub", "課題（結果待ち・返事・フォロー）"));
+    d.append(el("p", "help", "完了にするのは先生です（結果や返事が届いても、自動では完了になりません）。担当者と期限は、退院時サマリーの「未解決」に使います（期限は「入院5日目」「退院後2週」のように）。"));
+    for (const k of view.course.tasks) d.append(taskRow(k, view));
+    const addRow = el("div", "btn-row");
+    addRow.append(btn("＋ 課題を足す", "btn", () => mutateAndRender((r) => addTask(r, { text: "", kind: "result" }).rec)));
+    d.append(addRow);
+    const fa = flowOf(rec, FLOWS);
+    if (fa) {
+      const made = new Set(view.course.tasks.map((k) => k.text));
+      const wait = waiting(fa.flow, fa.answers, rec.ed.case).filter((w) => !made.has(`${w.label}の結果`));
+      if (wait.length) {
+        d.append(el("p", "help", "救急で「結果待ち」または「未実施」を選んだ項目を、課題にできます（どちらかは区別していません。先生が選びます）。"));
+        const row = el("div", "btn-row");
+        for (const w of wait) row.append(btn(`課題にする: ${w.label}`, "btn rec-small", () => mutateAndRender((r) => addTask(r, { text: `${w.label}の結果`, kind: "result" }).rec)));
+        d.append(row);
+      }
+    }
+
+    // 5. the progress note for a day (as that day stood)
+    d.append(el("h4", "rec-sub", "経過の記載の下書き（病棟の経過 A06）"));
+    d.append(el("p", "help", "選んだ日の時点の記録だけから、AI を使わずに組み立てます（その日より後の確度・計画の結果・推移・課題は入りません）。未入力の必須欄は「（未入力）」、日付・患者ID・氏名は空欄です。実際のカルテに貼る前に、先生が確認・修正してください。"));
+    const pick = dayPicker(rec, "noteDay", "記載の日", "rec-noteday");
+    const pre = el("pre", "note-text rec-note-text rec-progress-text", "");
+    const copy = btn("コピー", "btn primary", async () => {
+      await copyText(pre.textContent);
+      copy.textContent = "コピーしました";
+    });
+    const copyRow = el("div", "btn-row");
+    copyRow.append(copy);
+    d.append(pick, pre, copyRow);
+    derived.progress = { pre, copy };
+    body.append(d);
+  }
+
+  /** A select of the days a note can be made for (the days with an entry, and the working day); the choice is kept in S[key]. */
+  function dayPicker(rec, key, label, cls) {
+    const pick = el("select", cls);
+    pick.setAttribute("aria-label", label);
+    const days = [...new Set([...rec.course.days.map((x) => x.day), rec.course.today])].sort((a, b) => a - b);
+    for (const n of days) pick.append(new Option(dayLabel(n), String(n)));
+    pick.value = String(S[key] && days.includes(S[key]) ? S[key] : rec.course.today);
+    pick.addEventListener("change", () => {
+      S[key] = Number(pick.value);
+      renderDerived();
+    });
+    return pick;
+  }
+  const pickedDay = (key) => (S[key] && (S.rec.course.days.some((x) => x.day === S[key]) || S[key] === S.rec.course.today) ? S[key] : S.rec.course.today);
+
+  /** A preview box: the text, and a copy button. */
+  function previewBox(cls) {
+    const pre = el("pre", `note-text rec-note-text ${cls}`, "");
+    const copy = btn("コピー", "btn primary", async () => {
+      await copyText(pre.textContent);
+      copy.textContent = "コピーしました";
+    });
+    const row = el("div", "btn-row");
+    row.append(copy);
+    return { pre, copy, row };
+  }
+
+  // ------------------------------------------- the interim summary (A07) and the discharge summary (A08)
+  function renderSummaries(rec) {
+    const today = rec.course.today;
+    // the interim summary / transfer note
+    const a = sec("中間サマリー・転棟（A07）", false);
+    a.append(el("p", "help", "転棟や引継ぎのときの要約です。「これまでの経過と転換点」には、上の「経過」で転換点としてマーク（★）した日の記録が入ります。下の4つは先生の入力で、日ごとの履歴は持たず、いまの文が使われます。問題・計画・推移・課題は、選んだ日の時点のものだけです（それより後に記録したことは入りません）。"));
+    for (const f of SUMMARY_FIELDS) {
+      const lab = el("label", "field", f.label);
+      const ta = textField("textarea", rec.course.summary[f.key] ?? "", f.max, (v) => mutate((r) => setSummary(r, f.key, v)), f.label, "case-text rec-sum-text");
+      ta.dataset.key = f.key;
+      lab.append(ta);
+      a.append(lab);
+    }
+    a.append(el("h4", "rec-sub", "中間サマリーの下書き（転棟・中間サマリ A07）"));
+    const pickA = dayPicker(rec, "sumDay", "中間サマリーの日", "rec-sumday");
+    const boxA = previewBox("rec-interim-text");
+    a.append(pickA, boxA.pre, boxA.row);
+    derived.interim = boxA;
+    body.append(a);
+
+    // the discharge summary: only once the doctor has decided the discharge and its day
+    const dc = rec.course.discharge;
+    const b = sec("退院時サマリー（A08）", false);
+    b.append(el("p", "help", "退院を決めて、退院の日を入れたときだけ、下書きが出ます（記録が終わっただけでは退院になりません）。下書きは、その日の時点の記録だけから作ります（それより後に記録した確度・計画の結果・推移・課題は入りません）。主病名・副病名は、各問題の「退院時サマリーでの扱い」で選びます。選ばなかった問題は「区分を選んでいない問題」として並びます。"));
+    const bar = el("div", "rec-daybar");
+    const dayIn = el("input", "rec-dc-day");
+    dayIn.type = "number";
+    dayIn.min = "1";
+    dayIn.max = String(COURSE_LIMITS.maxDay);
+    dayIn.value = dc.day ? String(dc.day) : "";
+    dayIn.placeholder = String(today);
+    dayIn.setAttribute("aria-label", "退院の日（入院N日目）");
+    dayIn.addEventListener("change", () => mutateAndRender((r) => setDischarge(r, { day: dayIn.value === "" ? 0 : Number(dayIn.value) })));
+    const decide = btn(dc.decided ? `退院を決めた（${dayLabel(dc.day)}）・取り消す` : `退院を決める（${dayLabel(dc.day ?? today)}）`, "btn rec-small primary", () => mutateAndRender((r) => setDischarge(r, { decided: !dc.decided })));
+    decide.dataset.act = "discharge-decide";
+    decide.setAttribute("aria-pressed", String(dc.decided));
+    bar.append(el("span", "rec-daybar-label", "退院の日 入院"), dayIn, el("span", null, "日目"), decide);
+    b.append(bar);
+    for (const f of DISCHARGE_FIELDS) {
+      const lab = el("label", "field", f.label);
+      const ta = textField("textarea", dc[f.key] ?? "", f.max, (v) => mutate((r) => setDischarge(r, { [f.key]: v })), f.label, "case-text rec-dc-text");
+      ta.dataset.key = f.key;
+      lab.append(ta);
+      b.append(lab);
+    }
+    b.append(el("h4", "rec-sub", "退院時処方（新規・変更・中止・継続と、その理由）"));
+    b.append(el("p", "help", "用量・用法は、先生が書いたとおりに入ります（ここでは作りません）。新規・変更・中止・継続のどれかを先生が選びます（選ばなければ「区分未記入」です）。変更・中止は理由を書いてください。"));
+    for (const m of dc.meds) b.append(medRow(m));
+    b.append(btn("＋ 処方を足す", "btn rec-small", () => mutateAndRender((r) => addMed(r, {}).rec)));
+    b.append(el("h4", "rec-sub", "退院時サマリーの下書き（退院時サマリ A08）"));
+    const boxB = previewBox("rec-discharge-text");
+    b.append(boxB.pre, boxB.row);
+    derived.discharge = boxB;
+    body.append(b);
+  }
+
+  function medRow(m) {
+    const row = el("div", "rec-task rec-med");
+    row.dataset.m = m.id;
+    row.append(textField("textarea", m.text, COURSE_LIMITS.medText, (v) => mutate((r) => setMed(r, m.id, { text: v })), "処方", "case-text rec-entry-text"));
+    const meta = el("div", "rec-entry-meta");
+    const chips = el("div", "chips rec-state");
+    chips.setAttribute("role", "group");
+    chips.setAttribute("aria-label", "処方の扱い");
+    for (const c of MED_CHANGES) {
+      const bt = el("button", "chip", c.label);
+      bt.type = "button";
+      bt.dataset.opt = c.id;
+      bt.setAttribute("aria-pressed", String(m.change === c.id));
+      bt.addEventListener("click", () => mutateAndRender((r) => setMed(r, m.id, { change: m.change === c.id ? "" : c.id })));
+      chips.append(bt);
+    }
+    const why = textField("input", m.reason ?? "", COURSE_LIMITS.medText, (v) => mutate((r) => setMed(r, m.id, { reason: v })), "理由", "rec-reason");
+    why.placeholder = "理由（変更・中止のときは書いてください）";
+    meta.append(chips, why, btn("削除", "btn rec-small danger", () => mutateAndRender((r) => removeMed(r, m.id))));
+    row.append(meta);
+    return row;
+  }
+
+  function taskRow(k, view) {
+    const row = el("div", "rec-task");
+    row.dataset.k = k.id;
+    row.append(textField("textarea", k.text, 600, (v) => mutate((r) => setTask(r, k.id, { text: v })), "課題", "case-text rec-entry-text"));
+    const meta = el("div", "rec-entry-meta");
+    const kind = el("select", "rec-kind");
+    kind.setAttribute("aria-label", "課題の種類");
+    for (const t of TASK_KINDS) kind.append(new Option(t.label, t.id));
+    kind.value = k.kind;
+    kind.addEventListener("change", () => mutateAndRender((r) => setTask(r, k.id, { kind: kind.value })));
+    const prob = el("select", "rec-kind");
+    prob.setAttribute("aria-label", "関係する問題");
+    prob.append(new Option("（問題を選ばない）", ""));
+    for (const p of view.problems) prob.append(new Option(p.label || "（名前なし）", p.id));
+    prob.value = k.problem ?? "";
+    prob.addEventListener("change", () => mutateAndRender((r) => setTask(r, k.id, { problem: prob.value })));
+    const owner = textField("input", k.owner, 60, (v) => mutate((r) => setTask(r, k.id, { owner: v })), "担当者", "rec-reason");
+    owner.placeholder = "担当者";
+    const due = textField("input", k.due, 60, (v) => mutate((r) => setTask(r, k.id, { due: v })), "期限", "rec-reason");
+    due.placeholder = "期限（入院5日目 など）";
+    const state = btn(k.state === "done" ? `完了（入院${k.closed ?? k.added}日目）・戻す` : "完了にする", "btn rec-small", () => mutateAndRender((r) => setTask(r, k.id, { state: k.state === "done" ? "open" : "done" })));
+    state.dataset.act = "task-state";
+    state.setAttribute("aria-pressed", String(k.state === "done"));
+    meta.append(kind, prob, owner, due, state, btn("削除", "btn rec-small danger", () => mutateAndRender((r) => removeTask(r, k.id))));
+    row.append(meta, el("span", "rec-cite", `入院${k.added}日目に追加`));
+    return row;
+  }
+
   // ------------------------------------------- the parts that change while typing: the checks, the identifier warning, the draft
   function renderDerived() {
     const warn = body.querySelector("#rec-warn");
@@ -658,6 +976,21 @@ export function initRecords(ctx) {
     if (derived.preview) {
       derived.preview.pre.textContent = toText(admissionNote(S.rec), { aiMark: S.opts.ai, sourceMarks: S.opts.src });
       derived.preview.copy.textContent = "コピー";
+    }
+    const marks = { aiMark: S.opts.ai, sourceMarks: S.opts.src };
+    if (derived.progress) {
+      derived.progress.pre.textContent = toText(progressNote(S.rec, pickedDay("noteDay")), marks);
+      derived.progress.copy.textContent = "コピー";
+    }
+    if (derived.interim) {
+      derived.interim.pre.textContent = toText(interimNote(S.rec, pickedDay("sumDay")), marks);
+      derived.interim.copy.textContent = "コピー";
+    }
+    if (derived.discharge) {
+      const n = dischargeNote(S.rec);
+      derived.discharge.pre.textContent = n ? toText(n, marks) : "（退院を決めて、退院の日を入れると、ここに下書きが出ます）";
+      derived.discharge.copy.disabled = !n;
+      derived.discharge.copy.textContent = "コピー";
     }
   }
 

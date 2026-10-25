@@ -388,6 +388,22 @@ input.rec-reason { flex: 1; min-width: 160px; }
 .note-opts { margin: 6px 0; }
 .rec-note-text { max-height: 56dvh; }
 
+.rec-daybar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.rec-daybar-label { font-weight: 700; color: var(--accent); margin-right: 4px; }
+.rec-days { margin: 4px 0 8px; }
+.rec-outcome { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.rec-outcome-text { font-size: 14px; line-height: 1.6; }
+.rec-trend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.rec-trend-name { font-weight: 600; min-width: 120px; }
+.rec-trend .chips { margin: 0; }
+.rec-task { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+select.rec-kind, select.rec-noteday, select.rec-sumday { min-height: 44px; width: auto; max-width: 100%; }
+.rec-turn { display: flex; align-items: center; gap: 8px; margin: 8px 0; min-height: 44px; }
+.rec-turn input { width: 22px; height: 22px; }
+input.rec-dc-day { width: 5.5em; min-height: 44px; }
+.rec-med .chips { margin: 0; }
+textarea.rec-day-text { width: 100%; min-height: 56px; }
+
 /* ---- chart-note draft (web/note-ui.js; docs/enhancement-plan.md 7.3) ---- */
 .adopt { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; padding: 0 10px; min-height: 34px; font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; white-space: nowrap; vertical-align: middle; }
 .adopt input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }

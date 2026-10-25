@@ -10,7 +10,10 @@ emergency time axis (minutes from the arrival, the next-day reading, no judgemen
 doctor's own act (to a new problem, to an existing one, not at all), the problem board (stable ids, priority, certainty, plan states), the
 doctor's own admission texts, the A05 draft (what is in it and what is not, the marks and their removal, copy), saving by itself with the
 revision, identifier-like text blocked here and by the Worker, a record read back on a fresh page with the form restored, a save from
-another screen refused (not overwritten), ending a record, and that nothing of it is kept in the browser's own storage.
+another screen refused (not overwritten), ending a record, and that nothing of it is kept in the browser's own storage.  Then the course
+(steps 21-22): a day at a time, plans of an earlier day with no result recorded, a trend that is blank unless chosen, tasks, the notes as of
+their day (nothing later in them), the interim summary (A07) with the turning points, and the discharge summary (A08) that exists only once
+the doctor has decided the discharge and its day, with the medications as chosen and blanks left blank.
 """
 import json
 import re
@@ -255,7 +258,7 @@ with sync_playwright() as pw:
     check("日付を経過の表現に直しました" in rec_text(), "and the note says so")
 
     # 9. the draft of the admission note
-    pre = page.locator(".rec-note-text")
+    pre = page.locator(".rec-note-text").first  # the admission note (the course note is the second)
     text = pre.inner_text()
     check(text.startswith("【病棟入院時】下書き\n［日付］　［患者ID］　［氏名］"), "the draft starts with its title and the blank date / ID / name")
     check("1. 高血圧の管理" in text and "2. 腎前性AKI（疑い）" in text.replace("〔救急から〕", "").replace("  ", " ") or "2. 腎前性AKI（疑い）" in text, "the problems in priority order")
@@ -271,7 +274,7 @@ with sync_playwright() as pw:
     page.locator("#record label.check", has_text="〔AI草案〕の印を残す").locator("input").check()
     page.locator("#record label.check", has_text="出どころの印").locator("input").check()
     page.evaluate("window.__copied = ''; navigator.clipboard.writeText = async (t) => { window.__copied = t; }")
-    page.locator("#record button", has_text="コピー").click()
+    page.locator("#record button", has_text="コピー").first.click()
     page.wait_for_function("() => window.__copied.length > 0")
     check(page.evaluate("window.__copied").startswith("【病棟入院時】下書き"), "copy puts the draft on the clipboard")
     page.screenshot(path=str(OUT / "03_note.png"), full_page=False)
@@ -460,6 +463,206 @@ with sync_playwright() as pw:
     first_conv = api("GET", "/api/conversations")["body"]["conversations"]
     check(len(first_conv) >= 2, f"the new question is saved in a new conversation ({len(first_conv)} conversations)")
     api("DELETE", f"/api/records/{rid2}")
+
+    # 21. the course: a day at a time; plans of an earlier day with no result are counted; a trend is blank unless chosen; as of the day
+    page.click("#btn-new")
+    page.wait_for_timeout(600)
+    page.click("#btn-case")
+    page.fill("#case-complaint", "3日前から腹痛と嘔気")
+    page.select_option("#case-age", "70代")
+    page.select_option("#case-sex", "男性")
+    page.click("#case-pin")
+    page.click("#btn-records")
+    page.wait_for_selector("text=いま固定している症例を記録にする")
+    page.locator("#record button", has_text="いま固定している症例を記録にする").click()
+    page.wait_for_selector(".rec-title")
+    page.locator("button", has_text="＋ 問題を足す").click()
+    page.locator(".rec-problem").first.locator("input.rec-label").fill("腎前性AKI")
+    page.locator(".rec-problem").first.locator(".rec-cert .chip[data-opt=suspected]").click()
+    page.locator(".rec-problem").first.locator("button", has_text="＋ 計画を足す").click()
+    page.locator(".rec-problem").first.locator(".rec-entry textarea").first.fill("細胞外液の輸液を検討")
+    page.locator(".rec-problem").first.locator("button", has_text="＋ 計画を足す").click()
+    page.locator(".rec-problem").first.locator(".rec-entry").nth(1).locator("textarea").fill("内服薬を見直す")
+    wait_saved()
+    check("いまの日: 入院1日目" in rec_text() and "前の日までに立てた計画で、結果を記録していないもの（予定のまま）はありません" in rec_text(), "day 1: nothing earlier to report on")
+    check(not page.locator(".rec-check[data-id=plan_unrecorded]").count(), "and no 'plans not recorded' note")
+    a05 = page.locator(".rec-note-text").first.inner_text()
+    check("（疑い）" in a05, "the admission note shows the certainty of day 1")
+
+    page.locator("button[data-act=next-day]").click()
+    check("いまの日: 入院2日目" in rec_text(), "the next day starts")
+    outcome = page.locator(".rec-outcome")
+    check(outcome.count() == 2 and "入院1日目に予定" in outcome.first.inner_text(), "the two plans of day 1 are listed, still planned")
+    note = page.locator(".rec-check[data-id=plan_unrecorded]").inner_text()
+    check("実施・変更・中止のどれも記録していないものが 2 件（予定のまま）" in note, f"counted, not judged ({note})")
+    outcome.first.locator("input.rec-reason").fill("開始した")
+    outcome.first.locator(".chip[data-opt=done]").click()
+    check(page.locator(".rec-outcome").count() == 1, "a plan with a result leaves the list")
+    page.locator(".rec-outcome").first.locator(".chip[data-opt=changed]").click()
+    check(not page.locator(".rec-outcome").count() and "変更・中止の理由を書いていない計画が 1 件" in page.locator(".rec-check[data-id=plan_reason]").inner_text(), "a change with no reason is counted")
+
+    page.locator("textarea.rec-day-text[data-key=interval]").fill("夜間に38℃台の発熱があった")
+    page.locator("textarea.rec-day-text[data-key=objective]").fill("BT 38.4℃、Cr 2.1 mg/dL（入院時 2.4）")
+    page.locator("textarea.rec-day-text[data-key=handover]").fill("明朝の採血で Cr を確認する")
+    progress = page.locator(".rec-progress-text")
+    check("入院2日目。" not in progress.inner_text() or "入院2日目" in progress.inner_text(), "(the note follows the working day)")
+    check(not re.search(r"推移（入院", progress.inner_text()) and "不変" not in progress.inner_text(), "no trend chosen yet: the note has no 推移 line (not 不変)")
+    check("入院2日目の推移（改善・不変・悪化）を選んでいない問題が 1 件（選ばなければ「未評価」です）" in page.locator(".rec-check[data-id=trend_missing]").inner_text(), "the unchosen trend is counted, as 未評価")
+    page.locator(".rec-trend .chip[data-opt=improved]").click()
+    page.locator(".rec-trend input.rec-reason").fill("尿量が増えた")
+    check(not page.locator(".rec-check[data-id=trend_missing]").count(), "chosen: no longer counted")
+    progress = page.locator(".rec-progress-text")
+    check("推移（入院2日目）: 改善 — 尿量が増えた" in progress.inner_text(), "the chosen trend and its note are in the note")
+    check("実施（医師の記録）:\n・細胞外液の輸液を検討（理由: 開始した）" in progress.inner_text() and "変更（医師の記録）:\n・内服薬を見直す" in progress.inner_text(), "the plan outcomes the doctor recorded are in it, under their own headings")
+
+    page.locator("button", has_text="＋ 課題を足す").click()
+    task = page.locator(".rec-task").first
+    task.locator("textarea").fill("血液培養の結果")
+    check("未完了の課題が 1 件" in page.locator(".rec-check[data-id=tasks_open]").inner_text() and "担当者または期限が未入力の課題が 1 件" in page.locator(".rec-check[data-id=tasks_incomplete]").inner_text(), "an open task without an owner or a due is counted")
+    task.locator("input[aria-label=担当者]").fill("当直医")
+    task.locator("input[aria-label=期限]").fill("入院3日目")
+    check(not page.locator(".rec-check[data-id=tasks_incomplete]").count(), "owner and due given: not counted any more")
+    task.locator("button[data-act=task-state]").click()
+    check(not page.locator(".rec-check[data-id=tasks_open]").count() and "完了（入院2日目）" in page.locator(".rec-task").first.inner_text(), "closing is the doctor's act and stamps the day")
+    wait_saved()
+
+    # as of the day: a certainty changed on day 3 is not in day 2's notes, nor in the admission note
+    page.locator("button[data-act=next-day]").click()
+    check("いまの日: 入院3日目" in rec_text(), "day 3")
+    page.locator(".rec-problem").first.locator(".rec-cert .chip[data-opt=confirmed]").click()
+    wait_saved()
+    sel = page.locator("select.rec-noteday")
+    sel.select_option("2")
+    t2 = page.locator(".rec-progress-text").inner_text()
+    check("（疑い）" in t2 and "確定" not in t2 and "推移（入院2日目）: 改善" in t2, "the note of day 2 shows day 2's certainty, not the one set on day 3")
+    sel.select_option("3")
+    t3 = page.locator(".rec-progress-text").inner_text()
+    check("（確定）" in t3 and "推移（入院2日目）: 改善" in t3, "the note of day 3 shows the later certainty, and the latest trend with its own day")
+    check("（疑い）" in page.locator(".rec-note-text").first.inner_text() and "確定" not in page.locator(".rec-note-text").first.inner_text(), "and the admission note still shows the admission day's certainty")
+    page.screenshot(path=str(OUT / "05_course.png"))
+
+    # a date typed in a day text and never left is relative when saved
+    page.locator("textarea.rec-day-text[data-key=interval]").fill("10/21 に熱が下がり、受診から 2026年10月22日 まで安定")
+    page.wait_for_timeout(2600)
+    wait_saved()
+    rid3 = api("GET", "/api/records")["body"]["records"][0]["id"]
+    saved = api("GET", f"/api/records/{rid3}")["body"]["record"]
+    d3 = [d for d in saved["course"]["days"] if d["day"] == 3][0]
+    check("10/21" not in d3["interval"] and "2026" not in d3["interval"], f"no calendar date in the day text ({d3['interval']})")
+    d2 = [d for d in saved["course"]["days"] if d["day"] == 2][0]
+    check(d2["trend"]["p1"] == {"state": "improved", "note": "尿量が増えた"} and saved["course"]["tasks"][0]["state"] == "done" and saved["course"]["tasks"][0]["closed"] == 2, "the trend and the closed task are on the server")
+    p1 = saved["problems"][0]
+    check([c["certainty"] for c in p1["cert_log"]] == ["suspected", "confirmed"] and [c["day"] for c in p1["cert_log"]] == [1, 3], f"the certainty has its history ({p1['cert_log']})")
+    check(p1["plan"][0]["log"][0] == {"day": 2, "state": "done", "reason": "開始した"}, "and so has the plan's state")
+    check(saved["course"]["today"] == 3, "the working day is saved")
+    api("DELETE", f"/api/records/{rid3}")
+
+    # 22. the interim summary (A07) and the discharge summary (A08): as of their day; a discharge only once decided; blanks stay blank
+    page.keyboard.press("Escape")
+    page.click("#btn-new")
+    page.wait_for_timeout(600)
+    page.click("#btn-case")
+    page.fill("#case-complaint", "3日前から腹痛と嘔気")
+    page.select_option("#case-age", "70代")
+    page.select_option("#case-sex", "男性")
+    page.click("#case-pin")
+    page.click("#btn-records")
+    page.wait_for_selector("text=いま固定している症例を記録にする")
+    page.locator("#record button", has_text="いま固定している症例を記録にする").click()
+    page.wait_for_selector(".rec-title")
+    page.locator("button", has_text="＋ 問題を足す").click()
+    page.locator(".rec-problem").first.locator("input.rec-label").fill("腎前性AKI")
+    page.locator(".rec-problem").first.locator(".rec-cert .chip[data-opt=suspected]").click()
+    page.locator(".rec-problem").first.locator("button", has_text="＋ 計画を足す").click()
+    page.locator(".rec-problem").first.locator(".rec-entry textarea").first.fill("細胞外液の輸液を検討")
+    wait_saved()
+    page.locator("button[data-act=next-day]").click()
+    check("いまの日: 入院2日目" in rec_text(), "(day 2)")
+    page.locator("textarea.rec-day-text[data-key=interval]").fill("夜間に38℃台の発熱があった")
+    page.locator("input[data-act=turning]").check()
+    check(page.locator(".rec-days .chip[data-day='2']").inner_text() == "2日目★", "marking a turning point shows on the day's chip")
+    page.locator(".rec-trend .chip[data-opt=worse]").click()
+    page.locator(".rec-trend input.rec-reason").fill("尿量低下")
+    page.locator("button[data-act=next-day]").click()
+    check("いまの日: 入院3日目" in rec_text(), "(day 3)")
+    page.locator(".rec-problem").first.locator(".rec-cert .chip[data-opt=confirmed]").click()
+    page.locator(".rec-problem").first.locator(".rec-dx .chip[data-opt=main]").click()
+    check(page.locator(".rec-problem").first.locator(".rec-dx .chip[data-opt=main]").get_attribute("aria-pressed") == "true", "the main diagnosis is the doctor's choice")
+    page.locator("button", has_text="＋ 問題を足す").click()
+    page.locator(".rec-problem").nth(1).locator("input.rec-label").fill("尿路感染症")
+    page.locator(".rec-problem").nth(1).locator(".rec-dx .chip[data-opt=sub]").click()
+    wait_saved()
+
+    # the interim summary
+    page.locator("details.rec-sec summary", has_text="中間サマリー・転棟（A07）").click()
+    check(page.locator("details.rec-sec", has_text="中間サマリー・転棟（A07）").first.get_attribute("open") is not None, "the section opens")
+    page.locator("textarea.rec-sum-text[data-key=context]").fill("一般病棟へ転棟")
+    interim = page.locator(".rec-interim-text")
+    check("※入院3日目の時点の記録です" in interim.inner_text(), "the working day is the default day, and the note says what it is as of")
+    check("一般病棟へ転棟" in interim.inner_text() and "入院2日目:\n・前回からのイベント: 夜間に38℃台の発熱があった\n・推移 腎前性AKI: 悪化 — 尿量低下" in interim.inner_text(), "the turning day's record is in the course")
+    for blank in ("現時点の呼吸・循環・意識等", "継続治療・デバイス", "結果待ち・未解決事項", "引継ぎ先・依頼・共有の状況"):
+        check(re.search(r"■" + blank + r"\n（未入力）", interim.inner_text()) is not None, f"{blank}: left blank")
+    check("（確定）" in interim.inner_text() and "尿路感染症" not in interim.inner_text(), "the certainty of the day; a problem with nothing recorded is not listed")
+    page.locator("select.rec-sumday").select_option("2")
+    i2 = page.locator(".rec-interim-text").inner_text()
+    check("※入院2日目の時点の記録です" in i2 and "（疑い）" in i2 and "確定" not in i2, "as of day 2: the certainty set on day 3 is not in it")
+    page.locator("select.rec-sumday").select_option("3")
+    # a closed section stays closed, an open one stays open when the screen is drawn again
+    page.locator("button", has_text="＋ 課題を足す").click()
+    check(page.locator("details.rec-sec", has_text="中間サマリー・転棟（A07）").first.get_attribute("open") is not None, "an opened section stays open after a redraw")
+
+    # the discharge summary
+    page.locator("details.rec-sec summary", has_text="退院時サマリー（A08）").click()
+    dc = page.locator(".rec-discharge-text")
+    check("退院を決めて、退院の日を入れると" in dc.inner_text() and page.locator("details.rec-sec", has_text="退院時サマリー（A08）").locator(".rec-note-text ~ .btn-row button").is_disabled(), "no discharge yet: no draft, and nothing to copy")
+    page.locator("textarea.rec-dc-text[data-key=dest]").fill("自宅")
+    page.locator("textarea.rec-dc-text[data-key=state]").fill("歩行可能。食事摂取可")
+    check("退院を決めて、退院の日を入れると" in page.locator(".rec-discharge-text").inner_text(), "texts alone are not a discharge")
+    page.locator("details.rec-sec", has_text="退院時サマリー（A08）").locator("button", has_text="＋ 処方を足す").click()
+    page.locator(".rec-med").nth(0).locator("textarea").fill("薬A")
+    page.locator(".rec-med").nth(0).locator(".chip[data-opt=stopped]").click()
+    page.locator("details.rec-sec", has_text="退院時サマリー（A08）").locator("button", has_text="＋ 処方を足す").click()
+    page.locator(".rec-med").nth(1).locator("textarea").fill("薬B")
+    check("変更・中止の理由を書いていない退院時の処方が 1 件" in page.locator(".rec-check[data-id=meds_reason]").inner_text() and "選ばなければ「未記入」です" in page.locator(".rec-check[data-id=meds_unset]").inner_text(), "medications with no reason / no class are counted, not judged")
+    page.locator("button[data-act=discharge-decide]").click()
+    check("退院を決めた（入院3日目）" in page.locator("button[data-act=discharge-decide]").inner_text(), "deciding stamps the working day")
+    d = page.locator(".rec-discharge-text").inner_text()
+    check(d.startswith("【退院時サマリ】下書き") and "入院1日目に入院、入院3日目に退院" in d and "※入院3日目の時点の記録です" in d, "the draft exists once decided, as of the discharge day")
+    check("主病名:\n1. 腎前性AKI（確度: 確定）" in d and "副病名:\n1. 尿路感染症（確度: 未選択）" in d, "the diagnoses are the ones the doctor classed; a certainty not chosen is shown as not chosen")
+    check("・薬A — 中止（理由: 未入力）" in d and "・薬B — 区分未記入" in d, "the medications: what was chosen, and what was not")
+    check(re.search(r"■外来・在宅の方針\n（未入力）", d) is not None and "歩行可能。食事摂取可" in d, "a blank stays blank; the doctor's words are as written")
+    check(not page.locator("details.rec-sec", has_text="退院時サマリー（A08）").locator(".rec-note-text ~ .btn-row button").is_disabled(), "copy is available once there is a draft")
+    page.locator(".rec-med").nth(0).locator("input.rec-reason").fill("副作用のため")
+    check("・薬A — 中止（理由: 副作用のため）" in page.locator(".rec-discharge-text").inner_text() and not page.locator(".rec-check[data-id=meds_reason]").count(), "the reason is in the draft and no longer counted")
+    # an earlier discharge day: what was recorded later is not in it
+    page.locator("input.rec-dc-day").fill("2")
+    page.locator("input.rec-dc-day").dispatch_event("change")
+    d2 = page.locator(".rec-discharge-text").inner_text()
+    check("入院2日目に退院" in d2 and "（確度: 疑い）" in d2 and "確定" not in d2 and "尿路感染症" not in d2, "discharge on day 2: the later certainty and the later problem are not in it")
+    page.locator("button[data-act=discharge-decide]").click()
+    check("退院を決めて、退院の日を入れると" in page.locator(".rec-discharge-text").inner_text(), "taking the decision back removes the draft")
+    page.locator("input.rec-dc-day").fill("3")
+    page.locator("input.rec-dc-day").dispatch_event("change")
+    page.locator("button[data-act=discharge-decide]").click()
+    wait_saved()
+    page.screenshot(path=str(OUT / "06_discharge.png"))
+    rid4 = api("GET", "/api/records")["body"]["records"][0]["id"]
+    saved = api("GET", f"/api/records/{rid4}")["body"]["record"]
+    sc = saved["course"]
+    check(sc["discharge"]["decided"] is True and sc["discharge"]["day"] == 3 and sc["discharge"]["dest"] == "自宅" and sc["summary"]["context"] == "一般病棟へ転棟", "the decision, its day and the doctor's texts are on the server")
+    check([(m["id"], m["text"], m["change"]) for m in sc["discharge"]["meds"]] == [("m1", "薬A", "stopped"), ("m2", "薬B", "")], "the medications keep their ids and a blank class stays blank")
+    check(sc["days"][0]["day"] == 2 and sc["days"][0]["turning"] is True and [p.get("dx") for p in saved["problems"]] == ["main", "sub"], "the turning mark and the classes are on the server")
+    check(not re.search(r"\d{4}-\d{2}-\d{2}|\d{4}年|\d{1,2}月\d{1,2}日", json.dumps(saved, ensure_ascii=False)), "no calendar date in the saved record")
+    # a fresh page restores it
+    page.reload()
+    page.wait_for_function("() => document.querySelector('#chip-books').textContent.includes('(1)')")
+    page.click("#btn-records")
+    page.wait_for_selector(".rec-item")
+    page.locator(".rec-item button", has_text="開く").first.click()
+    page.wait_for_selector(".rec-title")
+    page.locator("details.rec-sec summary", has_text="退院時サマリー（A08）").click()
+    check("退院を決めた（入院3日目）" in page.locator("button[data-act=discharge-decide]").inner_text() and "入院3日目に退院" in page.locator(".rec-discharge-text").inner_text(), "read back on a fresh page: the discharge is restored")
+    api("DELETE", f"/api/records/{rid4}")
 
     # 15. nothing of the record is kept in the browser's own storage
     store = page.evaluate("JSON.stringify([localStorage, sessionStorage])")
