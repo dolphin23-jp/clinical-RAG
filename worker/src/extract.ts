@@ -51,12 +51,44 @@ export function numberTokens(s: unknown): number[] {
   return (t.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
 }
 
+/**
+ * The quote of a proposal, or null: at most MAX_FRAG characters, at least two that are not punctuation or symbols (a quote of "。" or "胸" proves
+ * nothing), and in the memo (NFKC, no spaces, lower case).  `hay` is norm(memo) when the caller has it.
+ */
+export function fragOk(frag: unknown, memo: string, hay: string = norm(memo)): string | null {
+  const f = String(frag ?? "").trim().slice(0, MAX_FRAG);
+  const n = norm(f);
+  if (n.replace(/[\p{P}\p{S}]/gu, "").length < 2) return null;
+  return hay.includes(n) ? f : null;
+}
+
+/**
+ * The clock times written in a text, as "HH:MM": 10:20, 10時20分, 10時半, 10時.  Not "10時間" or "10分前" (a length of time is not a time).  午前/AM and
+ * 午後/PM written just before make a 12-hour reading (午後3時 is 15:00); without one the hour is read as written (3時 is 03:00: the model is told to
+ * leave a time whose am/pm is unknown).
+ */
+export function timesIn(text: unknown): string[] {
+  const out = new Set<string>();
+  const t = String(text ?? "").normalize("NFKC");
+  for (const m of t.matchAll(/(午前|午後|am|pm)?\s*(\d{1,2})(?::(\d{2})|時(?!間)(?:(\d{1,2})分|半)?)/gi)) {
+    let h = Number(m[2]);
+    const min = m[3] !== undefined ? Number(m[3]) : m[4] !== undefined ? Number(m[4]) : /半/.test(m[0]) ? 30 : 0;
+    const mark = (m[1] ?? "").toLowerCase();
+    if (mark === "午後" || mark === "pm") h = (h % 12) + 12;
+    else if (mark === "午前" || mark === "am") h %= 12;
+    if (h > 23 || min > 59) continue;
+    out.add(`${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`);
+  }
+  return [...out];
+}
+
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const NUM = /^\d+(?:\.\d+)?$/;
 
 /**
  * The value a proposal may hold for a question, or null.  choice: one option id; multi: option ids (an exclusive one stands alone); number: digits
- * written in the quote; time: HH:MM whose hour is written in the quote; text: words that are in the memo, with the memo's numbers only.
+ * written in the quote; time: a time written in the quote (hour and minute; not "10分前"); text: the memo's own words that the quote holds (or is
+ * held by), with the memo's numbers only.
  */
 export function checkValue(q: CatalogQuestion, v: unknown, frag: string, memo: string): string | string[] | null {
   if (!Array.isArray(v) || v.length === 0 || v.length > 40 || !v.every((x) => typeof x === "string")) return null;
@@ -75,14 +107,12 @@ export function checkValue(q: CatalogQuestion, v: unknown, frag: string, memo: s
     if (!NUM.test(s) || !Number.isFinite(Number(s))) return null;
     return numberTokens(frag).includes(Number(s)) ? s : null;
   }
-  if (q.type === "time") {
-    const m = TIME.exec(s);
-    if (!m) return null;
-    const hour = Number(m[1]);
-    return numberTokens(frag).some((n) => n === hour || n === hour % 12) ? s : null;
-  }
-  // text: the memo's own words (not reworded), short, and no number the memo does not have
-  if (!s || s.length > MAX_TEXT_VALUE || !norm(memo).includes(norm(s))) return null;
+  if (q.type === "time") return TIME.test(s) && timesIn(frag).includes(s) ? s : null;
+  // text: the memo's own words (not reworded), short, tied to the quote, and no number the memo does not have
+  if (!s || s.length > MAX_TEXT_VALUE) return null;
+  const nv = norm(s);
+  const nf = norm(frag);
+  if (!norm(memo).includes(nv) || !(nv.includes(nf) || nf.includes(nv))) return null;
   const have = new Set(numberTokens(memo));
   return numberTokens(s).every((n) => have.has(n)) ? s : null;
 }
@@ -127,8 +157,8 @@ export function parseOutput(raw: string, flow: CatalogFlow, memo: string): { pro
       dropped.duplicate++;
       continue;
     }
-    const frag = p.frag.trim().slice(0, MAX_FRAG);
-    if (!norm(frag) || !hay.includes(norm(frag))) {
+    const frag = fragOk(p.frag, memo, hay);
+    if (!frag) {
       dropped.quote++;
       continue;
     }
@@ -227,7 +257,18 @@ export interface ExtractDeps {
   signal?: AbortSignal;
 }
 
+/**
+ * The forms of a memo the identifier check runs on: as written, and with width folded (NFKC) and zero-width characters removed (so "ｶﾙﾃ番号" and
+ * "ID​:12345" are read as what they are).  A long pasted memo is where a missed identifier costs the most.
+ */
+export const guardForms = (text: string): string[] => {
+  const folded = text.normalize("NFKC").replace(/[\u200b-\u200f\u2060\ufeff]/g, "");
+  return folded === text ? [text] : [text, folded];
+};
+
 export interface ExtractResult {
+  /** the model that answered (a refusal fallback may have answered with another) */
+  model?: string;
   proposals: Proposal[];
   dropped: Record<DropReason, number>;
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
@@ -269,6 +310,7 @@ export async function runExtract(deps: ExtractDeps, req: ExtractRequest): Promis
   const u = msg?.usage ?? {};
   const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
   return {
+    ...(typeof msg?.model === "string" ? { model: msg.model.slice(0, 80) } : {}),
     ...parseOutput(raw, req.flow, req.text),
     usage: { input_tokens: n(u.input_tokens), output_tokens: n(u.output_tokens), cache_read_input_tokens: n(u.cache_read_input_tokens), cache_creation_input_tokens: n(u.cache_creation_input_tokens) },
   };

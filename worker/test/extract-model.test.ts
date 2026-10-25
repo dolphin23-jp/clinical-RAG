@@ -122,6 +122,88 @@ test("sentenceOf and the weight of a confirmation: a negation or a doubt outside
   assert.equal(doubt.risk, "high");
 });
 
+test("extractable: no option says it is the doctor's judgment, and the questions found to hold a reading or a decision are not offered (any flow)", () => {
+  const present = new Set<string>();
+  for (const f of Object.values(SCHEMA.FLOWS) as any[]) {
+    for (const q of f.questions) {
+      present.add(q.id);
+      if (!M.extractable(q)) continue;
+      assert.ok(!M.JUDGMENT_IDS.has(q.id), `${f.id} ${q.id}`);
+      for (const o of q.options ?? []) assert.doesNotMatch(o.label, /判断|医師の/, `${f.id} ${q.id}.${o.id}: an option that is the doctor's own judgment`);
+    }
+  }
+  for (const id of M.JUDGMENT_IDS) assert.ok(present.has(id), `${id} is in no imported flow: a renamed question is to be looked at again`);
+  const f = SCHEMA.FLOWS;
+  const by = (flow: string, id: string) => f[flow].questions.find((q: any) => q.id === id);
+  for (const [flow, id] of [["emergency-department.gi-bleeding", "vbg_res"], ["emergency-department.nausea-vomiting", "vbg_res"], ["emergency-department.gi-bleeding", "labs_res"], ["emergency-department.shock", "skin"], ["emergency-department.consciousness", "ems_glu"], ["emergency-department.chest-pain", "circ"], ["emergency-department.dizziness", "re_change"], ["outpatient-first-visit.fever", "antipyretic_tx"]]) {
+    assert.equal(M.extractable(by(flow, id)), false, `${flow} ${id}`);
+  }
+  assert.equal(M.extractable(by("emergency-department.abdominal-pain", "vbg_res")), true, "a blood-gas question whose options are plain findings stays (its quote is checked against the option's own words)");
+});
+
+// a negation, a doubt, a plan, an approximation or a bound in any of the wordings a Japanese note uses must not leave a proposal in the "together" group
+test("whyHigh: the wordings of a negation, a doubt, a plan or an approximation (Japanese and English) are looked at alone; a plain finding is not", () => {
+  const q = flow.questions.find((x: any) => x.id === "lung_exam");
+  const sentences = [
+    "両側でcracklesは聴取せず", "cracklesは認められず", "cracklesは見られず", "cracklesは聞こえず", "cracklesを認めず", "cracklesはなかった", "cracklesはありません", "cracklesを除外", "cracklesは乏しい",
+    "crackles：否", "no crackles", "denies crackles", "crackles negative", "crackles neg", "w/o crackles", "r/o crackles", "crackles ( - )", "crackles (ー)", "crackles（－）",
+    "cracklesと思う", "cracklesらしい", "cracklesのようだ", "crackles未評価", "cracklesは測定できず", "cracklesの可能性", "cracklesが疑われる",
+    "cracklesを確認してほしい", "cracklesの再評価を検討", "cracklesの確認が必要", "約3か所でcrackles", "crackles程度", "100台でcrackles", "crackles前後", "crackles 以上",
+  ];
+  for (const t of sentences) {
+    const { items } = M.reviewProposals(flow, [P("lung_exam", ["crackles"], "crackles")], t);
+    assert.equal(items.length, 1, t);
+    assert.equal(M.classify(flow, {}, ctx(), items)[0].risk, "high", `「${t}」 is one to look at alone`);
+  }
+  for (const t of ["両側でcrackles", "背部でcracklesを聴取", "crackles +", "Crackles あり"]) {
+    const { items } = M.reviewProposals(flow, [P("lung_exam", ["crackles"], "crackles")], t);
+    assert.equal(M.classify(flow, {}, ctx(), items)[0].risk, "low", `「${t}」 is a plain finding`);
+  }
+});
+
+test("whyHigh: a quote that has nothing to do with the question or the chosen option is shown to be looked at (an unrelated number, a category read from a number)", () => {
+  const run = (fid: string, qid: string, v: string[], frag: string, memo: string) => {
+    const fl = SCHEMA.FLOWS[fid];
+    const { items } = M.reviewProposals(fl, [P(qid, v, frag)], memo);
+    assert.equal(items.length, 1, `${qid} ${frag}`);
+    return M.classify(fl, {}, I.contextOf({}, { sex: "男性" }), items)[0];
+  };
+  const MISMATCH = /引用が、この質問・選択肢の言葉と合っていません/;
+  const a = run("emergency-department.dyspnea", "hx_chest", ["pressure"], "BP 120/80", "BP 120/80、胸痛なし");
+  assert.equal(a.risk, "high");
+  assert.ok(a.why.some((w: string) => MISMATCH.test(w)), "a chest-pain character from a blood pressure");
+  const b = run("emergency-department.dyspnea", "rr", ["80"], "BP 120/80", "BP 120/80");
+  assert.ok(b.why.some((w: string) => MISMATCH.test(w)), "a respiratory rate from a blood pressure");
+  const c = run("emergency-department.abdominal-pain", "vbg_res", ["lactate"], "乳酸 4.2", "乳酸 4.2 でした");
+  assert.equal(c.risk, "high", "'乳酸の上昇' is not what '乳酸 4.2' says: a category read from a number");
+  assert.ok(c.why.some((w: string) => MISMATCH.test(w)));
+  const ok = run("emergency-department.abdominal-pain", "vbg_res", ["lactate"], "乳酸の上昇あり", "乳酸の上昇あり");
+  assert.ok(!ok.why.some((w: string) => MISMATCH.test(w)), "the same words: related");
+  // a "none" the memo does not say: the unmentioned finding made "none"
+  const d = run("emergency-department.dyspnea", "hx_chest", ["none"], "SpO2 88%", "SpO2 88%。呼吸困難。");
+  assert.ok(d.why.some((w: string) => /書かれていないことを「なし」にしていないか/.test(w)), "no word in the memo that says none");
+  const e = run("emergency-department.dyspnea", "hx_chest", ["none"], "胸痛なし", "胸痛なし");
+  assert.ok(!e.why.some((w: string) => /書かれていないこと/.test(w)), "the memo says none");
+});
+
+test("whyHigh: an option that reads as none / normal / not done / unknown by its own label, and what was done by a question's own words, are looked at alone", () => {
+  const find = (fid: string, id: string) => SCHEMA.FLOWS[fid].questions.find((q: any) => q.id === id);
+  const q = find("emergency-department.dyspnea", "ems_tx"); // EMS treatments: a list of things done, in a "context" question
+  assert.ok(M.whyHigh(q, ["o2"], "酸素", "救急隊が酸素を投与").includes("行った処置"));
+  const n = find("emergency-department.dyspnea", "skin");
+  assert.ok(M.whyHigh(n, ["normal"], "特記なし", "皮膚は特記なし").length >= 1, "'特記なし'");
+});
+
+test("reviewProposals: a quote of one character or only punctuation is not a quote; a time must be written, with its minutes, in the quote", () => {
+  const r = M.reviewProposals(flow, [P("rr", ["28"], "28"), P("o2", ["ra"], "。"), P("hx_chest", ["none"], "胸")], "呼吸数28。室内気。胸痛なし。");
+  assert.deepEqual(r.items.map((i: any) => i.qid), ["rr"], "two characters that are not punctuation are the least; '28' is such a quote");
+  assert.equal(r.dropped, 2);
+  const t = (v: string, frag: string, memo = frag) => M.reviewProposals(flow, [P("t_arrival", [v], frag)], memo).items.length;
+  assert.equal(t("10:45", "10:20"), 0, "the minutes are the quote's");
+  assert.equal(t("10:30", "10分前"), 0, "a length of time is not a time");
+  assert.equal(t("10:20", "病着 10:20"), 1);
+});
+
 test("web/extract-model.js is pure: no DOM, no network, no storage, no AI", () => {
   const src = readFileSync(web("extract-model.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
   for (const bad of [/\bfetch\(/, /localStorage|sessionStorage|indexedDB/, /\bdocument\./, /\bwindow\./, /XMLHttpRequest|WebSocket/, /anthropic|\/api\//i]) assert.doesNotMatch(src, bad);

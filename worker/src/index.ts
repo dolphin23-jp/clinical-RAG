@@ -9,6 +9,8 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   APP_TOKEN: string;
   MODEL?: string;
+  /** the model for /api/extract (default: MODEL) */
+  EXTRACT_MODEL?: string;
   ALLOWED_MODELS?: string;
   WEB_ALLOWED_DOMAINS?: string;
   /** /api/ask calls per day, Japan time ("0" or unset = no cap) */
@@ -28,6 +30,7 @@ export default {
       apiKey: env.ANTHROPIC_API_KEY,
       appToken: env.APP_TOKEN,
       model: env.MODEL ?? "claude-sonnet-5-5",
+      extractModel: env.EXTRACT_MODEL || undefined,
       allowedModels: list(env.ALLOWED_MODELS),
       webDomains: list(env.WEB_ALLOWED_DOMAINS),
       dailyAskLimit: Math.max(0, Math.floor(Number(env.DAILY_ASK_LIMIT ?? 0))) || 0,

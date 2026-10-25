@@ -130,6 +130,29 @@ with sync_playwright() as pw:
     skipped_blank = (q(skipped).locator("input").input_value() == "") if skipped in vals else (not pressed("lung_exam", "crackles"))
     check(skipped_blank, "and its question is still blank")
 
+    # 3b. a ticked proposal that is answered by hand is not ticked any more, and does not come back ticked
+    for qid in ("rr", "spo2", "temp"):
+        q(qid).locator("input").fill("")
+    if pressed("lung_exam", "crackles"):
+        q("lung_exam").locator(".chip[data-opt=crackles]").click()
+    make(MEMO)
+    check(out.locator(".extract-item").count() == 4, "(the four plain ones again)")
+    out.locator(".extract-item").nth(0).locator("input").check()
+    first_q = out.locator(".extract-item").nth(0).get_attribute("data-q")
+    check("選んだ 1 件を入れる" in out.locator("button.extract-take").inner_text(), "(one is ticked)")
+    inp = q(first_q).locator("input") if q(first_q).locator("input").count() else None
+    if inp is not None:
+        inp.fill("1")
+        check(not out.locator(f".extract-item[data-q={first_q}]").count(), "answered by hand: it leaves the list")
+        check("選んだ 0 件を入れる" in out.locator("button.extract-take").inner_text() and out.locator("button.extract-take").is_disabled(), "and the count of ticked ones follows (nothing ticked, nothing to take)")
+        inp.fill("")
+        check(out.locator(f".extract-item[data-q={first_q}]").count() == 1 and not out.locator(f".extract-item[data-q={first_q}] input").is_checked(), "answer cleared: it comes back, and not ticked")
+    out.locator("button", has_text="選びを外す").click()
+
+    out.locator("button", has_text="すべて選ぶ").click()
+    out.locator("button.extract-take").click()
+    check(q("rr").locator("input").input_value() == "28" and q("spo2").locator("input").input_value() == "88", "(taken again, for the steps below)")
+
     # 4. the ones looked at alone: each decided by itself
     card = lambda qid: out.locator(f".extract-card[data-q={qid}]")
     card("hx_chest").locator("button", has_text="この答えを入れる").click()

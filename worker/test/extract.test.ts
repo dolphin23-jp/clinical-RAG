@@ -64,6 +64,14 @@ test("norm, numberTokens and checkValue: the Worker's and the screen's are the s
     assert.deepEqual(X.checkValue(c.q, c.v, c.frag, c.memo), c.expect, `server: ${c.name}`);
     assert.deepEqual(M.checkValue(c.q, c.v, c.frag, c.memo), c.expect, `screen: ${c.name}`);
   }
+  for (const [frag, memo, want] of VEC.frags) {
+    assert.equal(X.fragOk(frag, memo), want, `server fragOk ${frag}`);
+    assert.equal(M.fragOk(frag, memo), want, `screen fragOk ${frag}`);
+  }
+  for (const [s, want] of VEC.times) {
+    assert.deepEqual(X.timesIn(s), want, `server times ${s}`);
+    assert.deepEqual(M.timesIn(s), want, `screen times ${s}`);
+  }
   assert.equal(M.EXTRACT_LIMIT, X.MAX_TEXT, "the screen and the Worker take the same memo length");
   assert.equal(M.MAX_FRAG, X.MAX_FRAG);
   assert.equal(M.MAX_TEXT_VALUE, X.MAX_TEXT_VALUE);
@@ -275,6 +283,28 @@ test("route: an identifier in the memo is refused outright (there is no send-any
   assert.equal(api.calls.length, 0, "nothing reached the model");
 });
 
+test("route: the identifier check also runs on the memo with width folded and zero-width characters removed", async () => {
+  const api = fakeApi(() => message([]));
+  for (const text of [`${MEMO} ID\u200b:12345`, `${MEMO} ｶﾙﾃ番号 12345678`, `${MEMO} ＩＤ：12345678`]) {
+    const r = await handle(post(good({ text })), app({ fetchImpl: api.fetchImpl }));
+    assert.equal(r.status, 400, text);
+    assert.equal(((await r.json()) as any).code, "possible_identifier");
+  }
+  assert.equal(api.calls.length, 0);
+  assert.deepEqual(X.guardForms("abc"), ["abc"], "nothing to fold: one form");
+  assert.deepEqual(X.guardForms("ＡＢＣ"), ["ＡＢＣ", "ABC"]);
+});
+
+test("route: the extraction's own model can be set (EXTRACT_MODEL), and the model that answered is the one reported", async () => {
+  const api = fakeApi(() => message([{ q: "rr", v: ["28"], frag: "呼吸数28" }], { model: "claude-opus-5-5" }));
+  const r = await handle(post(good()), app({ fetchImpl: api.fetchImpl, extractModel: "claude-haiku-5-5" }));
+  assert.equal(api.calls[0].body.model, "claude-haiku-5-5", "the request names the extraction's model, not the app's");
+  assert.equal(((await r.json()) as any).model, "claude-opus-5-5", "a fallback may have answered with another model: that one is reported");
+  const api2 = fakeApi(() => message([]));
+  await handle(post(good()), app({ fetchImpl: api2.fetchImpl }));
+  assert.equal(api2.calls[0].body.model, "claude-sonnet-5-5", "unset: the app's model");
+});
+
 test("route: the daily cap counts an extraction like an ask; a refused request is not counted", async () => {
   const { counter, days } = memCounter();
   const api = fakeApi(() => message([]));
@@ -388,8 +418,11 @@ test("evaluation: scoring — hit, missing, wrong, extra, and the forbidden ones
   assert.deepEqual(s.hits, ["rr", "lung_exam"], "a number compares as a number, a multi without regard to order");
   assert.deepEqual(s.wrong, [{ q: "o2", got: "niv", want: "ra" }]);
   assert.deepEqual(s.forbidden, ["hx_chest"]);
+  assert.deepEqual(s.forbiddenTogether, [], "no risk map: nothing is said about the group");
+  assert.deepEqual(scoreCase(c, [{ q: "hx_chest", v: "none" }, { q: "resp_tx", v: ["o2"] }], new Map([["hx_chest", "high"], ["resp_tx", "low"]])).forbiddenTogether, ["resp_tx"], "a forbidden proposal in the together group is the worst");
   assert.deepEqual(s.extra, ["temp"]);
   assert.deepEqual(scoreCase(c, []).missing, ["rr", "o2", "lung_exam"]);
   const sum = summarize([s, scoreCase(c, [])]);
   assert.deepEqual([sum.cases, sum.expected, sum.hits, sum.missing, sum.wrong, sum.forbidden, sum.casesWithForbidden], [2, 6, 2, 3, 1, 1, ["x"]]);
+  assert.equal(sum.forbiddenTogether, 0);
 });

@@ -30,6 +30,8 @@ export interface CaseScore {
   wrong: { q: string; got: unknown; want: unknown }[];
   extra: string[];
   forbidden: string[];
+  /** the forbidden ones the screen would put in the "confirm together" group (the worst place for them: confirmed without a look) */
+  forbiddenTogether: string[];
 }
 
 /** Parses a cases file (JSON Lines; blank lines and # lines are skipped).  Every problem is collected and thrown once. */
@@ -74,10 +76,10 @@ const sameValue = (got: unknown, want: unknown): boolean => {
 };
 
 /** One case against the proposals the extraction returned. */
-export function scoreCase(c: ExtractCase, proposals: GotProposal[]): CaseScore {
+export function scoreCase(c: ExtractCase, proposals: GotProposal[], risk?: Map<string, "low" | "high">): CaseScore {
   const got = new Map(proposals.map((p) => [p.q, p]));
   const forbid = new Set(c.must_not ?? []);
-  const s: CaseScore = { id: c.id, hits: [], missing: [], wrong: [], extra: [], forbidden: [] };
+  const s: CaseScore = { id: c.id, hits: [], missing: [], wrong: [], extra: [], forbidden: [], forbiddenTogether: [] };
   for (const [q, want] of Object.entries(c.expect)) {
     const p = got.get(q);
     if (!p) s.missing.push(q);
@@ -85,8 +87,10 @@ export function scoreCase(c: ExtractCase, proposals: GotProposal[]): CaseScore {
     else s.wrong.push({ q, got: p.v, want });
   }
   for (const p of proposals) {
-    if (forbid.has(p.q)) s.forbidden.push(p.q);
-    else if (!(p.q in c.expect)) s.extra.push(p.q);
+    if (forbid.has(p.q)) {
+      s.forbidden.push(p.q);
+      if (risk?.get(p.q) === "low") s.forbiddenTogether.push(p.q);
+    } else if (!(p.q in c.expect)) s.extra.push(p.q);
   }
   return s;
 }
@@ -99,6 +103,7 @@ export interface Summary {
   wrong: number;
   extra: number;
   forbidden: number;
+  forbiddenTogether: number;
   casesWithForbidden: string[];
 }
 
@@ -112,6 +117,7 @@ export function summarize(scores: CaseScore[]): Summary {
     wrong: sum((s) => s.wrong.length),
     extra: sum((s) => s.extra.length),
     forbidden: sum((s) => s.forbidden.length),
+    forbiddenTogether: sum((s) => s.forbiddenTogether.length),
     casesWithForbidden: scores.filter((s) => s.forbidden.length).map((s) => s.id),
   };
 }

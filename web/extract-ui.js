@@ -60,6 +60,7 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
   let note = ""; // what the checks dropped, as words
   let picked = new Set(); // the ids of the "confirm with others" proposals ticked (none by default)
   let ctl = null;
+  let openGroups = new Set(); // the "same" / "hidden" lists the doctor opened: they stay open when the panel is drawn again
   const setStatus = (t, kind = "") => {
     status.textContent = t;
     status.className = `help extract-status${kind ? ` ${kind}` : ""}`;
@@ -87,7 +88,9 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
     const text = memo.value.trim();
     if (!text) return setStatus("文章を入れてください。", "err");
     if (text.length > EXTRACT_LIMIT) return setStatus(`文章は ${EXTRACT_LIMIT.toLocaleString("ja-JP")} 字までです。分けて貼ってください。`, "err");
-    const hits = scan(text);
+    // the memo as written and with width folded / zero-width characters removed (the same two forms the Worker checks)
+    const folded = text.normalize("NFKC").replace(/[\u200b-\u200f\u2060\ufeff]/g, "");
+    const hits = [...scan(text), ...(folded === text ? [] : scan(folded))];
     if (hits.length) return setStatus(`患者を特定できる情報の可能性があります（${[...new Set(hits.map((h) => h.label))].join("、")}）。該当の部分を消してから、もう一度押してください（この文章は送っていません）。`, "err");
     ctl = new AbortController();
     go.disabled = true;
@@ -95,7 +98,10 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
     setStatus("提案を作っています…（数秒〜十数秒かかります）");
     try {
       const res = await api("/api/extract", { method: "POST", body: JSON.stringify({ flow: flow.id, schema: schemaCommit(), text }), signal: ctl.signal });
-      const j = await res.json().catch(() => ({}));
+      const j = await res.json().catch((e) => {
+        if (e?.name === "AbortError") throw e; // cancelled while the body was coming: not "no proposals"
+        return {};
+      });
       if (!res.ok) throw new Error(j.error || `提案を作れませんでした（${res.status}）`);
       if (getFlow() !== flow) return; // the doctor changed the flow while it was running: the answer is for another form
       const reviewed = reviewProposals(flow, j.proposals, text);
@@ -107,8 +113,9 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
       setStatus(items.length ? "" : "提案はありませんでした（メモに書かれていることだけを提案します）。");
       render();
     } catch (e) {
-      if (e?.name === "AbortError") setStatus("やめました。");
-      else setStatus(e?.message || "提案を作れませんでした。", "err");
+      if (e?.name === "AbortError") {
+        if (getFlow() === flow) setStatus("やめました。"); // (a change of flow clears the status itself)
+      } else setStatus(e?.message || "提案を作れませんでした。", "err");
     } finally {
       ctl = null;
       go.disabled = false;
@@ -154,6 +161,8 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
       same: all.filter((i) => i.state === "same"),
       hidden: all.filter((i) => i.state === "hidden"),
     };
+    // a ticked proposal that is no longer one to confirm together (taken, answered by hand, discarded) is not ticked any more
+    picked = new Set([...picked].filter((id) => group.low.some((i) => i.qid === id)));
     if (!items.length) {
       if (note) out.append(el("p", "help", note));
       return;
@@ -188,7 +197,9 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
       }
       const bar = el("div", "btn-row");
       const takeBtn = button("", "btn primary extract-take", () => {
-        for (const it of group.low.filter((x) => picked.has(x.qid))) take(it);
+        // judged again at the moment of the press: what is taken is what is still new and plain now
+        const now = classify(getFlow(), getAnswers(), getContext(), items).filter((x) => x.state === "new" && x.risk === "low" && picked.has(x.qid));
+        for (const it of now) take(it);
       });
       const sync = () => {
         takeBtn.textContent = `選んだ ${picked.size} 件を入れる`;
@@ -262,12 +273,16 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
 
     if (group.same.length) {
       const d = el("details", "extract-same");
+      d.open = openGroups.has("same");
+      d.addEventListener("toggle", () => (d.open ? openGroups.add("same") : openGroups.delete("same")));
       d.append(el("summary", null, `同じ答えが入力済み（${group.same.length}）`));
       for (const it of group.same) d.append(el("div", "extract-same-item", `${it.label}: ${it.valueText}`));
       out.append(d);
     }
     if (group.hidden.length) {
       const d = el("details", "extract-hidden");
+      d.open = openGroups.has("hidden");
+      d.addEventListener("toggle", () => (d.open ? openGroups.add("hidden") : openGroups.delete("hidden")));
       d.append(el("summary", null, `いまは入れられない提案（${group.hidden.length}）`));
       d.append(el("p", "help", STATE_HELP.hidden));
       for (const it of group.hidden) {
@@ -285,6 +300,7 @@ export function initExtract({ el, api, getFlow, getAnswers, getContext, apply, j
     items = null;
     note = "";
     picked = new Set();
+    openGroups = new Set();
     dateNote.textContent = "";
     setStatus("");
     sizeNote();

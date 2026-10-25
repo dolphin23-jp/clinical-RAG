@@ -29,6 +29,16 @@ const cases = parseCases(readFileSync(path, "utf-8"));
 // @ts-ignore the screen's schema is plain JavaScript (no declaration file); only its commit is read
 const { FLOW_SCHEMA_SOURCE } = (await import("../web/flow-schema.js")) as { FLOW_SCHEMA_SOURCE: { commit: string } };
 const verbose = args.includes("--verbose");
+// the screen's own model: which group (together / one by one) each proposal would be in
+// @ts-ignore plain JavaScript, no declaration file
+const { FLOWS } = (await import("../web/flow-schema.js")) as { FLOWS: Record<string, any> };
+// @ts-ignore plain JavaScript, no declaration file
+const MODEL = (await import("../web/extract-model.js")) as { reviewProposals: Function; classify: Function };
+const riskOf = (flowId: string, proposals: GotProposal[], text: string): Map<string, "low" | "high"> => {
+  const flow = FLOWS[flowId];
+  const { items } = MODEL.reviewProposals(flow, proposals, text);
+  return new Map((MODEL.classify(flow, {}, {}, items) as { qid: string; risk: "low" | "high" }[]).map((i) => [i.qid, i.risk]));
+};
 
 const scores: CaseScore[] = [];
 const raw: unknown[] = [];
@@ -48,15 +58,15 @@ for (const c of cases) {
     continue;
   }
   const proposals: GotProposal[] = Array.isArray(j.proposals) ? j.proposals : [];
-  const s = scoreCase(c, proposals);
+  const s = scoreCase(c, proposals, riskOf(c.flow, proposals, c.text));
   scores.push(s);
   raw.push({ id: c.id, ms: Date.now() - t0, proposals, dropped: j.dropped, usage: j.usage });
   cacheRead += j.usage?.cache_read_input_tokens ?? 0;
   input += j.usage?.input_tokens ?? 0;
-  const flag = s.forbidden.length ? "  ★forbidden" : s.wrong.length ? "  !wrong" : "";
+  const flag = s.forbiddenTogether.length ? "  ★★forbidden in the 'confirm together' group" : s.forbidden.length ? "  ★forbidden" : s.wrong.length ? "  !wrong" : "";
   console.log(`${c.id}: hit ${s.hits.length} / missing ${s.missing.length} / wrong ${s.wrong.length} / extra ${s.extra.length} / forbidden ${s.forbidden.length}  (${Date.now() - t0} ms)${flag}`);
   if (verbose || s.forbidden.length || s.wrong.length) {
-    for (const q of s.forbidden) console.log(`    forbidden: ${q} was proposed`);
+    for (const q of s.forbidden) console.log(`    forbidden: ${q} was proposed${s.forbiddenTogether.includes(q) ? " (and the screen would put it in the 'confirm together' group)" : ""}`);
     for (const w of s.wrong) console.log(`    wrong: ${w.q} got ${JSON.stringify(w.got)} want ${JSON.stringify(w.want)}`);
   }
   if (verbose) {
@@ -66,7 +76,7 @@ for (const c of cases) {
 }
 const sum = summarize(scores);
 console.log("");
-console.log(`cases ${sum.cases}  expected ${sum.expected}  hit ${sum.hits}  missing ${sum.missing}  wrong ${sum.wrong}  extra ${sum.extra}  FORBIDDEN ${sum.forbidden}`);
+console.log(`cases ${sum.cases}  expected ${sum.expected}  hit ${sum.hits}  missing ${sum.missing}  wrong ${sum.wrong}  extra ${sum.extra}  FORBIDDEN ${sum.forbidden} (in the 'confirm together' group: ${sum.forbiddenTogether})`);
 console.log(`input tokens ${input} (read from the cache ${cacheRead}): the first request of a flow writes the cache; later ones read it`);
 if (sum.forbidden) console.log(`forbidden in: ${sum.casesWithForbidden.join(", ")} (the target is 0: read the memo and the rule that let it through)`);
 const out = opt("--out");
