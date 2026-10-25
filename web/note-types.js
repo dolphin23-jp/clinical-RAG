@@ -5,8 +5,9 @@
 export const NOTE_TYPES_SOURCE = {
   "repository": "clinical-modules",
   "path": "note-types/*.toml",
-  "commit": "f3172bf85dfd",
-  "count": 16
+  "commit": "be59ffa5814d",
+  "count": 16,
+  "routes_path": "scripts/note_expanded.py (ROUTES)"
 };
 
 export const NOTE_TYPES = {
@@ -880,5 +881,156 @@ export const NOTE_TYPES = {
         "requirement": "conditional"
       }
     ]
+  }
+};
+
+// Which record entries go to which field of a type: { field: { entity: [categories] } }.  "*" is any category.
+// From scripts/note_expanded.py's ROUTES.  A flow question's `cat` (web/flow-schema.js) is a category of its entity here.
+export const NOTE_ROUTES = {
+  "A01": {
+    "visit": {"patient_context":["chief_complaint","visit_reason"]},
+    "hpi": {"patient_context":["hpi"],"observation":["hpi"]},
+    "background": {"patient_context":["history","medication","allergy","social"]},
+    "initial": {"observation":["initial"],"assessment":["initial"]},
+    "exam": {"observation":["physical"]},
+    "tests": {"observation":["test"],"task":["test_result"]},
+    "reasoning": {"assessment":["reasoning"],"problem":["*"]},
+    "plan": {"action":["management","test_order"],"communication":["explanation"]},
+    "recheck": {"observation":["reassessment"],"assessment":["reassessment"],"task":["reassessment"]},
+    "followup": {"decision":["disposition","followup"],"communication":["followup"],"task":["followup"]}
+  },
+  "A02": {
+    "context": {"problem":["*"]},
+    "previous_plan": {"task":["previous_plan"],"action":["previous_plan"]},
+    "interval": {"observation":["interval"],"action":["interval"],"patient_context":["interval"]},
+    "subjective": {"observation":["symptom"]},
+    "objective": {"observation":["physical","test","current"]},
+    "problem_ap": {"problem":["*"],"assessment":["problem_ap"],"action":["management"]},
+    "followup": {"task":["followup","reassessment"],"communication":["followup"]}
+  },
+  "A03": {
+    "context": {},
+    "problems": {"problem":["*"],"assessment":["reasoning"]},
+    "baseline": {"patient_context":["baseline"],"observation":["baseline"]},
+    "course": {"assessment":["turning_point","course"],"action":["turning_point","course"],"problem":["*"]},
+    "current": {"observation":["current"],"assessment":["current"]},
+    "treatment": {"action":["ongoing_treatment","medication_change"],"decision":["treatment"]},
+    "unresolved": {"problem":["*"],"task":["pending","followup","test_result"]},
+    "followup": {"task":["followup"],"communication":["followup"]}
+  },
+  "A04": {
+    "arrival": {"patient_context":["arrival","chief_complaint"]},
+    "hpi": {"patient_context":["hpi"],"observation":["hpi"]},
+    "background": {"patient_context":["history","medication","allergy","baseline"]},
+    "initial": {"observation":["initial","abcde"],"assessment":["initial"]},
+    "exam": {"observation":["physical"]},
+    "tests": {"observation":["test"],"task":["test_result"]},
+    "assessment": {"problem":["*"],"assessment":["reasoning"]},
+    "management": {"action":["management","test_order","procedure"],"communication":["consult_request"]},
+    "reassessment": {"observation":["reassessment"],"assessment":["reassessment"],"action":["reassessment"]},
+    "disposition": {"decision":["disposition"],"task":["followup"],"communication":["handover"]}
+  },
+  "A05": {
+    "admission": {},
+    "hpi": {"patient_context":["hpi"],"observation":["hpi"]},
+    "background": {"patient_context":["history","medication","allergy","social"]},
+    "baseline": {"patient_context":["baseline"],"observation":["baseline"]},
+    "initial": {"observation":["initial","physical","test"]},
+    "summary": {"assessment":["clinical_summary"],"problem":["*"]},
+    "problem_list": {"problem":["*"]},
+    "problem_ap": {"problem":["*"],"assessment":["problem_ap"],"action":["management"],"task":["followup","reassessment"]},
+    "general": {"action":["general_care"],"decision":["treatment_goals"],"patient_context":["baseline"]},
+    "outlook": {"decision":["disposition"],"task":["followup","reassessment","pending"],"communication":["handover"]}
+  },
+  "A07": {
+    "context": {"decision":["transfer"]},
+    "admission": {"assessment":["initial","clinical_summary"]},
+    "course": {"assessment":["turning_point","course"],"action":["turning_point","course"],"observation":["turning_point"]},
+    "condition": {"observation":["current"],"assessment":["current"]},
+    "problems": {"problem":["*"],"assessment":["problem_ap"],"action":["management"]},
+    "ongoing": {"action":["ongoing_treatment","device"]},
+    "pending": {"task":["pending","test_result","followup"],"problem":["*"]},
+    "contingency": {"task":["contingency","reassessment"],"decision":["contingency"]},
+    "handover": {"communication":["handover"],"task":["handover","pending"]}
+  },
+  "A08": {
+    "context": {"decision":["discharge"]},
+    "diagnoses": {"problem":["*"],"assessment":["reasoning"]},
+    "hpi": {"patient_context":["hpi","admission_reason"]},
+    "initial": {"observation":["initial"]},
+    "course": {"problem":["*"],"assessment":["course","turning_point"],"action":["course","turning_point"]},
+    "procedures": {"observation":["procedure_result"],"action":["procedure"]},
+    "condition": {"observation":["discharge"],"assessment":["discharge"],"problem":["*"]},
+    "medications": {"action":["discharge_medication","medication_change"],"decision":["medication_change"]},
+    "followup": {"task":["followup"],"communication":["followup"],"decision":["followup"]},
+    "unresolved": {"task":["pending","test_result","followup"]}
+  },
+  "B02": {
+    "target": {"communication":["consult_request"]},
+    "summary": {"patient_context":["consult_context"],"problem":["*"],"assessment":["consult_context"]},
+    "question": {"communication":["consult_request"],"task":["consult_question"]},
+    "findings": {"observation":["consult_finding"]},
+    "management": {"action":["consult_management"]},
+    "communication": {"communication":["consult_request"]},
+    "followup": {"task":["consult_followup"]},
+    "response_context": {"communication":["consult_response"]},
+    "response_assessment": {"observation":["consult_finding"],"assessment":["consult_assessment"]},
+    "recommendation": {"assessment":["consult_recommendation"],"decision":["consult_recommendation"]},
+    "agreement": {"communication":["consult_agreement"],"decision":["adopted_consult_plan"]},
+    "response_followup": {"task":["consult_followup"],"communication":["consult_response"]}
+  },
+  "B03": {
+    "information": {"action":["procedure"]},
+    "indication": {"assessment":["procedure_indication"],"decision":["procedure_indication"]},
+    "consent": {"communication":["consent_discussion"],"decision":["procedure_consent"]},
+    "precheck": {"observation":["procedure_precheck"],"assessment":["procedure_precheck"]},
+    "preparation": {"action":["procedure_preparation"]},
+    "details": {"action":["procedure"]},
+    "results": {"action":["procedure_result"],"observation":["procedure_result"]},
+    "complications": {"observation":["procedure_complication"],"assessment":["procedure_complication"],"action":["complication_management"]},
+    "postcheck": {"observation":["procedure_postcheck"]},
+    "postplan": {"task":["post_procedure"],"action":["post_procedure"]}
+  },
+  "B04": {
+    "context": {"communication":["explanation"]},
+    "participants": {"patient_context":["decision_capacity"],"communication":["participants"]},
+    "information": {"assessment":["clinical_summary"],"communication":["explanation"]},
+    "options": {"communication":["options"],"decision":["options"]},
+    "preferences": {"communication":["patient_preference"],"patient_context":["patient_preference"]},
+    "understanding": {"communication":["understanding"]},
+    "decision": {"decision":["consent"]},
+    "followup": {"task":["reexplanation","followup"],"communication":["followup"]}
+  },
+  "B05": {
+    "context": {"communication":["acp_discussion"]},
+    "capacity": {"assessment":["decision_capacity"],"patient_context":["decision_capacity"]},
+    "participants": {"patient_context":["surrogate"],"communication":["participants"]},
+    "values": {"patient_context":["values"],"communication":["values"]},
+    "medical_context": {"assessment":["clinical_summary"],"communication":["acp_options"]},
+    "preferences": {"patient_context":["patient_preference"],"communication":["patient_preference"]},
+    "agreement": {"decision":["acp_agreement"]},
+    "sharing": {"communication":["acp_sharing"]},
+    "reassessment": {"task":["acp_review"]}
+  },
+  "B07": {
+    "context": {"communication":["result_call"]},
+    "counterpart": {"communication":["result_call"]},
+    "reason": {"communication":["result_call"],"task":["result_call"]},
+    "information": {"observation":["test"],"communication":["result_call"]},
+    "assessment": {"assessment":["result_interpretation"]},
+    "actions": {"action":["result_action"],"decision":["result_action"]},
+    "response": {"communication":["result_call"]},
+    "followup": {"task":["result_followup","test_result"]}
+  },
+  "B08": {
+    "background": {"patient_context":["terminal_background"],"problem":["*"]},
+    "goals": {"decision":["acp_agreement","treatment_goals"],"communication":["acp_sharing"]},
+    "terminal": {"observation":["terminal"],"action":["terminal"]},
+    "notification": {"communication":["death_notification"]},
+    "examination": {"observation":["death_exam"]},
+    "confirmation": {"observation":["death_exam"],"decision":["death_confirmation"]},
+    "cause": {"assessment":["death_cause"]},
+    "family": {"communication":["family_notification"]},
+    "administrative": {"task":["death_admin"]}
   }
 };

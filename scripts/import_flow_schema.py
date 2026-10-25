@@ -9,8 +9,9 @@ judgement.  What is taken from each `flows/*.toml`:
   flow:      scene, module, version, the title (from the file's first comment line), the phases (id, name, short, frames),
              the question that starts the time axis (origin_q, origin_label)
   question:  id, frame (slot), label, type, unit, options (id, label, short), core, required, exclusive, when, line,
-             and from the flow's `bridge` declaration the structure of the question: its kind (ent), the time question it hangs
-             on (at), the option ids that mean none / unable / waiting / pending / unknown (neg, unable, wait, pend, unk, val)
+             and from the flow's `bridge` declaration the structure of the question: its kind (ent), the category that ties its
+             answer to a field of a chart-note type (cat: docs/enhancement-plan.md 8.18), the time question (at) and the measurement-condition
+             question (cond) it hangs on, the option ids that mean none / unable / waiting / pending / unknown (neg, unable, wait, pend, unk, val)
   defs:      only the named conditions that a question's `when` uses (and what those use): a visibility condition on answers
 and from each `scenes/*.md`: the frames (number, name, purposes P1-P5).
 What is NOT taken: `[[rule]]` `[[ddx]]` `[[axis]]` `[[fact]]` `[[mark]]` (the judgement), `help` (clinical prose and links to cards), the phase
@@ -30,13 +31,16 @@ import sys
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import modules_literals  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "web" / "flow-schema.js"
 
 SUPPORTED_TYPES = {"choice", "multi", "number", "text", "time"}
 QUESTION_KEYS = ("id", "slot", "label", "type", "unit", "core", "required", "exclusive", "when", "line")
 # what is taken from a question's entry in the flow's `bridge` (structure only; `concept` and `why` are prose and are left)
-BRIDGE_SCALARS = ("ent", "at", "of", "phase", "status")
+BRIDGE_SCALARS = ("ent", "cat", "at", "cond", "of", "phase", "status")
 # the values the bridge's scalars may take (what the Modules flows use today); anything else is refused, so prose cannot come across
 BRIDGE_ENUMS = {
     "ent": {"observation", "context", "assessment", "action", "time", "condition", "reason", "none"},
@@ -66,7 +70,46 @@ def def_refs(expr: str) -> list[str]:
     return re.findall(r"\$([A-Za-z0-9_]+)", expr or "")
 
 
-def load_flow(path: Path) -> dict:
+CAT_RE = re.compile(r"^[a-z][a-z_]{0,30}$")
+
+
+def check_cats(name: str, scene: str, questions: list[dict], cats: dict | None) -> str:
+    """The questions' `cat` against the routes of the note type the scene points to.  Returns that note type ("" when the scene has none).
+
+    A scene with a note type: every question whose ent is one of the four that become a record entry has a cat (a category ROUTES takes for that
+    entity, or the word for "not classified yet"); no other ent has one.  A scene without: no question has a cat.  Anything else stops the import,
+    so a category that ROUTES does not take, or a missing one, cannot come across silently."""
+    has = [q for q in questions if "cat" in q.get("br", {})]
+    if cats is None:
+        if has:
+            raise SystemExit(f"{name}: has cat declarations but the checkout has no scripts/flow.py to check them against")
+        return ""
+    note = cats["scene_note"].get(scene, "")
+    if not note:
+        if has:
+            raise SystemExit(f"{name}: scene {scene} takes no cat (it has no chart-note type in CAT_SCENE_NOTE), but {has[0]['id']} has one")
+        return ""
+    index = cats["index"][note]
+    for q in questions:
+        br = q.get("br")
+        if not br:
+            continue
+        entity = cats["ent_entity"].get(br.get("ent"))
+        cat = br.get("cat")
+        if entity is None:
+            if cat is not None:
+                raise SystemExit(f"{name}: question {q['id']} (ent {br.get('ent')}) cannot have a cat")
+            continue
+        if cat is None:
+            raise SystemExit(f"{name}: question {q['id']} has no cat (a {note} ROUTES category for {entity}, or {cats['pending']!r})")
+        if cat != cats["pending"] and (entity, cat) not in index:
+            known = sorted(c for (e, c) in index if e == entity)
+            raise SystemExit(f"{name}: question {q['id']} has cat {cat!r}, which {note}'s ROUTES does not take for {entity} (it takes: {', '.join(known)})")
+    return note
+
+
+def load_flow(path: Path, cats: dict | None = None) -> dict:
+    """`cats`: modules_literals.load_cat_context (None when the checkout has no scripts/flow.py: then a `cat` cannot be checked and is refused)."""
     text = path.read_text(encoding="utf-8")
     raw = tomllib.loads(text)
     first = text.splitlines()[0] if text else ""
@@ -103,7 +146,9 @@ def load_flow(path: Path) -> dict:
                 raise SystemExit(f"{path.name}: bridge {q['id']}.{k} must be a string")
             if k in BRIDGE_ENUMS and v not in BRIDGE_ENUMS[k]:
                 raise SystemExit(f"{path.name}: bridge {q['id']}.{k} = {v!r} is not one of {sorted(BRIDGE_ENUMS[k])}")
-            if k in ("at", "of") and v not in ids:
+            if k == "cat" and not CAT_RE.match(v):
+                raise SystemExit(f"{path.name}: bridge {q['id']}.cat = {v!r} is not a lower-case word")
+            if k in ("at", "cond", "of") and v not in ids:
                 raise SystemExit(f"{path.name}: bridge {q['id']}.{k} names {v!r}, which is not a question of the flow")
             br[k] = v
         for k in BRIDGE_LISTS:
@@ -114,6 +159,7 @@ def load_flow(path: Path) -> dict:
                 br[k] = list(b[k])
         if br:
             q["br"] = br
+    note = check_cats(path.name, scene, questions, cats)
     defs_all = {d["id"]: d["expr"] for d in raw.get("def", []) if "expr" in d}
     need, todo = {}, [r for q in questions for r in def_refs(q.get("when", ""))]
     while todo:
@@ -126,6 +172,9 @@ def load_flow(path: Path) -> dict:
         todo.extend(def_refs(defs_all[name]))
     phases = [{k: p[k] for k in ("id", "name", "short", "slots") if k in p} for p in raw["phase"]]
     flow = {"id": f"{scene}.{module}", "scene": scene, "module": module, "version": raw.get("version"), "title": title, "phases": phases, "questions": questions}
+    if note:
+        # the chart-note type whose ROUTES the questions' cats point into, how a bridge ent maps to a ROUTES entity, and the word for "not classified yet"
+        flow["cat"] = {"note": note, "entity": dict(sorted(cats["ent_entity"].items())), "pending": cats["pending"]}
     if bool(raw.get("origin_q")) != bool(raw.get("origin_label")):
         raise SystemExit(f"{path.name}: origin_q and origin_label go together")
     if raw.get("origin_q"):
@@ -159,7 +208,8 @@ def load_all(modules: Path) -> tuple[list[dict], list[dict]]:
     files = sorted(flows_dir.glob("*.toml"))
     if not files:
         raise SystemExit(f"no flows/*.toml under {modules}")
-    flows = [load_flow(f) for f in files]
+    cats = modules_literals.load_cat_context(modules)
+    flows = [load_flow(f, cats) for f in files]
     scenes = [load_scene(f) for f in sorted(scenes_dir.glob("*.md"))] if scenes_dir.is_dir() else []
     ids = [f["id"] for f in flows]
     if len(set(ids)) != len(ids):

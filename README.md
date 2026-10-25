@@ -38,7 +38,7 @@ Cloudflare Worker ──────────────►  Anthropic Messa
 | 入力のガード | 画面と Worker の両方で、識別情報らしき入力（8桁以上の数字・電話番号・ID/MRN・メール・識別の語）を検査し、確認なしには送らない。氏名と日付は検出しない | 実臨床の参考利用で、氏名・ID を入れない約束を道具の側でも守るため（`docs/clinical-use.md`） |
 | 会話の保存 | 1往復ごとにサーバー（D1）に保存し、「会話」の画面で開き直し・削除・質問へのジャンプ。識別情報の確認を通した質問は保存しない。30日で自動的に消える（`CONVERSATION_RETENTION_DAYS`） | アプリの再起動（iPad）や再読み込みで会話が消えるため。医師の決定（`docs/clinical-use.md` の 1d） |
 | 症例モード | ヘッダーの「症例」に年齢・性別・場面・主訴と経過・バイタル・所見・既往を入れて固定し（画面の上に1行で残る）、「アセスメントとプラン（草案）」「鑑別と反証」「見落としチェック」「コンサルト・医師コールの基準」を作る。固定の見出し、引用のない文には出どころの印（`[推論]` `[標準・出典未確認]` `[施設依存]`）。自分のアセスメントを入れると「先生の案との差」（正誤・点数なし）。症例の全欄に識別情報のガード。症例は会話と一緒に保存される | 症例を前に論点・根拠・反証を整理するため。医師の決定（`docs/clinical-use.md` の 1d の②）。草案であり、最終判断は医師 |
-| カルテ記載の下書き | アセスメントとプランの草案の項目に「採用」を付け、「記載の下書きを作る」で、症例の入力と採用した項目だけを、記載の型（救急外来初療・外来初診・病棟入院時・病棟の経過・退院時サマリ・コンサルト依頼・申し送り）の欄に並べてコピーできる。場面・症候の質問の答えは、救急外来初療では欄に振り分けず、独立したブロック「場面・症候の入力」で付く（暫定。`docs/enhancement-plan.md` の 8.18）。組み立ては決定論（AI を使わない）。未入力の必須欄は「（未入力）」、日付・患者ID・氏名は空欄。型の欄の名前・順序は clinical-modules から取り込む（`scripts/import_note_types.py`） | 実際のカルテに貼る下書きを、症例の事実と医師が採用した項目だけで作るため。医師の決定（`docs/clinical-use.md` の 1d の③）。画面に保存・書き出し・印刷・共有はない |
+| カルテ記載の下書き | アセスメントとプランの草案の項目に「採用」を付け、「記載の下書きを作る」で、症例の入力と採用した項目だけを、記載の型（救急外来初療・外来初診・病棟入院時・病棟の経過・退院時サマリ・コンサルト依頼・申し送り）の欄に並べてコピーできる。場面・症候の質問の答えは、救急外来初療では、質問のカテゴリ（clinical-modules の橋宣言）→ `ROUTES` → 欄の順で記載の欄に振り分け、欄に結びつかない答えは末尾のブロックに残して件数を出す（`docs/enhancement-plan.md` の 8.18）。組み立ては決定論（AI を使わない）。未入力の必須欄は「（未入力）」、日付・患者ID・氏名は空欄。型の欄の名前・順序は clinical-modules から取り込む（`scripts/import_note_types.py`） | 実際のカルテに貼る下書きを、症例の事実と医師が採用した項目だけで作るため。医師の決定（`docs/clinical-use.md` の 1d の③）。画面に保存・書き出し・印刷・共有はない |
 | Casebook へ送る（試作） | 症例の記録の「Casebook へ送る（試作）」で、先生が選んだ項目（救急の入力・問題・確度を選んだ診断・評価・計画・コール基準・日ごとの文）を、clinical-casebook の受け渡しパケットにしてクリップボードへ。**通信しない**。新しい症例か既存の症例（症例コード）かを選び、**実症例か架空症例かは毎回先生が選ぶ**。AI の草案から採用した項目は初めは選ばれない。送れない項目（識別情報・日付・除外した問題・外来）は理由つきで除く。同じ項目を送り直しても Casebook に2つできない。検査値・バイタルは項目にしない | 医師の決定（`docs/clinical-use.md` の 1f）。Casebook を先に更新してから送る（Casebook の T059）。送る向きだけ |
 | 場面・症候の質問での入力（試作） | 「症例」の画面の年齢・性別の下で、場面と症候（救急外来 × 胸痛・腹痛・失神など12、外来初診 × 発熱）を選ぶと、clinical-modules のフローの質問が段階ごとに出る（中核を前に、残りは畳む）。選択・数値・時刻・短い文で入れ、**未入力の中核の質問を一覧で出す（未確認。陰性にしない）**。日付を書くと「4日前」「入院3日目」へ自動で直す（原文は残さない）。答えは症例に付いて質問に使われ、会話と一緒に保存されて開き直すと戻る。取り込むのは質問の構造だけ（`scripts/import_flow_schema.py`。規則・鑑別は取り込まない） | 症例の入力を場面ごとの型にし、抜けを見えるようにするため。医師の決定（`docs/clinical-use.md` の 1e）。鑑別・危険・検査の提案はしない。数値は記録するだけ |
 | 文章からの取り込み（試作） | 「場面・症候の質問で入力する」の中で、メモを貼ると、そのフローの質問への答えの**提案**を、**元の文の該当箇所つき**で出す。**先生が確認して「入れる」を押したものだけ**が答えに入る（陰性・時刻・行った処置・否定や予定の言い方のあるものは1件ずつ。どれも最初は選ばれていない。入力済みの答えは上書きしない）。メモに書かれていない項目は提案せず、**判断・方針は聞かない**。貼った文章は**保存しない**（識別情報らしき文字があれば送らない。日付は送る前に「N日前」へ） | 入力の重さを減らす（質問を探す手間）。医師の決定（`docs/clinical-use.md` の 1e）。設計は `docs/enhancement-plan.md` の 8.12・8.15。Claude を1回呼ぶ（`/api/extract`）が、保存は増えない。**本物のAPIでの確認はまだ**（`eval/run_extract_eval.ts` で測る） |
@@ -56,7 +56,7 @@ ingest/      Markdown → 検証 → SQLite（Python 3.11+、PyYAML のみ）
 schema.sql   テーブルと FTS5 定義
 worker/      Cloudflare Worker（TypeScript）と Node 製テスト
   src/       handler / anthropic(ツールループ) / search / format / prompt(システムプロンプト) / db / tokenize
-  test/      node:test（357件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
+  test/      node:test（362件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
 web/         PWA（ビルド不要、外部ライブラリ無し）
 eval/        評価（run_eval.ts 検索・run_ask_eval.ts 回答・lib.ts、clinical.template.jsonl、smoke 22問）。手順は docs/evaluation.md
 scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）、sample_numeric.py（数値の転写誤り率の作業表と集計）
@@ -140,7 +140,7 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（357件）
+cd worker && node --test test/*.test.ts            # TS テスト（362件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
@@ -157,9 +157,9 @@ python3 tests/e2e/ui_extract.py http://localhost:8787 /tmp/uextract # 文章か�
 python3 tests/e2e/ui_casebook.py http://localhost:8787 /tmp/ucasebook # Casebook へ送る（折りたたみ・項目・実/架空の選び・パケットの読み戻し・印は取り込んだとき・送信後に直した項目）
 python3 tests/e2e/ui_record.py http://localhost:8787 /tmp/urecord # 症例の記録（時間軸・引き継ぎ・問題の板・A05・経過・A06〜A08・自動保存・版の競合・終える）
 python3 tests/e2e/ui_scene.py http://localhost:8787 /tmp/uscene   # 場面別の草案・記録の要約・問題ごとの書籍の根拠（要約は送る前に見える・会話に残らない・頁は先生が残す）
-# 記載の型を取り込み直す（clinical-modules のチェックアウトから。--check で差があれば終了コード1）
+# 記載の型と、その欄への振り分け表 ROUTES を取り込み直す（clinical-modules のチェックアウトから。--check で差があれば終了コード1）
 python3 scripts/import_note_types.py --modules ../clinical-modules
-# 場面・症候の質問の構造を取り込み直す（同上。規則・鑑別は取り込まない）
+# 場面・症候の質問の構造と、各質問のカテゴリ cat を取り込み直す（同上。規則・鑑別は取り込まない）
 python3 scripts/import_flow_schema.py --modules ../clinical-modules
 # 実 D1 相当（workerd）
 cd worker && printf 'ANTHROPIC_API_KEY=x\nAPP_TOKEN=local-dev-token-0123456789\n' > .dev.vars
@@ -179,7 +179,7 @@ npx wrangler dev --local
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 65 件・TypeScript 357 件のテスト、型チェック（2026-10-25 に手元で再実行）。`wrangler deploy --dry-run`（設定とバンドル）は 2026-10-24 時点。
+- Python 82 件・TypeScript 362 件のテスト、型チェック（2026-10-25 に手元で再実行）。`wrangler deploy --dry-run`（設定とバンドル）は 2026-10-24 時点。
 - 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。

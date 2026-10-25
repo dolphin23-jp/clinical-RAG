@@ -9,6 +9,11 @@ What is taken from each `note-types/*.toml`, and nothing else (docs/enhancement-
 What is NOT taken: `sources` (which common entities a field reads: that belongs to the training repository's renderer),
 `implementation`, `existing_output`, and any comment. No clinical content comes across: only names and an order.
 
+Also taken, from scripts/note_expanded.py: the routing table `ROUTES` (which record entries go to which field of a type: "entity:categories"),
+as NOTE_ROUTES.  It is read as a literal, never run, and only entity names and category names are accepted.  Its field keys must be the
+type's own (a field that the type does not have stops the import).  It is what web/note-route.js sends a flow's answers by
+(docs/enhancement-plan.md 8.18); the questions' categories come from import_flow_schema.py.
+
 The Modules commit the types were read from is recorded in the output, so a later change there can be seen and
 re-imported. The output is deterministic (same input, same bytes). Nothing is written without --modules pointing at a
 directory that has a note-types/ folder.
@@ -21,6 +26,9 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import modules_literals  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "web" / "note-types.js"
@@ -68,6 +76,23 @@ def load_types(modules: Path) -> list[dict]:
     return sorted(out, key=lambda t: t["id"])
 
 
+def load_routes(modules: Path, types: list[dict]) -> dict:
+    """ROUTES of the checkout ({note type: {field: {entity: [categories]}}}), each type's fields checked against the imported type.
+
+    A checkout without scripts/note_expanded.py has no routes: {} (the synthetic checkouts of the tests)."""
+    if not (modules / "scripts" / "note_expanded.py").is_file():
+        return {}
+    routes = modules_literals.load_routes(modules)
+    by_id = {t["id"]: t for t in types}
+    for note, fields in routes.items():
+        if note not in by_id:
+            raise SystemExit(f"note_expanded.py: ROUTES has {note}, which is not an imported note type")
+        keys = [s["key"] for s in by_id[note]["sections"]]
+        if set(fields) != set(keys):
+            raise SystemExit(f"note_expanded.py: ROUTES[{note}] fields {sorted(set(fields) ^ set(keys))} are not the type's own fields")
+    return routes
+
+
 def modules_commit(modules: Path) -> str:
     try:
         r = subprocess.run(["git", "-C", str(modules), "rev-parse", "--short=12", "HEAD"], capture_output=True, text=True, check=True)
@@ -76,10 +101,22 @@ def modules_commit(modules: Path) -> str:
         return ""
 
 
-def render(types: list[dict], commit: str) -> str:
+def render_routes(routes: dict) -> str:
+    """NOTE_ROUTES: one line per field, in the file's order (compact and deterministic; valid JSON)."""
+    dump = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":"))  # noqa: E731
+    notes = []
+    for note in sorted(routes):
+        fields = [f"    {json.dumps(key)}: {dump(rules)}" for key, rules in routes[note].items()]
+        notes.append(f"  {json.dumps(note)}: {{\n" + ",\n".join(fields) + "\n  }")
+    return "export const NOTE_ROUTES = {\n" + ",\n".join(notes) + "\n};"
+
+
+def render(types: list[dict], commit: str, routes: dict | None = None) -> str:
     source = {"repository": "clinical-modules", "path": "note-types/*.toml", "commit": commit, "count": len(types)}
+    if routes:
+        source["routes_path"] = "scripts/note_expanded.py (ROUTES)"
     by_id = {t["id"]: t for t in types}
-    return (
+    out = (
         HEADER
         + "export const NOTE_TYPES_SOURCE = "
         + json.dumps(source, ensure_ascii=False, indent=2)
@@ -87,6 +124,14 @@ def render(types: list[dict], commit: str) -> str:
         + json.dumps(by_id, ensure_ascii=False, indent=2)
         + ";\n"
     )
+    if routes:
+        out += (
+            "\n// Which record entries go to which field of a type: { field: { entity: [categories] } }.  \"*\" is any category.\n"
+            "// From scripts/note_expanded.py's ROUTES.  A flow question's `cat` (web/flow-schema.js) is a category of its entity here.\n"
+            + render_routes(routes)
+            + "\n"
+        )
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="do not write; exit 1 if the output file differs")
     a = ap.parse_args(argv)
     types = load_types(a.modules)
-    text = render(types, a.commit if a.commit is not None else modules_commit(a.modules))
+    text = render(types, a.commit if a.commit is not None else modules_commit(a.modules), load_routes(a.modules, types))
     if a.check:
         same = a.out.exists() and a.out.read_text(encoding="utf-8") == text
         print(("up to date: " if same else "OUT OF DATE: ") + str(a.out))
