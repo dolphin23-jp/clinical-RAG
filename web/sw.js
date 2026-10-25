@@ -1,5 +1,5 @@
 // App-shell cache only. /api/* is never touched (answers and book text must not be cached here).
-const V = "medbook-shell-v10";
+const V = "medbook-shell-v11";
 const SHELL = ["./", "index.html", "style.css", "app.js", "md.js", "id-guard.js", "tools.js", "eval-tools.js", "conv.js", "case.js", "case-model.js", "note-ui.js", "case-create.js", "create-ui.js", "note-assemble.js", "note-types.js", "intake-ui.js", "intake.js", "record-ui.js", "case-record.js", "case-course.js", "record-notes.js", "date-relative.js", "flow-schema.js", "answer-marks.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
 
 self.addEventListener("install", (e) => {

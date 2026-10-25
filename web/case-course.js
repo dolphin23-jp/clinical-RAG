@@ -56,7 +56,7 @@ export const MED_CHANGES = [
   { id: "stopped", label: "中止" },
   { id: "continued", label: "継続" },
 ];
-export const COURSE_LIMITS = { days: 45, tasks: 40, maxDay: 365, text: 600, trendNote: 400, owner: 60, due: 60, log: 20, meds: 40, medText: 300 };
+export const COURSE_LIMITS = { days: 60, tasks: 40, maxDay: 365, text: 600, trendNote: 400, owner: 60, due: 60, log: 20, meds: 40, medText: 300 };
 
 const TREND_IDS = new Set(TREND.map((t) => t.id));
 const MED_IDS = new Set(MED_CHANGES.map((m) => m.id));
@@ -69,6 +69,34 @@ const str = (v, max) => (typeof v === "string" ? v.replace(/\r\n?/g, "\n").trim(
 const clone = (o) => structuredClone(o);
 /** A day number: a whole number from 1 (the admission day) to maxDay, or the fallback. */
 export const dayNo = (v, fallback = 1) => (Number.isInteger(v) && v >= 1 && v <= COURSE_LIMITS.maxDay ? v : fallback);
+
+// ---------------------------------------------------------------- the history of a judgement
+/** The item a log gives on day n: the last one with day <= n, or undefined. */
+export const logAt = (log, n) => {
+  let at;
+  for (const l of log ?? []) if (l.day <= n && (!at || l.day >= at.day)) at = l;
+  return at;
+};
+
+/** A log of a judgement that changed: [{ day, ...}] one item per day (the last one wins), by day, at most COURSE_LIMITS.log. */
+export function cleanLog(raw, ok, pick) {
+  const byDay = new Map();
+  for (const l of Array.isArray(raw) ? raw : []) if (isObj(l) && dayNo(l.day, 0) && ok(l)) byDay.set(l.day, { day: l.day, ...pick(l) });
+  return [...byDay.values()].sort((a, b) => a.day - b.day).slice(-COURSE_LIMITS.log);
+}
+
+/**
+ * Writes a judgement into its log (what the doctor decided, and from which day).  The day is the working day, but never earlier than the day
+ * the thing was added or than the last item already in the log: the log's last item is always the current value, so the notes of the latest
+ * days agree with the board even when the doctor went back to an earlier day to edit (the edit then counts from the last day already
+ * recorded).  `seed`: the items to start from when the log is empty and the thing already had a non-default value (a record made before the
+ * log existed): that value is kept as it stood from the day the thing was added.
+ */
+export function stampLog(log, { today, added = 1, item, seed = [] }) {
+  const base = log?.length ? log : seed;
+  const day = Math.max(today, added, ...base.map((l) => l.day));
+  return [...base.filter((l) => l.day !== day), { day, ...item }].sort((a, b) => a.day - b.day).slice(-COURSE_LIMITS.log);
+}
 
 export const emptyDischarge = () => ({ decided: false, day: null, ...Object.fromEntries(DISCHARGE_FIELDS.map((f) => [f.key, ""])), meds: [] });
 export const emptyCourse = () => ({ today: 1, days: [], tasks: [], summary: Object.fromEntries(SUMMARY_FIELDS.map((f) => [f.key, ""])), discharge: emptyDischarge() });
@@ -105,7 +133,7 @@ export function cleanCourse(raw, problemIds) {
     const task = {
       id: k.id,
       text,
-      kind: KIND_IDS.has(k.kind) ? k.kind : "other",
+      kind: KIND_IDS.has(k.kind) ? k.kind : "", // a kind the doctor did not choose stays blank (it is not "結果待ち")
       owner: str(k.owner, COURSE_LIMITS.owner),
       due: str(k.due, COURSE_LIMITS.due),
       added: dayNo(k.added),
@@ -113,6 +141,14 @@ export function cleanCourse(raw, problemIds) {
     };
     if (typeof k.problem === "string" && problemIds.includes(k.problem)) task.problem = k.problem;
     if (task.state === "done") task.closed = Math.max(task.added, dayNo(k.closed, task.added));
+    const log = cleanLog(k.log, (l) => l.state === "open" || l.state === "done", (l) => ({ state: l.state }));
+    if (log.length) {
+      // the log is the history: the task's state is its last item
+      task.log = log;
+      task.state = log.at(-1).state;
+      if (task.state === "done") task.closed = log.at(-1).day;
+      else delete task.closed;
+    }
     out.tasks.push(task);
   }
   for (const f of SUMMARY_FIELDS) out.summary[f.key] = str(isObj(raw.summary) ? raw.summary[f.key] : "", f.max);
@@ -156,12 +192,30 @@ function dayOf(next, n, create = true) {
   return d ?? null;
 }
 
-/** Sets one of a day's texts (DAY_FIELDS).  The day is made when it has none. */
+/** Whether something can be written for day n: it already has an entry, or there is room for one (COURSE_LIMITS.days). */
+export const canWriteDay = (rec, n) => dayNo(n, 0) > 0 && (rec.course.days.some((d) => d.day === n) || rec.course.days.length < COURSE_LIMITS.days);
+
+const isEmptyDay = (d) => DAY_FIELDS.every((f) => !d[f.key]) && !d.turning && !Object.keys(d.trend).length;
+/** A day that holds nothing (no text, no trend, no mark) is not kept: it would only use up the room for days. */
+const pruneDay = (next, d) => {
+  if (d && isEmptyDay(d)) next.course.days = next.course.days.filter((x) => x !== d);
+};
+
+/** Removes the days that hold nothing (after something they held was taken away). */
+export function dropEmptyDays(next) {
+  next.course.days = next.course.days.filter((d) => !isEmptyDay(d));
+}
+
+/** Sets one of a day's texts (DAY_FIELDS).  The day is made when it has none; a day left with nothing is removed. */
 export function setDayField(rec, n, key, text) {
   const next = clone(rec);
   const f = DAY_FIELDS.find((x) => x.key === key);
-  const d = f && dayNo(n, 0) ? dayOf(next, n) : null;
-  if (d) d[key] = str(text, f.max);
+  const t = f ? str(text, f.max) : "";
+  const d = f && dayNo(n, 0) ? dayOf(next, n, !!t) : null;
+  if (d) {
+    d[key] = t;
+    pruneDay(next, d);
+  }
   return next;
 }
 
@@ -171,8 +225,7 @@ export function setDayTurning(rec, n, on) {
   const d = dayNo(n, 0) ? dayOf(next, n, !!on) : null;
   if (!d) return next;
   d.turning = !!on;
-  // a day that holds nothing but the mark is not kept once the mark is taken off
-  if (!on && DAY_FIELDS.every((f) => !d[f.key]) && !Object.keys(d.trend).length) next.course.days = next.course.days.filter((x) => x !== d);
+  pruneDay(next, d);
   return next;
 }
 
@@ -187,13 +240,14 @@ export function removeDay(rec, n) {
 export function setTrend(rec, n, problemId, state, note) {
   const next = clone(rec);
   if (!next.problems.some((p) => p.id === problemId) || !dayNo(n, 0)) return next;
-  const d = dayOf(next, n);
+  const d = dayOf(next, n, !(state === "" && !note)); // clearing a trend of a day that has no entry makes no entry
   if (!d) return next;
   const prev = d.trend[problemId] ?? { state: "" };
   const s = state === undefined ? prev.state : TREND_IDS.has(state) ? state : "";
   const nt = note === undefined ? prev.note ?? "" : str(note, COURSE_LIMITS.trendNote);
   if (!s && !nt) delete d.trend[problemId];
   else d.trend[problemId] = { state: s, ...(nt ? { note: nt } : {}) };
+  pruneDay(next, d);
   return next;
 }
 
@@ -207,7 +261,7 @@ export function addTask(rec, fields = {}) {
   const task = {
     id,
     text: str(fields.text, COURSE_LIMITS.text),
-    kind: KIND_IDS.has(fields.kind) ? fields.kind : "other",
+    kind: KIND_IDS.has(fields.kind) ? fields.kind : "", // not chosen: blank (never 結果待ち unless the doctor chose it)
     owner: str(fields.owner, COURSE_LIMITS.owner),
     due: str(fields.due, COURSE_LIMITS.due),
     added: next.course.today,
@@ -224,21 +278,20 @@ export function setTask(rec, id, patch) {
   const t = next.course.tasks.find((x) => x.id === id);
   if (!t) return next;
   if ("text" in patch) t.text = str(patch.text, COURSE_LIMITS.text);
-  if ("kind" in patch && KIND_IDS.has(patch.kind)) t.kind = patch.kind;
+  if ("kind" in patch) t.kind = KIND_IDS.has(patch.kind) ? patch.kind : "";
   if ("owner" in patch) t.owner = str(patch.owner, COURSE_LIMITS.owner);
   if ("due" in patch) t.due = str(patch.due, COURSE_LIMITS.due);
   if ("problem" in patch) {
     if (typeof patch.problem === "string" && next.problems.some((p) => p.id === patch.problem)) t.problem = patch.problem;
     else delete t.problem;
   }
-  if ("state" in patch) {
-    if (patch.state === "done" && t.state !== "done") {
-      t.state = "done";
-      t.closed = Math.max(t.added, next.course.today);
-    } else if (patch.state === "open" && t.state !== "open") {
-      t.state = "open";
-      delete t.closed;
-    }
+  if ("state" in patch && (patch.state === "done" || patch.state === "open") && patch.state !== t.state) {
+    // closing and reopening are logged with the day: a note of an earlier day shows what it was then (a reopened task was closed before)
+    const seed = t.state === "done" ? [{ day: t.added, state: "open" }, { day: t.closed ?? t.added, state: "done" }] : [];
+    t.log = stampLog(t.log, { today: next.course.today, added: t.added, item: { state: patch.state }, seed });
+    t.state = patch.state;
+    if (t.state === "done") t.closed = t.log.at(-1).day;
+    else delete t.closed;
   }
   return next;
 }
@@ -268,7 +321,8 @@ export function setDischarge(rec, patch) {
   for (const f of DISCHARGE_FIELDS) if (f.key in patch) dc[f.key] = str(patch[f.key], f.max);
   if ("day" in patch) dc.day = dayNo(patch.day, 0) > 0 ? patch.day : null;
   if ("decided" in patch) {
-    dc.decided = patch.decided === true;
+    // deciding with a day that is not a day is not a decision (it is not turned into today)
+    dc.decided = patch.decided === true && !("day" in patch && !dc.day);
     if (dc.decided && !dc.day) dc.day = next.course.today;
   }
   if (dc.decided && !dc.day) dc.decided = false;
@@ -307,13 +361,6 @@ export function removeMed(rec, id) {
 }
 
 // ---------------------------------------------------------------- the record as it stood on day N
-/** The value a log gives on day n: the last item with day <= n, or undefined. */
-const logAt = (log, n) => {
-  let at;
-  for (const l of log ?? []) if (l.day <= n && (!at || l.day >= at.day)) at = l;
-  return at;
-};
-
 /** The latest trend a problem had on or before day n: { day, state, note } or null. */
 export function trendAt(rec, problemId, n) {
   let found = null;
@@ -322,6 +369,14 @@ export function trendAt(rec, problemId, n) {
     if (d.day <= n && t && (!found || d.day >= found.day)) found = { day: d.day, state: t.state, ...(t.note ? { note: t.note } : {}) };
   }
   return found;
+}
+
+/** A task as it stood on day n: its state is the last item of its log up to then (a task with no log: done on its `closed` day, open before). */
+function taskAt(k, n) {
+  const items = k.log?.length ? k.log : k.state === "done" ? [{ day: k.added, state: "open" }, { day: k.closed ?? k.added, state: "done" }] : [];
+  const at = logAt(items, n);
+  const { closed, ...rest } = k;
+  return at?.state === "done" ? { ...rest, state: "done", closed: at.day } : { ...rest, state: "open" };
 }
 
 /**
@@ -334,15 +389,7 @@ export function asOf(rec, n) {
   const day = dayNo(n, next.course.today);
   next.course.today = Math.min(next.course.today, day);
   next.course.days = next.course.days.filter((d) => d.day <= day);
-  next.course.tasks = next.course.tasks
-    .filter((k) => k.added <= day)
-    .map((k) => {
-      if (k.state === "done" && (k.closed ?? k.added) > day) {
-        const { closed, ...rest } = k; // closed after day n: on day n it was still open
-        return { ...rest, state: "open" };
-      }
-      return k;
-    });
+  next.course.tasks = next.course.tasks.filter((k) => k.added <= day).map((k) => taskAt(k, day));
   next.problems = next.problems.filter((p) => (p.added ?? 1) <= day);
   for (const p of next.problems) {
     const c = logAt(p.cert_log, day);
@@ -365,7 +412,7 @@ export function asOf(rec, n) {
   // a task linked (later) to a problem that did not exist on day n is not linked on day n
   for (const k of next.course.tasks) if (k.problem && !next.problems.some((p) => p.id === k.problem)) delete k.problem;
   // a discharge decided after day n is not known on day n
-  if (next.course.discharge.decided && next.course.discharge.day > day) next.course.discharge = emptyDischarge();
+  if (next.course.discharge.decided === true && next.course.discharge.day > day) next.course.discharge = emptyDischarge();
   return next;
 }
 
@@ -395,13 +442,13 @@ export function courseChecks(rec) {
     const untrended = v.problems.filter((p) => (p.label || p.assess.length || p.plan.length) && !(day.trend[p.id]?.state));
     if (untrended.length) add("trend_missing", `入院${today}日目の推移（改善・不変・悪化）を選んでいない問題が ${untrended.length} 件（選ばなければ「未評価」です）`, untrended.map(name));
   }
-  const open = v.course.tasks.filter((k) => k.state === "open");
-  if (open.length) add("tasks_open", `未完了の課題が ${open.length} 件`, open.map((k) => `${TASK_KINDS.find((x) => x.id === k.kind)?.label ?? ""}: ${k.text.slice(0, 30)}`));
+  const open = v.course.tasks.filter((k) => k.state === "open" && k.text);
+  if (open.length) add("tasks_open", `未完了の課題が ${open.length} 件`, open.map((k) => `${TASK_KINDS.find((x) => x.id === k.kind)?.label ? `${TASK_KINDS.find((x) => x.id === k.kind).label}: ` : ""}${k.text.slice(0, 30)}`));
   const loose = open.filter((k) => !k.owner || !k.due);
   if (loose.length) add("tasks_incomplete", `${v.course.discharge.decided ? "退院時サマリーの「未解決」に載る課題のうち、" : ""}担当者または期限が未入力の課題が ${loose.length} 件`, loose.map((k) => `${k.text.slice(0, 30)}（${k.owner ? "" : "担当者"}${!k.owner && !k.due ? "・" : ""}${k.due ? "" : "期限"}）`));
-  const meds = rec.course.discharge.meds.filter((m) => (m.change === "changed" || m.change === "stopped") && !m.reason);
+  const meds = rec.course.discharge.meds.filter((m) => m.text && (m.change === "changed" || m.change === "stopped") && !m.reason);
   if (meds.length) add("meds_reason", `変更・中止の理由を書いていない退院時の処方が ${meds.length} 件`, meds.map((m) => m.text.slice(0, 30)));
-  const unset = rec.course.discharge.meds.filter((m) => !m.change);
+  const unset = rec.course.discharge.meds.filter((m) => m.text && !m.change);
   if (unset.length) add("meds_unset", `新規・変更・中止・継続のどれかを選んでいない退院時の処方が ${unset.length} 件（選ばなければ「未記入」です）`, unset.map((m) => m.text.slice(0, 30)));
   return out;
 }

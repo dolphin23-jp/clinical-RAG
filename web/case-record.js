@@ -11,7 +11,7 @@
 //  8. No date: the time axis is minutes from the arrival (or the clock time of the encounter); "入院N日目" comes with the later encounters.
 // Checks (checks()) count what is blank or undecided; they are notes, not judgements.
 import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
-import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, courseChecks, dayNo, emptyCourse } from "./case-course.js";
+import { DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, cleanLog, courseChecks, dayNo, dropEmptyDays, emptyCourse, stampLog } from "./case-course.js";
 import { relativizeDates } from "./date-relative.js";
 import { contextOf, coreMissing, cleanAnswers, isAnswered, isVisible, lineText, shortLabel } from "./intake.js";
 import { ROLES, assemble } from "./note-assemble.js";
@@ -46,6 +46,8 @@ export const ADM_FIELDS = [
   { key: "outlook", label: "再評価の予定・退院の条件・申し送り", note: "A05 の「再評価予定・退院条件・申し送り」" },
 ];
 
+/** The largest record the server keeps (worker/src/recordstore.ts MAX_RECORD_PAYLOAD; a test keeps the two equal), in characters of its JSON. */
+export const RECORD_BUDGET = 400_000;
 export const LIMITS = { title: 80, label: 120, text: 600, reason: 300, adm: 1500, heading: 80, cite: 200, problems: 20, entries: 12, adopted: 60, cites: 6, seen: 12, reading: 40 };
 
 /** Time questions that ask when the problem began (before the arrival, as a rule).  Every other time question is something done in the emergency room. */
@@ -72,16 +74,6 @@ const cleanCites = (raw) =>
       return o;
     })
     .filter((o) => o.title || o.url || o.page);
-
-/** A log of a judgement that changed: [{ day, ...}] one item per day (the last one wins), by day, at most COURSE_LIMITS.log. */
-function cleanLog(raw, ok, pick) {
-  const byDay = new Map();
-  for (const l of Array.isArray(raw) ? raw : []) if (isObj(l) && dayNo(l.day, 0) && ok(l)) byDay.set(l.day, { day: l.day, ...pick(l) });
-  return [...byDay.values()].sort((a, b) => a.day - b.day).slice(-COURSE_LIMITS.log);
-}
-
-/** Writes a judgement into its log for a day (replacing that day's item): the history of what the doctor decided, and when. */
-const upsertLog = (log = [], item) => [...log.filter((l) => l.day !== item.day), item].sort((a, b) => a.day - b.day).slice(-COURSE_LIMITS.log);
 
 function cleanEntry(raw, isPlan, used) {
   if (!isObj(raw)) return null;
@@ -193,6 +185,18 @@ export function newRecord(kase) {
  * nothing changed).
  */
 export function relativizeRecord(rec, { now = new Date() } = {}) {
+  // the notes, the checks and the save each ask for it on the same record object (records are never changed in place: every edit returns a
+  // new one), so the answer is kept for that object for the day it was computed on
+  const day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  const hit = RELATIVE_CACHE.get(rec);
+  if (hit?.day === day) return hit.value;
+  const value = relativize(rec, now);
+  RELATIVE_CACHE.set(rec, { day, value });
+  return value;
+}
+const RELATIVE_CACHE = new WeakMap();
+
+function relativize(rec, now) {
   const changes = [];
   const next = clone(rec);
   const fix = (o, k) => {
@@ -282,6 +286,7 @@ export function removeProblem(rec, id) {
   }
   for (const k of next.course.tasks) if (k.problem === id) delete k.problem;
   for (const d of next.course.days) delete d.trend[id];
+  dropEmptyDays(next);
   return next;
 }
 
@@ -316,8 +321,9 @@ export function setProblem(rec, id, patch) {
   }
   if ("certainty" in patch) {
     const c = CERT_IDS.has(patch.certainty) ? patch.certainty : "";
-    // the certainty is a judgement with a history: what it was on each day stays (a note for an earlier day does not show a later one)
-    if (c !== p.certainty) p.cert_log = upsertLog(p.cert_log, { day: next.course.today, certainty: c });
+    // the certainty is a judgement with a history: what it was on each day stays (a note for an earlier day does not show a later one).
+    // A record made before the log existed starts its log from the certainty it had (from the day the problem was added).
+    if (c !== p.certainty) p.cert_log = stampLog(p.cert_log, { today: next.course.today, added: p.added ?? 1, item: { certainty: c }, seed: p.certainty ? [{ day: p.added ?? 1, certainty: p.certainty }] : [] });
     p.certainty = c;
   }
   return next;
@@ -344,7 +350,8 @@ export function setEntry(rec, problemId, which, entryId, patch) {
   if (!e) return next;
   if ("text" in patch) e.text = str(patch.text, LIMITS.text);
   if (which === "plan") {
-    const before = `${e.state ?? "planned"}|${e.reason ?? ""}`;
+    const was = e.state ?? "planned";
+    const why = e.reason ?? "";
     if ("state" in patch && STATE_IDS.has(patch.state)) e.state = patch.state;
     if ("reason" in patch) {
       const r = str(patch.reason, LIMITS.reason);
@@ -352,7 +359,10 @@ export function setEntry(rec, problemId, which, entryId, patch) {
       else delete e.reason;
     }
     // what the doctor recorded about the plan (done, changed, stopped, why) is logged with the day: the notes of earlier days do not show it
-    if (`${e.state ?? "planned"}|${e.reason ?? ""}` !== before) e.log = upsertLog(e.log, { day: next.course.today, state: e.state ?? "planned", ...(e.reason ? { reason: e.reason } : {}) });
+    if ((e.state ?? "planned") !== was || (e.reason ?? "") !== why) {
+      const seed = was !== "planned" || why ? [{ day: e.added ?? 1, state: was, ...(why ? { reason: why } : {}) }] : []; // a record made before the log existed
+      e.log = stampLog(e.log, { today: next.course.today, added: e.added ?? 1, item: { state: e.state ?? "planned", ...(e.reason ? { reason: e.reason } : {}) }, seed });
+    }
   }
   return next;
 }
@@ -578,7 +588,8 @@ export function waiting(flow, answers, kase) {
 export const boardOf = (rec) => ({
   adm: { ...rec.adm },
   contingency: clone(rec.contingency),
-  problems: rec.problems.map((p) => ({ ...clone(p), certaintyLabel: CERTAINTY.find((c) => c.id === p.certainty)?.label ?? "" })),
+  // the admission note has no trend line (a trend belongs to the course notes, which build their own problems)
+  problems: rec.problems.map(({ trend, ...p }) => ({ ...clone(p), certaintyLabel: CERTAINTY.find((c) => c.id === p.certainty)?.label ?? "" })),
 });
 
 /** The admission note (A05) as assemble() builds it: the case as typed, and the board.  Adopted items reach it only through the board. */
@@ -621,6 +632,8 @@ export function checks(rec, FLOWS) {
   if (noPlan.length) add("no_plan", `計画を書いていない問題が ${noPlan.length} 件`, noPlan.map((p) => p.label));
   if (!rec.problems.length) add("no_problems", "問題がまだありません（入院時の記載の「Problem List」は未入力になります）");
   out.push(...courseChecks(rec)); // what the course leaves blank or undecided on the working day (case-course.js)
+  const size = JSON.stringify(rec).length;
+  if (size >= RECORD_BUDGET * 0.7) add("size", `この記録の大きさは、保存できる上限の ${Math.round((size / RECORD_BUDGET) * 100)}% です（上限を超えると保存できません。古い日の記録や、使わない課題・処方を消すと小さくなります）`);
   const note = admissionNote(rec);
   if (note.unfilled.length) add("unfilled", `入院時の記載の必須欄が「（未入力）」のまま: ${note.unfilled.length} 個`, note.sections.filter((s) => s.empty && s.requirement === "required").map((s) => s.label));
   return out;

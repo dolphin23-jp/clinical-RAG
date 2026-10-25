@@ -4,7 +4,7 @@
 // not a sentence; what the doctor chose (a trend, a plan's state, a certainty, what happened to a medication) is shown as chosen and what
 // was not chosen is shown as not chosen.  The discharge summary exists only once the doctor has decided the discharge and its day.
 import { CERTAINTY, relativizeRecord } from "./case-record.js";
-import { DAY_FIELDS, MED_CHANGES, TASK_KINDS, TREND, asOf } from "./case-course.js";
+import { DAY_FIELDS, MED_CHANGES, TASK_KINDS, TREND, asOf, dayNo } from "./case-course.js";
 import { RECORD_FILL, UNFILLED, assemble } from "./note-assemble.js";
 
 const labelOf = (list, id) => list.find((x) => x.id === id)?.label ?? "";
@@ -40,7 +40,8 @@ function problemsFor(view, { trend = true, history = false } = {}) {
     }));
 }
 
-const apBlock = (problems) => (problems.length ? [{ kind: "ap", label: "Problem 別 Assessment・Plan", problems }] : []);
+/** The A/P block of the course notes: unlike the admission note (whose problem list carries them), it marks an AI-origin problem's name itself. */
+const apBlock = (problems) => (problems.length ? [{ kind: "ap", label: "Problem 別 Assessment・Plan", problems, markProblems: true }] : []);
 
 /** The days the doctor marked as turning points (up to the view's day) with what the doctor wrote on them and the trends chosen on them. */
 const TURN_LABELS = { interval: "前回からのイベント", subjective: "主観的症状・変化", objective: "身体所見・検査推移", overall: "患者全体の状態" };
@@ -50,28 +51,26 @@ function turnsBlock(view) {
     .map((d) => ({
       day: d.day,
       lines: DAY_FIELDS.filter((f) => TURN_LABELS[f.key] && d[f.key]).map((f) => ({ label: TURN_LABELS[f.key], text: d[f.key] })),
-      trends: view.problems.flatMap((p) => (d.trend[p.id] ? [{ problem: nameOf(p), stateLabel: labelOf(TREND, d.trend[p.id].state), note: d.trend[p.id].note ?? "" }] : [])),
+      trends: view.problems.flatMap((p) => (d.trend[p.id] ? [{ problem: nameOf(p), ai: p.ai === true, stateLabel: labelOf(TREND, d.trend[p.id].state), note: d.trend[p.id].note ?? "" }] : [])),
     }));
   return days.length ? [{ kind: "turns", label: "転換点（先生がマークした日）", days }] : [];
 }
 
 /** The tasks still open on the view's day, with who and by when (a missing one is shown as not entered). */
 function tasksBlock(view) {
-  const open = view.course.tasks.filter((k) => k.state === "open");
+  const open = view.course.tasks.filter((k) => k.state === "open" && k.text); // a row with no text is not a task
   if (!open.length) return [];
-  const tasks = open.map((k) => ({
-    text: k.text,
-    kindLabel: labelOf(TASK_KINDS, k.kind),
-    owner: k.owner,
-    due: k.due,
-    problem: k.problem ? nameOf(view.problems.find((p) => p.id === k.problem) ?? {}) : "",
-  }));
+  const tasks = open.map((k) => {
+    const p = k.problem ? view.problems.find((x) => x.id === k.problem) : null;
+    return { text: k.text, kindLabel: labelOf(TASK_KINDS, k.kind), owner: k.owner, due: k.due, problem: p ? nameOf(p) : "", problemAi: p?.ai === true };
+  });
   return [{ kind: "tasks", label: "未完了の課題（先生の記録）", tasks }];
 }
 
 // ---------------------------------------------------------------- A06: the progress note of a day
 /** The progress note (A06) for hospital day `day` (default: the working day), from the record as of that day. */
-export function progressNote(rec, day = rec.course.today) {
+export function progressNote(rec, today = rec.course.today) {
+  const day = dayNo(today, rec.course.today);
   const view = viewAt(rec, day);
   const d = view.course.days.find((x) => x.day === day);
   const fields = {
@@ -90,7 +89,8 @@ export function progressNote(rec, day = rec.course.today) {
  * points (none marked: blank); the problems are those of that day with the plan's state and the trend the doctor had recorded by then; the
  * open tasks are those open on that day.  Nothing recorded after `day` is in it.
  */
-export function interimNote(rec, day = rec.course.today) {
+export function interimNote(rec, today = rec.course.today) {
+  const day = dayNo(today, rec.course.today);
   const view = viewAt(rec, day);
   const s = view.course.summary;
   const fields = {
@@ -112,7 +112,7 @@ function dxBlock(view) {
   const main = ps.filter((p) => p.dx === "main");
   const sub = ps.filter((p) => p.dx === "sub");
   if (!main.length && !sub.length) return [];
-  return [{ kind: "dx", label: "主病名・副病名（先生が選んだもの）", main, sub, other: ps.filter((p) => !p.dx).map((p) => p.label) }];
+  return [{ kind: "dx", label: "主病名・副病名（先生が選んだもの）", main, sub, other: ps.filter((p) => !p.dx).map((p) => ({ label: p.label, ai: p.ai === true })) }];
 }
 
 /**
@@ -122,10 +122,10 @@ function dxBlock(view) {
  */
 export function dischargeNote(rec) {
   const dc = rec.course.discharge;
-  if (!dc.decided || !dc.day) return null;
+  if (dc.decided !== true || !dc.day) return null;
   const view = viewAt(rec, dc.day);
   const d = view.course.discharge;
-  if (!d.decided) return null; // (cannot happen: the day is the discharge day)
+  if (d.decided !== true) return null; // (cannot happen: the day is the discharge day)
   const fields = {
     dc_context: [
       ...caseBlock("discharge.days", "入退院（先生の記録）", `入院1日目に入院、入院${dc.day}日目に退院`),
@@ -135,7 +135,7 @@ export function dischargeNote(rec) {
     dc_course: [...turnsBlock(view), ...apBlock(problemsFor(view, { trend: false, history: true }))],
     dc_procedures: caseBlock("discharge.procedures", "主要な検査・処置（先生の入力）", d.procedures),
     dc_state: caseBlock("discharge.state", "退院時の状態（先生の入力）", d.state),
-    dc_meds: d.meds.length ? [{ kind: "meds", label: "退院時処方（先生の入力）", meds: d.meds.map((m) => ({ text: m.text, changeLabel: labelOf(MED_CHANGES, m.change), change: m.change, reason: m.reason ?? "" })) }] : [],
+    dc_meds: d.meds.some((m) => m.text) ? [{ kind: "meds", label: "退院時処方（先生の入力）", meds: d.meds.filter((m) => m.text).map((m) => ({ text: m.text, changeLabel: labelOf(MED_CHANGES, m.change), change: m.change, reason: m.reason ?? "" })) }] : [],
     dc_followup: caseBlock("discharge.followup", "外来・在宅の方針（先生の入力）", d.followup),
     dc_tasks: tasksBlock(view),
   };

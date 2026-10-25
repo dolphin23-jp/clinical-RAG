@@ -10,7 +10,7 @@
 import { caseKey } from "./case-model.js";
 import { scan } from "./id-guard.js";
 import { AI_MARK, ROLES, toText } from "./note-assemble.js";
-import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, MED_CHANGES, SUMMARY_FIELDS, TASK_KINDS, TREND, addMed, addTask, asOf, nextDay, removeDay, removeMed, removeTask, setDayField, setDayTurning, setDischarge, setMed, setSummary, setTask, setToday, setTrend, trendAt } from "./case-course.js";
+import { COURSE_LIMITS, DAY_FIELDS, DISCHARGE_FIELDS, MED_CHANGES, SUMMARY_FIELDS, TASK_KINDS, TREND, addMed, addTask, asOf, canWriteDay, nextDay, removeDay, removeMed, removeTask, setDayField, setDayTurning, setDischarge, setMed, setSummary, setTask, setToday, setTrend, trendAt } from "./case-course.js";
 import { dischargeNote, interimNote, progressNote } from "./record-notes.js";
 import { ADM_FIELDS, CERTAINTY, DX_CLASSES, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline, waiting } from "./case-record.js";
 import { bindDates, changesNote } from "./intake-ui.js";
@@ -675,7 +675,7 @@ export function initRecords(ctx) {
   function renderCourse(rec) {
     const d = sec("経過（日ごと・課題）");
     const today = rec.course.today;
-    d.append(el("p", "help", "時間は「入院N日目」だけで記録します（入院した日が1日目。日付は入れません）。ここで記録した推移・計画の結果・診断の確度の変更は、いまの日の記録として残り、**前の日の記載には出ません**（その日の時点の記録から記載を作ります）。推移は、先生が選んだものだけが入ります（選ばなければ「未評価」で、「不変」にはなりません）。"));
+    d.append(el("p", "help", "時間は「入院N日目」だけで記録します（入院した日が1日目。日付は入れません）。ここで記録した推移・計画の結果・診断の確度の変更は、いまの日からの記録として残り、それより前の日の記載には出ません（その日の時点の記録から記載を作ります）。前の日に戻って判断を直したときは、すでに記録した最後の日からの記録になります。問題名・評価・計画・先生が入力した文は、直すと前の日の記載にも直した文で出ます。推移は、先生が選んだものだけが入ります（選ばなければ記載に推移の行は出ず、注意では「未評価」と数えます。「不変」にはなりません）。"));
 
     // the working day
     const bar = el("div", "rec-daybar");
@@ -708,6 +708,12 @@ export function initRecords(ctx) {
     }
     const view = asOf(rec, today);
     const day = view.course.days.find((x) => x.day === today);
+    const writable = canWriteDay(rec, today);
+    if (!writable) {
+      const full = el("p", "notice err", `記録のある日が上限（${COURSE_LIMITS.days}日）に達しているため、${dayLabel(today)}の記録は保存できません。古い日の記録を消すと、足せます。`);
+      full.setAttribute("role", "alert");
+      d.append(full);
+    }
 
     // 1. the plans of earlier days: what happened to them
     d.append(el("h4", "rec-sub", "前の日までの計画の結果"));
@@ -735,8 +741,9 @@ export function initRecords(ctx) {
     d.append(el("h4", "rec-sub", `${dayLabel(today)}の記録（先生の入力）`));
     for (const f of DAY_FIELDS) {
       const lab = el("label", "field", f.label);
-      const ta = textField("textarea", day?.[f.key] ?? "", f.max, (v) => mutate((r) => (v || r.course.days.some((x) => x.day === today) ? setDayField(r, today, f.key, v) : r)), f.label, "case-text rec-day-text");
+      const ta = textField("textarea", day?.[f.key] ?? "", f.max, (v) => mutate((r) => setDayField(r, today, f.key, v)), f.label, "case-text rec-day-text");
       ta.dataset.key = f.key;
+      ta.disabled = !writable;
       lab.append(ta);
       d.append(lab);
     }
@@ -745,6 +752,7 @@ export function initRecords(ctx) {
     cb.type = "checkbox";
     cb.checked = !!day?.turning;
     cb.dataset.act = "turning";
+    cb.disabled = !writable && !day;
     cb.addEventListener("change", () => mutateAndRender((r) => setDayTurning(r, today, cb.checked)));
     turn.append(cb, el("span", null, `${dayLabel(today)}を、経過の転換点としてマークする（中間サマリー・退院時サマリーの「経過」に入ります）`));
     d.append(turn);
@@ -772,12 +780,14 @@ export function initRecords(ctx) {
         b.type = "button";
         b.dataset.opt = t.id;
         b.setAttribute("aria-pressed", String(cur.state === t.id));
+        b.disabled = !writable;
         b.addEventListener("click", () => mutateAndRender((r) => setTrend(r, today, p.id, cur.state === t.id ? "" : t.id)));
         chips.append(b);
       }
       row.append(chips);
       const note = textField("input", cur.note ?? "", LIMITS.reason, (v) => mutate((r) => setTrend(r, today, p.id, undefined, v)), `${p.label || "問題"}の推移のメモ`, "rec-reason");
       note.placeholder = "メモ（任意）";
+      note.disabled = !writable;
       row.append(note);
       const before = trendAt(rec, p.id, today - 1);
       if (before) row.append(el("span", "rec-cite", `前回: ${trendText(before)}`));
@@ -789,16 +799,21 @@ export function initRecords(ctx) {
     d.append(el("p", "help", "完了にするのは先生です（結果や返事が届いても、自動では完了になりません）。担当者と期限は、退院時サマリーの「未解決」に使います（期限は「入院5日目」「退院後2週」のように）。"));
     for (const k of view.course.tasks) d.append(taskRow(k, view));
     const addRow = el("div", "btn-row");
-    addRow.append(btn("＋ 課題を足す", "btn", () => mutateAndRender((r) => addTask(r, { text: "", kind: "result" }).rec)));
+    const addTaskBtn = btn("＋ 課題を足す", "btn", () => mutateAndRender((r) => addTask(r, { text: "" }).rec));
+    addTaskBtn.disabled = rec.course.tasks.length >= COURSE_LIMITS.tasks;
+    addRow.append(addTaskBtn);
+    if (addTaskBtn.disabled) addRow.append(el("span", "help", `課題は ${COURSE_LIMITS.tasks} 件までです。完了した課題を消すと、足せます。`));
     d.append(addRow);
     const fa = flowOf(rec, FLOWS);
     if (fa) {
+      // 結果待ち (the doctor chose it) becomes a "結果待ち" task; one that cannot be told from 未実施 does not get that kind (the doctor picks)
+      const asTask = (w) => (w.kind === "pend" ? { text: `${w.label}の結果`, kind: "result" } : { text: w.label });
       const made = new Set(view.course.tasks.map((k) => k.text));
-      const wait = waiting(fa.flow, fa.answers, rec.ed.case).filter((w) => !made.has(`${w.label}の結果`));
+      const wait = waiting(fa.flow, fa.answers, rec.ed.case).filter((w) => !made.has(asTask(w).text));
       if (wait.length) {
-        d.append(el("p", "help", "救急で「結果待ち」または「未実施」を選んだ項目を、課題にできます（どちらかは区別していません。先生が選びます）。"));
+        d.append(el("p", "help", "救急で「結果待ち」を選んだ項目は「結果待ち」の課題に、「結果待ち」か「未実施」か区別できない項目は種類を選ばない課題に、先生が選んで足せます。"));
         const row = el("div", "btn-row");
-        for (const w of wait) row.append(btn(`課題にする: ${w.label}`, "btn rec-small", () => mutateAndRender((r) => addTask(r, { text: `${w.label}の結果`, kind: "result" }).rec)));
+        for (const w of wait) row.append(btn(`課題にする: ${w.label}`, "btn rec-small", () => mutateAndRender((r) => addTask(r, asTask(w)).rec)));
         d.append(row);
       }
     }
@@ -878,7 +893,11 @@ export function initRecords(ctx) {
     dayIn.value = dc.day ? String(dc.day) : "";
     dayIn.placeholder = String(today);
     dayIn.setAttribute("aria-label", "退院の日（入院N日目）");
-    dayIn.addEventListener("change", () => mutateAndRender((r) => setDischarge(r, { day: dayIn.value === "" ? 0 : Number(dayIn.value) })));
+    dayIn.addEventListener("change", () => {
+      const n = dayIn.value === "" ? 0 : Number(dayIn.value);
+      if (dayIn.value !== "" && !(Number.isInteger(n) && n >= 1 && n <= COURSE_LIMITS.maxDay)) say(`退院の日は、1〜${COURSE_LIMITS.maxDay} の整数（入院N日目）で入れてください。入れ直すまで、退院は決まっていません。`, "err");
+      mutateAndRender((r) => setDischarge(r, { day: n }));
+    });
     const decide = btn(dc.decided ? `退院を決めた（${dayLabel(dc.day)}）・取り消す` : `退院を決める（${dayLabel(dc.day ?? today)}）`, "btn rec-small primary", () => mutateAndRender((r) => setDischarge(r, { decided: !dc.decided })));
     decide.dataset.act = "discharge-decide";
     decide.setAttribute("aria-pressed", String(dc.decided));
@@ -894,7 +913,10 @@ export function initRecords(ctx) {
     b.append(el("h4", "rec-sub", "退院時処方（新規・変更・中止・継続と、その理由）"));
     b.append(el("p", "help", "用量・用法は、先生が書いたとおりに入ります（ここでは作りません）。新規・変更・中止・継続のどれかを先生が選びます（選ばなければ「区分未記入」です）。変更・中止は理由を書いてください。"));
     for (const m of dc.meds) b.append(medRow(m));
-    b.append(btn("＋ 処方を足す", "btn rec-small", () => mutateAndRender((r) => addMed(r, {}).rec)));
+    const addMedBtn = btn("＋ 処方を足す", "btn rec-small", () => mutateAndRender((r) => addMed(r, {}).rec));
+    addMedBtn.disabled = dc.meds.length >= COURSE_LIMITS.meds;
+    b.append(addMedBtn);
+    if (addMedBtn.disabled) b.append(el("span", "help", `処方は ${COURSE_LIMITS.meds} 件までです。`));
     b.append(el("h4", "rec-sub", "退院時サマリーの下書き（退院時サマリ A08）"));
     const boxB = previewBox("rec-discharge-text");
     b.append(boxB.pre, boxB.row);
@@ -932,6 +954,7 @@ export function initRecords(ctx) {
     const meta = el("div", "rec-entry-meta");
     const kind = el("select", "rec-kind");
     kind.setAttribute("aria-label", "課題の種類");
+    kind.append(new Option("（種類を選ばない）", ""));
     for (const t of TASK_KINDS) kind.append(new Option(t.label, t.id));
     kind.value = k.kind;
     kind.addEventListener("change", () => mutateAndRender((r) => setTask(r, k.id, { kind: kind.value })));

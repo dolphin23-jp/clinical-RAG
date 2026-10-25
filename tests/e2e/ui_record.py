@@ -610,6 +610,9 @@ with sync_playwright() as pw:
     # a closed section stays closed, an open one stays open when the screen is drawn again
     page.locator("button", has_text="＋ 課題を足す").click()
     check(page.locator("details.rec-sec", has_text="中間サマリー・転棟（A07）").first.get_attribute("open") is not None, "an opened section stays open after a redraw")
+    check(page.locator(".rec-task").first.locator("select").first.input_value() == "", "a new task has no kind chosen (it is not 結果待ち unless the doctor says so)")
+    page.locator(".rec-task").first.locator("textarea").fill("培養の確認")
+    check("・培養の確認（担当: 未入力／期限: 未入力）" in page.locator(".rec-interim-text").inner_text() and "結果待ち:" not in page.locator(".rec-interim-text").inner_text(), "so it is printed with no kind, and with owner and due as not entered")
 
     # the discharge summary
     page.locator("details.rec-sec summary", has_text="退院時サマリー（A08）").click()
@@ -641,6 +644,9 @@ with sync_playwright() as pw:
     check("入院2日目に退院" in d2 and "（確度: 疑い）" in d2 and "確定" not in d2 and "尿路感染症" not in d2, "discharge on day 2: the later certainty and the later problem are not in it")
     page.locator("button[data-act=discharge-decide]").click()
     check("退院を決めて、退院の日を入れると" in page.locator(".rec-discharge-text").inner_text(), "taking the decision back removes the draft")
+    page.locator("input.rec-dc-day").fill("999")
+    page.locator("input.rec-dc-day").dispatch_event("change")
+    check("退院の日は、1〜365 の整数" in rec_text() and "退院を決める（" in page.locator("button[data-act=discharge-decide]").inner_text(), "a day that is not a day is said so, and no discharge is decided")
     page.locator("input.rec-dc-day").fill("3")
     page.locator("input.rec-dc-day").dispatch_event("change")
     page.locator("button[data-act=discharge-decide]").click()
