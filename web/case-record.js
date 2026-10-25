@@ -10,7 +10,7 @@
 //  4. A problem has a stable id (p1, p2 ...) that is never used again, even after the problem is removed.
 //  8. No date: the time axis is minutes from the arrival (or the clock time of the encounter); "入院N日目" comes with the later encounters.
 // Checks (checks()) count what is blank or undecided; they are notes, not judgements.
-import { TEXT_KEYS, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
+import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
 import { relativizeDates } from "./date-relative.js";
 import { contextOf, coreMissing, cleanAnswers, isAnswered, isVisible, lineText, shortLabel } from "./intake.js";
 import { ROLES, assemble } from "./note-assemble.js";
@@ -39,7 +39,13 @@ export const ADM_FIELDS = [
   { key: "outlook", label: "再評価の予定・退院の条件・申し送り", note: "A05 の「再評価予定・退院条件・申し送り」" },
 ];
 
-export const LIMITS = { title: 80, label: 120, text: 600, reason: 300, adm: 1500, heading: 80, cite: 200, problems: 20, entries: 12, adopted: 60, cites: 6 };
+export const LIMITS = { title: 80, label: 120, text: 600, reason: 300, adm: 1500, heading: 80, cite: 200, problems: 20, entries: 12, adopted: 60, cites: 6, seen: 12, reading: 40 };
+
+/** Time questions that ask when the problem began (before the arrival, as a rule).  Every other time question is something done in the emergency room. */
+export const PRE_ARRIVAL = new Set(["t_sz", "t_onset", "t_bleed"]);
+const READINGS = new Set(["after", "before"]);
+const QID = /^[a-z][a-z0-9_]{0,40}$/;
+const hasRole = (r) => typeof r === "string" && Object.hasOwn(ROLES, r);
 const ID = { p: /^p\d{1,4}$/, i: /^i\d{1,4}$/, a: /^a\d{1,4}$/ };
 const CERT_IDS = new Set(CERTAINTY.map((c) => c.id));
 const STATE_IDS = new Set(PLAN_STATES.map((c) => c.id));
@@ -102,6 +108,8 @@ export function cleanRecord(raw) {
       label: str(p.label, LIMITS.label),
       certainty: CERT_IDS.has(p.certainty) ? p.certainty : "",
       from: p.from === "ed" ? "ed" : "typed",
+      ...(p.ai === true ? { ai: true } : {}),
+      ...(p.ai === true && cleanCites(p.cites).length ? { cites: cleanCites(p.cites) } : {}),
       assess: (Array.isArray(p.assess) ? p.assess : []).slice(0, LIMITS.entries).map((e) => cleanEntry(e, false, used)).filter(Boolean),
       plan: (Array.isArray(p.plan) ? p.plan : []).slice(0, LIMITS.entries).map((e) => cleanEntry(e, true, used)).filter(Boolean),
     });
@@ -109,17 +117,23 @@ export function cleanRecord(raw) {
   const contingency = (Array.isArray(raw.contingency) ? raw.contingency : []).slice(0, LIMITS.entries).map((e) => cleanEntry(e, false, used)).filter(Boolean);
   const adopted = [];
   for (const a of (Array.isArray(raw.ed.adopted) ? raw.ed.adopted : []).slice(0, LIMITS.adopted)) {
-    if (!isObj(a) || typeof a.id !== "string" || !ID.a.test(a.id) || adopted.some((x) => x.id === a.id) || !ROLES[a.role]) continue;
+    if (!isObj(a) || typeof a.id !== "string" || !ID.a.test(a.id) || adopted.some((x) => x.id === a.id) || !hasRole(a.role)) continue;
     const text = str(a.text, LIMITS.text);
     if (!text) continue;
     const to = a.to === "none" || a.to === "outlook" || problems.some((p) => p.id === a.to) ? a.to : "";
     const item = { id: a.id, role: a.role, heading: str(a.heading, LIMITS.heading), text, cites: cleanCites(a.cites), to };
     if (to && typeof a.entry === "string" && used.has(a.entry)) item.entry = a.entry;
+    if (typeof a.made === "string" && problems.some((p) => p.id === a.made)) item.made = a.made;
     adopted.push(item);
   }
   const adm = {};
   for (const f of ADM_FIELDS) adm[f.key] = str(isObj(raw.adm) ? raw.adm[f.key] : "", LIMITS.adm);
-  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted }, adm, problems, contingency, seq: { p: 0, i: 0, a: 0 } };
+  // the versions of the case this record has had (short hashes), so an answer asked with an earlier version is still this case's
+  const seen = (Array.isArray(raw.ed.seen) ? raw.ed.seen : []).filter((h) => typeof h === "string" && /^[0-9a-z]{1,10}$/.test(h)).slice(-LIMITS.seen);
+  if (!seen.includes(caseHash(kase))) seen.push(caseHash(kase));
+  const reading = {};
+  for (const [k, v] of isObj(raw.ed.reading) ? Object.entries(raw.ed.reading).slice(0, LIMITS.reading) : []) if (QID.test(k) && READINGS.has(v)) reading[k] = v;
+  const rec = { v: RECORD_VERSION, title: str(raw.title, LIMITS.title) || recordTitle(kase), ed: { case: kase, adopted, seen: seen.slice(-LIMITS.seen), reading }, adm, problems, contingency, seq: { p: 0, i: 0, a: 0 } };
   rec.seq = seqOf(rec, raw.seq);
   return rec;
 }
@@ -129,9 +143,22 @@ export function recordTitle(kase) {
   return (caseSummary(kase) || "症例").slice(0, LIMITS.title);
 }
 
+/** A short fingerprint of a case (the hash of its text): stored instead of the text, to tell whether a turn was asked with this record's case. */
+export function caseHash(kase) {
+  let h = 0x811c9dc5;
+  for (const ch of caseKey(kase)) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
+/** Whether a case is one this record has had (the current one or an earlier version of it).  Not proof of the same patient: a hint to ask. */
+export const isRecordCase = (rec, kase) => rec.ed.seen.includes(caseHash(cleanCase(kase)));
+
 export function newRecord(kase) {
   const c = cleanCase(kase);
-  return cleanRecord({ v: RECORD_VERSION, title: recordTitle(c), ed: { case: c, adopted: [] }, adm: {}, problems: [], contingency: [], seq: {} });
+  return cleanRecord({ v: RECORD_VERSION, title: recordTitle(c), ed: { case: c, adopted: [], seen: [], reading: {} }, adm: {}, problems: [], contingency: [], seq: {} });
 }
 
 // ---------------------------------------------------------------- no calendar date is kept
@@ -162,6 +189,7 @@ export function relativizeRecord(rec, { now = new Date() } = {}) {
     }
   }
   for (const e of next.contingency) fix(e, "text");
+  for (const a of next.ed.adopted) fix(a, "text");
   return { rec: changes.length ? next : rec, changes };
 }
 
@@ -171,6 +199,8 @@ export function setCase(rec, kase) {
   const next = clone(rec);
   next.ed.case = cleanCase(kase);
   next.title = recordTitle(next.ed.case);
+  const h = caseHash(next.ed.case);
+  next.ed.seen = [...next.ed.seen.filter((x) => x !== h), h].slice(-LIMITS.seen);
   return next;
 }
 
@@ -179,7 +209,7 @@ export function addAdopted(rec, items) {
   const next = clone(rec);
   let added = 0;
   for (const it of Array.isArray(items) ? items : []) {
-    if (!isObj(it) || !ROLES[it.role]) continue;
+    if (!isObj(it) || !hasRole(it.role)) continue;
     const text = str(it.text, LIMITS.text);
     if (!text || next.ed.adopted.some((a) => a.role === it.role && a.text === text) || next.ed.adopted.length >= LIMITS.adopted) continue;
     next.seq.a += 1;
@@ -206,9 +236,12 @@ export function addProblem(rec, label = "", from = "typed") {
 export function removeProblem(rec, id) {
   const next = clone(rec);
   next.problems = next.problems.filter((p) => p.id !== id);
-  for (const a of next.ed.adopted) if (a.to === id) {
-    a.to = "";
-    delete a.entry;
+  for (const a of next.ed.adopted) {
+    if (a.to === id) {
+      a.to = "";
+      delete a.entry;
+    }
+    if (a.made === id) delete a.made;
   }
   return next;
 }
@@ -228,7 +261,15 @@ export function setProblem(rec, id, patch) {
   const next = clone(rec);
   const p = findProblem(next, id);
   if (!p) return next;
-  if ("label" in patch) p.label = str(patch.label, LIMITS.label);
+  if ("label" in patch) {
+    const label = str(patch.label, LIMITS.label);
+    if (label !== p.label) {
+      // once the doctor changes the words, they are the doctor's (the AI mark and its citations no longer apply)
+      delete p.ai;
+      delete p.cites;
+    }
+    p.label = label;
+  }
   if ("certainty" in patch) p.certainty = CERT_IDS.has(patch.certainty) ? patch.certainty : "";
   return next;
 }
@@ -284,64 +325,117 @@ export function setAdm(rec, key, text) {
 }
 
 // ---------------------------------------------------------------- carrying over: the doctor's act
+/** A problem's name from an item's text: one line, cut to the limit with "…" so the cut is visible. */
+const clipLabel = (text) => {
+  const t = String(text).replace(/\s+/g, " ").trim();
+  return t.length > LIMITS.label ? `${t.slice(0, LIMITS.label - 1)}…` : t;
+};
+
+/** Where an entry is now: { list, entry } over the problems' lists and the criteria to call, or null. */
+function locate(rec, entryId) {
+  if (!entryId) return null;
+  for (const list of [...rec.problems.flatMap((p) => [p.assess, p.plan]), rec.contingency]) {
+    const entry = list.find((e) => e.id === entryId);
+    if (entry) return { list, entry };
+  }
+  return null;
+}
+
+/** True when the doctor changed the entry an adopted item made (its words, a plan state, a reason): taking it back would lose that. */
+export function entryModified(rec, adoptedId) {
+  const a = rec.ed.adopted.find((x) => x.id === adoptedId);
+  const at = a && locate(rec, a.entry);
+  if (!at) return false;
+  return at.entry.text !== a.text || (at.entry.state ?? "planned") !== "planned" || !!at.entry.reason;
+}
+
 /**
  * Carries one adopted item: target = a problem id, "new" (a new problem; only for an item of the problem list), "outlook" (only for
- * criteria to call or consult), "none" (not carried: decided) or "" (back to not decided: the entry it made is removed).
- * The carried entry keeps its AI origin (`from: "ai"`) and its citations; a plan item arrives as "planned".  Returns { rec, ok }.
+ * criteria to call or consult), "none" (not carried: decided) or "" (back to not decided).
+ * The carried entry keeps its AI origin (`from: "ai"`) and its citations; a plan item arrives as "planned".
+ * Choosing again MOVES the entry (what the doctor changed in it goes with it); only "", "none" and "new" take it back.
+ * A problem that "new" made, and that the doctor has not touched, goes when the item is taken back.  Returns { rec, ok }.
  */
 export function attach(rec, adoptedId, target) {
-  let next = clone(rec);
+  const next = clone(rec);
   const a = next.ed.adopted.find((x) => x.id === adoptedId);
-  if (!a) return { rec: next, ok: false };
-  // undo what an earlier choice made
-  if (a.entry) {
-    for (const p of next.problems) {
-      p.assess = p.assess.filter((e) => e.id !== a.entry);
-      p.plan = p.plan.filter((e) => e.id !== a.entry);
-    }
-    next.contingency = next.contingency.filter((e) => e.id !== a.entry);
-    delete a.entry;
+  if (!a) return { rec, ok: false };
+  const isPlan = a.role === "plan";
+  const fits =
+    target === "" || target === "none" ||
+    (target === "new" && a.role === "problems") ||
+    (target === "outlook" && a.role === "contingency") ||
+    (target !== "new" && target !== "outlook" && next.problems.some((p) => p.id === target));
+  if (!fits) return { rec, ok: false };
+  if (target === a.to) return { rec: next, ok: true }; // the same choice again changes nothing
+
+  // take the entry out of where it is now (it is kept, to be moved)
+  const at = locate(next, a.entry);
+  let moved = null;
+  if (at) {
+    at.list.splice(at.list.indexOf(at.entry), 1);
+    moved = at.entry;
   }
+  delete a.entry;
+  const made = a.made ? next.problems.find((p) => p.id === a.made) : null;
   a.to = "";
-  if (!target) return { rec: next, ok: true };
-  if (target === "none") {
-    a.to = "none";
-    return { rec: next, ok: true };
-  }
-  const entry = (isPlan) => {
+
+  const mk = (plan) => {
     const e = { id: nextId(next, "i"), text: a.text, from: "ai" };
     if (a.cites?.length) e.cites = clone(a.cites);
-    if (isPlan) e.state = "planned";
+    if (plan) e.state = "planned";
     return e;
   };
-  if (target === "outlook") {
-    if (a.role !== "contingency" || next.contingency.length >= LIMITS.entries) return { rec, ok: false };
-    const e = entry(false);
-    next.contingency.push(e);
-    a.to = "outlook";
+  const place = (list, plan) => {
+    if (list.length >= LIMITS.entries) return false;
+    const e = moved ?? mk(plan);
+    if (!plan) delete e.state; // an assessment has no state
+    else e.state ??= "planned";
+    list.push(e);
     a.entry = e.id;
+    return true;
+  };
+  const dropMade = () => {
+    // a problem this item made, left as it was made, goes with the item; one the doctor has worked on stays
+    if (made && made.label === clipLabel(a.text) && made.ai && !made.assess.length && !made.plan.length) {
+      next.problems = next.problems.filter((p) => p.id !== made.id);
+      delete a.made;
+    }
+  };
+
+  if (target === "" || target === "none") {
+    dropMade();
+    a.to = target;
     return { rec: next, ok: true };
   }
   if (target === "new") {
-    if (a.role !== "problems") return { rec, ok: false };
-    const made = addProblem(next, a.text, "ed");
-    if (!made.id) return { rec, ok: false };
-    next = made.rec;
+    // one problem per item: choosing "new" again while the problem it made is still there points at it
+    if (made) {
+      a.to = made.id;
+      return { rec: next, ok: true };
+    }
+    const made2 = addProblem(next, "", "ed");
+    if (!made2.id) return { rec, ok: false };
+    Object.assign(next, made2.rec);
     const na = next.ed.adopted.find((x) => x.id === adoptedId);
-    na.to = made.id; // the new problem is named by the item's own words: the doctor edits it
-    delete na.entry;
-    next.problems.find((p) => p.id === made.id).from = "ed";
+    const p = next.problems.find((x) => x.id === made2.id);
+    p.label = clipLabel(a.text);
+    p.ai = true;
+    if (a.cites?.length) p.cites = clone(a.cites);
+    na.to = p.id;
+    na.made = p.id;
     return { rec: next, ok: true };
   }
-  const p = findProblem(next, target);
-  if (!p) return { rec, ok: false };
-  const isPlan = a.role === "plan";
-  const list = isPlan ? p.plan : p.assess;
-  if (list.length >= LIMITS.entries) return { rec, ok: false };
-  const e = entry(isPlan);
-  list.push(e);
+  if (target === "outlook") {
+    dropMade();
+    if (!place(next.contingency, false)) return { rec, ok: false };
+    a.to = "outlook";
+    return { rec: next, ok: true };
+  }
+  const p = next.problems.find((x) => x.id === target);
+  if (!place(isPlan ? p.plan : p.assess, isPlan)) return { rec, ok: false };
+  if (made && made.id !== p.id) dropMade();
   a.to = p.id;
-  a.entry = e.id;
   return { rec: next, ok: true };
 }
 
@@ -360,11 +454,14 @@ export function timeLabel(q) {
 
 /**
  * The time axis of an emergency encounter from the flow's answers: every answered time question, in time order, with the minutes from
- * the flow's own origin (the arrival).  A time earlier than the origin is read as the next day and says so.  No judgement of how long
- * anything took; the observations hung on a time (the bridge's `at`) are listed under it as typed.
- * Returns { origin: { label, time } | null, originMissing, rows: [{ id, time, label, min, wrapped, isOrigin, details }] }.
+ * the flow's own origin (the arrival).  A clock time has no date, so a time the order of the clock contradicts is a reading, not a fact:
+ * a time earlier than the arrival is read as the next day (it is something done in the emergency room), and a "when it began" time
+ * (PRE_ARRIVAL) later than the arrival as the day before.  Such rows say so (`assumed`), and the doctor can flip the reading
+ * (`reading`: { questionId: "after" | "before" }).  No judgement of how long anything took; the observations hung on a time (the
+ * bridge's `at`) are listed under it as typed.
+ * Returns { origin: { label, time } | null, originMissing, rows: [{ id, time, label, min, reading, assumed, isOrigin, details }] }.
  */
-export function timeline(flow, answers, kase) {
+export function timeline(flow, answers, kase, reading = {}) {
   const ctx = contextOf(answers, kase);
   const originQ = flow.origin?.q;
   const originTime = originQ && minutesOf(answers[originQ]) !== null ? answers[originQ] : null;
@@ -373,19 +470,33 @@ export function timeline(flow, answers, kase) {
     if (q.type !== "time" || minutesOf(answers[q.id]) === null || !isVisible(flow, q, ctx)) return;
     const time = answers[q.id];
     let min = null;
-    let wrapped = false;
-    if (originTime) {
-      min = minutesOf(time) - minutesOf(originTime);
-      if (min < 0) {
-        min += 1440;
-        wrapped = true;
-      }
-    }
-    const details = flow.questions.filter((x) => x.br?.at === q.id && isAnswered(answers[x.id]) && isVisible(flow, x, ctx)).map((x) => lineText(x, answers[x.id]));
-    rows.push({ id: q.id, time, label: timeLabel(q), min, wrapped, isOrigin: q.id === originQ, details, order });
+    let read = "after";
+    let assumed = false;
+    if (originTime && q.id !== originQ) {
+      const delta = minutesOf(time) - minutesOf(originTime);
+      const pre = PRE_ARRIVAL.has(q.id);
+      // the default reading of the question; ambiguous when the clock says the opposite
+      const dflt = pre ? "before" : "after";
+      read = READINGS.has(reading[q.id]) ? reading[q.id] : dflt;
+      assumed = pre ? delta > 0 : delta < 0;
+      if (read === "after") min = delta < 0 ? delta + 1440 : delta;
+      else min = delta > 0 ? delta - 1440 : delta;
+    } else if (originTime) min = 0;
+    rows.push({ id: q.id, time, label: timeLabel(q), min, reading: read, assumed, isOrigin: q.id === originQ, details: flow.questions.filter((x) => x.br?.at === q.id && isAnswered(answers[x.id]) && isVisible(flow, x, ctx)).map((x) => lineText(x, answers[x.id])), order });
   });
   rows.sort((a, b) => (a.min ?? minutesOf(a.time)) - (b.min ?? minutesOf(b.time)) || a.order - b.order);
   return { origin: originTime ? { label: flow.origin.label, time: originTime } : null, originMissing: !!originQ && !originTime, rows: rows.map(({ order, ...r }) => r) };
+}
+
+/** Sets how an ambiguous clock time is read ("after" the arrival or "before" it); "" goes back to the default reading. */
+export function setReading(rec, questionId, value) {
+  const next = clone(rec);
+  if (!QID.test(String(questionId))) return next;
+  if (READINGS.has(value)) {
+    if (!(questionId in next.ed.reading) && Object.keys(next.ed.reading).length >= LIMITS.reading) return next;
+    next.ed.reading[questionId] = value;
+  } else delete next.ed.reading[questionId];
+  return next;
 }
 
 // ---------------------------------------------------------------- the flow of an encounter
@@ -419,7 +530,10 @@ export const boardOf = (rec) => ({
 });
 
 /** The admission note (A05) as assemble() builds it: the case as typed, and the board.  Adopted items reach it only through the board. */
-export const admissionNote = (rec) => assemble("A05", { kase: rec.ed.case, items: [], board: boardOf(rec) });
+export function admissionNote(rec) {
+  const r = relativizeRecord(rec).rec; // what is shown has no calendar date even before the next save
+  return assemble("A05", { kase: r.ed.case, items: [], board: boardOf(r) });
+}
 
 // ---------------------------------------------------------------- checks: what is blank or undecided (notes, not judgements)
 const ROLE_LABEL = { problems: "問題リスト", assessment: "各問題の評価", plan: "初期プラン", contingency: "コンサルト・医師コールの基準" };
@@ -439,12 +553,14 @@ export function checks(rec, FLOWS) {
     const pend = w.filter((x) => x.kind === "pend");
     const wait = w.filter((x) => x.kind === "wait");
     if (pend.length) add("pending", `「結果待ち」を選んだ項目（未完了の課題）が ${pend.length} 件`, pend.map((x) => x.label));
-    if (wait.length) add("waiting", `結果待ちか未実施か区別できない項目が ${wait.length} 件`, wait.map((x) => x.label));
+    if (wait.length) add("waiting", `「結果待ち」または「未実施」を選んだ項目が ${wait.length} 件（どちらかは区別していません）`, wait.map((x) => x.label));
+    const guessed = timeline(fa.flow, fa.answers, rec.ed.case, rec.ed.reading).rows.filter((r) => r.assumed);
+    if (guessed.length) add("assumed_times", `時刻だけでは決められず、仮の読み方をした時刻が ${guessed.length} 件（時間軸で読み方を選べます）`, guessed.map((r) => r.label));
   }
   const undecided = rec.ed.adopted.filter((a) => !a.to);
   if (undecided.length) add("undecided", `救急で採用した項目のうち、入院時へ持ってくるか決めていないものが ${undecided.length} 件`, undecided.map((a) => `${ROLE_LABEL[a.role] ?? a.role}: ${a.text.slice(0, 30)}`));
   const unnamed = rec.problems.filter((p) => !p.label);
-  if (unnamed.length) add("unnamed", `名前のない問題が ${unnamed.length} 件`, []);
+  if (unnamed.length) add("unnamed", `名前のない問題が ${unnamed.length} 件（評価・計画のある問題は、記載には「（名前なし）」として入ります）`, []);
   const noCert = rec.problems.filter((p) => p.label && !p.certainty);
   if (noCert.length) add("no_certainty", `診断の確度を選んでいない問題が ${noCert.length} 件`, noCert.map((p) => p.label));
   const noAssess = rec.problems.filter((p) => p.label && !p.assess.length);

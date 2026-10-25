@@ -199,33 +199,61 @@ test("relativizeRecord: dates in every free text of the record become relative b
 
 // ---------------------------------------------------------------------------------- the time axis
 const AP = S.FLOWS["emergency-department.abdominal-pain"];
-test("time axis: minutes from the flow's own origin; a time before it is read as the next day and says so; observations hang on their time", () => {
+test("time axis: minutes from the flow's own origin; a time the clock order contradicts is a reading, flagged, and the doctor can flip it", () => {
   const answers = I.cleanAnswers(AP, { t_arrival: "21:40", t_ecg: "21:52", ecg_find: ["normal"], t_vbg: "22:10", vbg_res: ["pending"], t_us: "22:05", t_analg: "22:30", t_dispo: "00:10" }).answers;
   const t = R.timeline(AP, answers, {});
   assert.deepEqual(t.origin, { label: "病着", time: "21:40" });
   assert.equal(t.originMissing, false);
-  assert.deepEqual(t.rows.map((r: any) => [r.id, r.time, r.min, r.wrapped, r.label]), [
+  assert.deepEqual(t.rows.map((r: any) => [r.id, r.time, r.min, r.assumed, r.label]), [
     ["t_arrival", "21:40", 0, false, "病着"],
     ["t_ecg", "21:52", 12, false, "12誘導ECG"],
     ["t_us", "22:05", 25, false, "腹部エコー"],
     ["t_vbg", "22:10", 30, false, "血液ガス"],
     ["t_analg", "22:30", 50, false, "鎮痛"],
-    ["t_dispo", "00:10", 150, true, "Disposition決定"],
+    ["t_dispo", "00:10", 150, true, "Disposition決定"], // after midnight: read as the next day, and says it is a reading
   ]);
   assert.equal(t.rows[0].isOrigin, true);
   assert.deepEqual(t.rows[1].details, ["12誘導ECG：ECG異常なし"], "the ECG finding hangs on the ECG time, in the option's own short words");
   assert.deepEqual(t.rows[3].details, ["血液ガス：未実施・結果待ち"], "the blood gas result (waiting) hangs on its time, as the doctor chose it");
   // nothing in a row is a judgement: no late/early, no colour, no threshold
-  for (const r of t.rows) assert.deepEqual(Object.keys(r).sort(), ["details", "id", "isOrigin", "label", "min", "time", "wrapped"]);
+  for (const r of t.rows) assert.deepEqual(Object.keys(r).sort(), ["assumed", "details", "id", "isOrigin", "label", "min", "reading", "time"]);
+  // the doctor can read the same clock time the other way
+  const before = R.timeline(AP, answers, {}, { t_dispo: "before" });
+  assert.equal(before.rows[0].id, "t_dispo");
+  assert.deepEqual([before.rows[0].min, before.rows[0].reading], [-1290, "before"]);
   // without the arrival time the axis is by clock time and says the origin is missing
   const noOrigin = R.timeline(AP, I.cleanAnswers(AP, { t_ecg: "21:52", t_us: "22:05" }).answers, {});
   assert.equal(noOrigin.origin, null);
   assert.equal(noOrigin.originMissing, true);
   assert.deepEqual(noOrigin.rows.map((r: any) => [r.id, r.min]), [["t_ecg", null], ["t_us", null]]);
   assert.deepEqual(R.timeline(AP, {}, {}).rows, []);
-  // a time question whose condition is not met is not on the axis; labels
   assert.equal(R.minutesOf("23:59"), 1439);
   for (const bad of ["24:00", "9:5", "", null, "12:60"]) assert.equal(R.minutesOf(bad), null);
+});
+
+test("time axis: a 'when it began' time before the arrival is before it (not the next day); after midnight stays right; the readings are kept in the record", () => {
+  const SZ = S.FLOWS["emergency-department.seizure"];
+  const at = (a: object) => R.timeline(SZ, I.cleanAnswers(SZ, a).answers, {}).rows.map((r: any) => [r.id, r.min, r.assumed, r.reading]);
+  // seizure began 07:10, arrival 09:30: 140 minutes BEFORE the arrival (not +1300)
+  assert.deepEqual(at({ t_arrival: "09:30", t_sz: "07:10" }), [["t_sz", -140, false, "before"], ["t_arrival", 0, false, "after"]]);
+  // began at 23:40, arrival at 23:50: 10 minutes before
+  assert.deepEqual(at({ t_arrival: "23:50", t_sz: "23:40" }), [["t_sz", -10, false, "before"], ["t_arrival", 0, false, "after"]]);
+  // a "when it began" time later than the arrival is ambiguous (witnessed in the room, or the day before): flagged, read as the day before
+  assert.deepEqual(at({ t_arrival: "09:30", t_sz: "10:00" }), [["t_sz", -1410, true, "before"], ["t_arrival", 0, false, "after"]]);
+  // an action after midnight: 23:50 arrival, ECG 00:05 is +15 (flagged as a reading)
+  assert.deepEqual(at({ t_arrival: "23:50", t_ecg: "00:05" }), [["t_arrival", 0, false, "after"], ["t_ecg", 15, true, "after"]]);
+  // the doctor's reading is stored in the record, checked, and can be cleared
+  let r = R.newRecord(CASE);
+  r = R.setReading(r, "t_sz", "after");
+  assert.deepEqual(r.ed.reading, { t_sz: "after" });
+  assert.deepEqual(R.timeline(SZ, I.cleanAnswers(SZ, { t_arrival: "09:30", t_sz: "10:00" }).answers, {}, r.ed.reading).rows.map((x: any) => x.min), [0, 30]);
+  assert.deepEqual(R.cleanRecord(JSON.parse(JSON.stringify(r))).ed.reading, { t_sz: "after" });
+  assert.deepEqual(R.setReading(r, "t_sz", "").ed.reading, {});
+  assert.deepEqual(R.setReading(r, "T SZ!", "after").ed.reading, { t_sz: "after" });
+  assert.deepEqual(R.setReading(r, "t_sz", "sideways").ed.reading, {});
+  const dirty = JSON.parse(JSON.stringify(r));
+  dirty.ed.reading = { t_ok: "before", "bad key": "after", t_bad: "x" };
+  assert.deepEqual(R.cleanRecord(dirty).ed.reading, { t_ok: "before" });
 });
 
 test("time axis: every flow has an origin question that is a time question, and every time question gets a name", () => {
@@ -350,6 +378,120 @@ test("admission note: other note types ignore the board, and the old behaviour f
   // without a board, A05 is the case and the adopted items only
   const plain = A.assemble("A05", { kase: CASE, items: ITEMS.map((i) => ({ ...i })) });
   assert.equal(plain.adopted, 5);
+});
+
+// ---------------------------------------------------------------------------------- review follow-ups (PR #11)
+test("attach: taking an item back does not leave its problem behind; choosing again moves the entry with the doctor's edits", () => {
+  const r0 = withItems();
+  // "new" then "not carried": the problem it made (untouched) goes, and the AI text is not in the note
+  let r = R.attach(r0, "a1", "new").rec;
+  assert.equal(r.problems.length, 1);
+  assert.equal(r.problems[0].ai, true);
+  assert.deepEqual(r.problems[0].cites.map((c: any) => c.page), ["p.10"], "the new problem keeps the item's AI origin and its citation");
+  r = R.attach(r, "a1", "none").rec;
+  assert.deepEqual(r.problems, []);
+  assert.ok(!noteText(r).includes("腎前性AKI"));
+  // "new" twice makes one problem; "" (not decided) takes it back too
+  r = R.attach(R.attach(R.attach(r0, "a1", "new").rec, "a1", "new").rec, "a1", "new").rec;
+  assert.equal(r.problems.length, 1);
+  assert.deepEqual(R.attach(r, "a1", "").rec.problems, []);
+  // a problem the doctor has worked on stays when the item is taken back
+  let kept = R.setProblem(R.attach(r0, "a1", "new").rec, "p1", { label: "腎前性AKI（疑い）" });
+  assert.equal(kept.problems[0].ai, undefined, "the doctor changed the words: the AI mark and its citations no longer apply");
+  assert.equal(kept.problems[0].cites, undefined);
+  kept = R.attach(kept, "a1", "none").rec;
+  assert.deepEqual(kept.problems.map((p: any) => p.id), ["p1"]);
+  let withEntry = R.addEntry(R.attach(r0, "a1", "new").rec, "p1", "assess", "自分で書いた評価").rec;
+  withEntry = R.attach(withEntry, "a1", "none").rec;
+  assert.equal(withEntry.problems.length, 1, "a problem with the doctor's own entry stays");
+  // moving a plan entry keeps what the doctor did to it
+  let m = R.addProblem(R.addProblem(R.attach(r0, "a4", "").rec, "A").rec, "B").rec; // p1, p2
+  m = R.attach(m, "a4", "p1").rec;
+  m = R.setEntry(m, "p1", "plan", m.ed.adopted[3].entry, { text: "輸液を開始した（量は記録）", state: "done", reason: "救急で開始" });
+  assert.equal(R.entryModified(m, "a4"), true);
+  assert.equal(R.entryModified(R.attach(r0, "a4", "").rec, "a4"), false);
+  const moved = R.attach(m, "a4", "p2").rec;
+  assert.deepEqual(moved.problems[0].plan, []);
+  assert.deepEqual(moved.problems[1].plan.map((e: any) => [e.text, e.state, e.reason, e.from]), [["輸液を開始した（量は記録）", "done", "救急で開始", "ai"]]);
+  assert.equal(moved.ed.adopted[3].to, "p2");
+  assert.equal(R.attach(m, "a4", "p1").rec.problems[0].plan.length, 1, "the same choice again changes nothing");
+  // taking it back with "" drops the entry (the screen asks first when it was modified)
+  assert.deepEqual(R.attach(m, "a4", "").rec.problems[0].plan, []);
+  // removing the problem it made also forgets the link
+  const gone = R.removeProblem(R.attach(r0, "a1", "new").rec, "p1");
+  assert.equal(gone.ed.adopted[0].made, undefined);
+  assert.equal(R.attach(gone, "a1", "new").rec.problems[0].id, "p2", "a new problem, with a new id");
+  // a long item text becomes a visibly cut label
+  const long = R.addAdopted(R.newRecord(CASE), [{ role: "problems", heading: "問題リスト", text: "あ".repeat(300) }]).rec;
+  const lp = R.attach(long, "a1", "new").rec.problems[0].label;
+  assert.equal(lp.length, R.LIMITS.label);
+  assert.ok(lp.endsWith("…"));
+});
+
+test("admission note: a new problem made from an AI item carries the AI mark and its citation; unnamed problems with content are not dropped; tags come off labels", () => {
+  let r = R.attach(withItems(), "a1", "new").rec;
+  r = R.setProblem(r, "p1", { certainty: "suspected" });
+  const t = noteText(r);
+  assert.match(t, /1\. 〔AI草案〕腎前性AKI（脱水・NSAIDs）（疑い） ［書籍 p\.10］ 〔救急から〕/);
+  assert.match(t, /^【病棟入院時】下書き\n［日付］　［患者ID］　［氏名］\n※〔AI草案〕/, "a note with only such problems still carries the AI notice");
+  assert.equal(R.admissionNote(r).adopted, 1);
+  const plain = noteText(r, { aiMark: false, sourceMarks: false });
+  assert.match(plain, /1\. 腎前性AKI（脱水・NSAIDs）（疑い）\n/);
+  assert.ok(!plain.includes("〔") && !plain.includes("［書籍"));
+  // the doctor's edit of the words removes the mark
+  assert.ok(!noteText(R.setProblem(r, "p1", { label: "腎前性AKI" })).includes("1. 〔AI草案〕"));
+  // a tag inside an AI label comes off with the source marks
+  const tagged = R.setProblem(r, "p1", { label: "腎前性AKI [推論]" });
+  assert.match(noteText(tagged), /\[推論\]/);
+  assert.ok(!noteText(R.attach(R.addAdopted(R.newRecord(CASE), [{ role: "problems", heading: "問題リスト", text: "AKI [推論]" }]).rec, "a1", "new").rec, { sourceMarks: false }).includes("[推論]"));
+  // an unnamed problem with content is in the note as （名前なし）; an empty unnamed one is not
+  let u = R.addProblem(R.newRecord(CASE), "").rec;
+  u = R.addEntry(u, "p1", "plan", "降圧薬を再開").rec;
+  u = R.setEntry(u, "p1", "plan", "i1", { state: "done" });
+  u = R.addProblem(u, "").rec;
+  const ut = noteText(u);
+  assert.match(ut, /1\. （名前なし）\n/);
+  assert.match(ut, /［1\. （名前なし）］\n実施（医師の記録）:\n・降圧薬を再開/);
+  assert.ok(!ut.includes("2. （名前なし）"));
+  assert.match(R.checks(u, S.FLOWS).find((c: any) => c.id === "unnamed").text, /「（名前なし）」として入ります/);
+});
+
+test("roles are own properties of the table: 'constructor' and friends are not roles", () => {
+  for (const role of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.equal(R.addAdopted(R.newRecord(CASE), [{ role, heading: "x", text: "y" }]).added, 0, role);
+    assert.equal(R.cleanRecord({ v: 1, ed: { case: CASE, adopted: [{ id: "a1", role, text: "y" }] } }).ed.adopted.length, 0, role);
+    assert.equal(A.assemble("A05", { kase: CASE, items: [{ role, text: "y" }] }).adopted, 0, role);
+  }
+});
+
+test("dates: adopted items and the shown draft are made relative too, even before the next save", () => {
+  const now = new Date("2026-10-24T03:00:00Z");
+  const r0 = R.addAdopted(R.newRecord(CASE), [{ role: "plan", heading: "初期プラン", text: "2026/10/20 から続く輸液を検討" }]).rec;
+  const out = R.relativizeRecord(r0, { now });
+  assert.match(out.rec.ed.adopted[0].text, /^4日前 から続く輸液を検討$/);
+  // the A05 text never shows a calendar date, whatever the record holds
+  let r = R.setAdm(R.attach(R.addProblem(r0, "再燃").rec, "a1", "p1").rec, "summary", "10/20 に入院");
+  r = R.addEntry(r, "p1", "assess", "2026年10月22日 から再燃").rec;
+  assert.ok(!/10\/20|2026|10月22日/.test(noteText(r)), noteText(r));
+  // a record made from a case with a date in it (a case that did not go through the pin) has none in its title
+  const t = R.relativizeRecord(R.newRecord({ ...CASE, complaint: "10/20 から発熱。2026年10月22日に受診" }), { now }).rec;
+  assert.ok(!/10\/20|2026|10月22日/.test(JSON.stringify(t)));
+});
+
+test("a record knows the versions of its case it has had, so an answer asked with an earlier version is recognised and another case is not", () => {
+  let r = R.newRecord(CASE);
+  const edited = { ...CASE, vitals: "BP 100/60" };
+  assert.equal(R.isRecordCase(r, CASE), true);
+  assert.equal(R.isRecordCase(r, edited), false, "a case this record never had is not its case");
+  r = R.setCase(r, edited);
+  assert.equal(R.isRecordCase(r, edited), true);
+  assert.equal(R.isRecordCase(r, CASE), true, "an earlier version is still this case");
+  assert.equal(R.isRecordCase(r, { ...CASE, age: "30代", complaint: "別の症例" }), false);
+  assert.ok(r.ed.seen.every((h: string) => /^[0-9a-z]{1,10}$/.test(h)), "only short hashes are stored, never the text");
+  for (let i = 0; i < 30; i++) r = R.setCase(r, { ...CASE, vitals: `BP ${100 + i}/60` });
+  assert.equal(r.ed.seen.length, R.LIMITS.seen);
+  assert.deepEqual(R.cleanRecord(JSON.parse(JSON.stringify(r))).ed.seen, r.ed.seen);
+  assert.equal(R.caseHash(CASE), R.caseHash({ ...CASE }));
 });
 
 // ---------------------------------------------------------------------------------- purity

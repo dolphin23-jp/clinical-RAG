@@ -214,9 +214,21 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(self.flow["origin"], {"q": "t_onset", "label": "発症"})
 
     def test_a_bridge_or_origin_that_names_what_does_not_exist_is_refused(self):
-        bad_option = FLOW.replace('neg = ["gradual"]', 'neg = ["nonesuch"]')
-        bad_origin = FLOW.replace('origin_q = "t_onset"', 'origin_q = "nowhere"')
-        for name, text in {"bridge option": bad_option, "origin_q": bad_origin}.items():
+        cases = {
+            "bridge option": FLOW.replace('neg = ["gradual"]', 'neg = ["nonesuch"]'),
+            "origin_q is no question": FLOW.replace('origin_q = "t_onset"', 'origin_q = "nowhere"'),
+            "origin_q is not a time question": FLOW.replace('origin_q = "t_onset"', 'origin_q = "onset"'),
+            "origin_label without origin_q": FLOW.replace('origin_q = "t_onset"\n', ""),
+            "origin_q without origin_label": FLOW.replace('origin_label = "発症"\n', ""),
+            "origin_label is a sentence": FLOW.replace('origin_label = "発症"', 'origin_label = "' + "あ" * 40 + '"'),
+            "ent is prose": FLOW.replace('ent = "context"', 'ent = "これは文章であって種類ではない"'),
+            "status is prose": FLOW.replace('{ q = "age", ent = "context" }', '{ q = "age", ent = "action", status = "ここに長い説明を書く" }'),
+            "phase is not a phase": FLOW.replace('{ q = "age", ent = "context" }', '{ q = "age", ent = "observation", phase = "whenever" }'),
+            "at is no question": FLOW.replace('at = "t_onset"', 'at = "t_nowhere"'),
+            "of is no question": FLOW.replace('{ q = "age", ent = "context" }', '{ q = "age", ent = "assessment", of = "t_nowhere" }'),
+            "a scalar that is not a string": FLOW.replace('{ q = "age", ent = "context" }', '{ q = "age", ent = 3 }'),
+        }
+        for name, text in cases.items():
             with self.subTest(name), self.assertRaises(SystemExit):
                 imp.load_all(make({"x.toml": text}))
 

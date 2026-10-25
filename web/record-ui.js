@@ -10,7 +10,7 @@
 import { caseKey } from "./case-model.js";
 import { scan } from "./id-guard.js";
 import { AI_MARK, ROLES, toText } from "./note-assemble.js";
-import { ADM_FIELDS, CERTAINTY, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, flowOf, moveProblem, newRecord, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, timeline } from "./case-record.js";
+import { ADM_FIELDS, CERTAINTY, LIMITS, PLAN_STATES, addAdopted, addEntry, addProblem, admissionNote, attach, checks, cleanRecord, entryModified, flowOf, isRecordCase, moveProblem, newRecord, relativizeRecord, removeEntry, removeProblem, setAdm, setCase, setEntry, setProblem, setReading, timeline } from "./case-record.js";
 import { bindDates, changesNote } from "./intake-ui.js";
 
 const SAVE_DELAY = 1200;
@@ -35,14 +35,17 @@ const strings = (v, out = []) => {
   else if (v && typeof v === "object") for (const x of Object.values(v)) strings(x, out);
   return out;
 };
+const END_ASK = "この症例の記録を終えます（サーバーから削除します）。元に戻せません。なお、質問に付けて会話に保存された症例の入力は、会話を消すか保存期間が過ぎるまで残ります。よいですか？";
 const citeText = (c) => `${c.kind === "web" ? "Web" : "書籍"}${c.page ? ` ${c.page}` : ""}`;
 
 export function initRecords(ctx) {
-  const { api, el, $, openDialog, copyText, caseCtl } = ctx;
+  const { api, el, $, openDialog, copyText, caseCtl, hasThread, newConversation } = ctx;
   const dlg = $("#record");
   const body = $("#record-body");
   let FLOWS = null;
-  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, inflight: false, msg: "", msgKind: "", opts: { ai: true, src: true } };
+  // gen: which opened record this is (a response for an earlier one is ignored); pending: the save in flight; unconfirmed: what was sent
+  // since the last answer we read (a write whose answer was lost may have landed); unlinking: the pinned case was cleared and the record is being let go
+  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true } };
   let derived = null; // { checks, preview } nodes that change while typing
   let dateNote = null;
 
@@ -94,14 +97,25 @@ export function initRecords(ctx) {
       say(r.ok ? "この記録は読み込めませんでした（形式が合いません）" : r.j.error || "記録を読み込めませんでした", "err");
       return render();
     }
-    // the case of the record becomes the pinned case; ask before it replaces another pinned case
+    // the case of the record becomes the pinned case.  When the thread on screen is not this case's (another patient's questions and answers
+    // would ride along with the next question, and the next turn would be saved into that conversation), a new conversation starts first.
     const pinned = caseCtl.pinned();
-    if (pinned && caseKey(pinned) !== caseKey(rec.ed.case) && !confirm("いま固定している症例を、この記録の症例に置き換えます。よいですか？")) return;
+    const same = !!pinned && isRecordCase(rec, pinned);
+    const thread = hasThread?.() ?? false;
+    if (!same && (thread || (pinned && caseKey(pinned) !== caseKey(rec.ed.case)))) {
+      const ask = thread
+        ? "この記録を開くと、いまの会話を閉じて新しい会話を始めます（質問済みの会話は「会話」から開けます）。別の患者の質問や回答が、この症例に混ざらないようにするためです。よいですか？"
+        : "いま固定している症例を、この記録の症例に置き換えます。よいですか？";
+      if (!confirm(ask)) return;
+      if (thread) newConversation?.();
+    }
     await loadFlows();
+    S.gen += 1;
     S.id = id;
     S.rev = r.j.rev;
     S.rec = rec;
     S.save = "saved";
+    S.unconfirmed = [];
     say("");
     caseCtl.set(rec.ed.case, { keepLink: true });
     markLinked();
@@ -110,7 +124,9 @@ export function initRecords(ctx) {
 
   /** Makes a record of a case (the doctor's act).  Returns true when it was made and is now the open record. */
   async function createFrom(kase) {
-    const rec = newRecord(kase);
+    if (S.creating) return false; // a second tap while the first is on its way
+    const made = newRecord(kase);
+    const rec = made && relativizeRecord(made).rec; // a case that did not go through the pin may still hold a date
     if (!rec) {
       say("主訴・バイタル・所見・既往・場面ごとの質問のどれかを入れた症例を固定してから、記録にしてください。", "err");
       render();
@@ -122,17 +138,21 @@ export function initRecords(ctx) {
       return false;
     }
     const id = newId();
+    S.creating = true;
     const r = await call(`/api/records/${id}`, { method: "PUT", body: JSON.stringify({ record: rec }) });
+    S.creating = false;
     if (!r.ok) {
       say(r.j.error || "記録を作れませんでした", "err");
       render();
       return false;
     }
     await loadFlows();
+    S.gen += 1;
     S.id = id;
     S.rev = r.j.rev;
     S.rec = rec;
     S.save = "saved";
+    S.unconfirmed = [];
     say("");
     S.list = null;
     markLinked();
@@ -141,24 +161,33 @@ export function initRecords(ctx) {
 
   function touch() {
     S.version += 1;
+    // a record that can not be saved (another screen saved it, or it is gone) stays that way: no doomed save, no "auto-save" that is not
+    if (S.save === "conflict" || S.save === "gone") return showStatus();
     S.save = "dirty";
     clearTimeout(S.timer);
     S.timer = setTimeout(save, SAVE_DELAY);
     showStatus();
   }
 
-  async function save() {
+  /** Saves what changed.  One save at a time: a call while one is on its way waits for it, then sends what changed since. */
+  function save() {
     clearTimeout(S.timer);
-    if (!S.rec || !S.id || S.inflight || S.save === "conflict" || S.save === "gone") return;
-    // the last pass before saving: no calendar date is kept (the fields already convert when pasted into or left; this catches the rest)
+    if (!S.rec || !S.id || S.unlinking || S.save === "conflict" || S.save === "gone") return Promise.resolve();
+    if (S.pending) return S.pending.then(() => (S.save === "dirty" ? save() : undefined));
+    S.pending = doSave().finally(() => {
+      S.pending = null;
+    });
+    return S.pending;
+  }
+
+  async function doSave() {
+    // the last pass before saving: no calendar date is kept (the fields already convert when pasted into or left; this catches the rest).
+    // The screen is not redrawn (that would drop the focus and an IME composition): the field converts when it is left.
     const rel = relativizeRecord(S.rec);
     if (rel.changes.length) {
       S.rec = rel.rec;
       S.version += 1;
-      if (dlg.open) {
-        render();
-        dateNote.textContent = changesNote(rel.changes);
-      }
+      if (dateNote) dateNote.textContent = changesNote(rel.changes);
     }
     const kinds = new Set();
     for (const t of strings(S.rec)) for (const h of scan(t)) kinds.add(h.label);
@@ -167,22 +196,35 @@ export function initRecords(ctx) {
       say(`患者を特定できる情報の可能性があるため、保存していません（${[...kinds].join("、")}）。直すと保存されます。`, "err");
       return showStatus();
     }
-    S.inflight = true;
     S.save = "saving";
     showStatus();
-    const sent = S.version;
+    const gen = S.gen;
     const id = S.id;
+    const sent = S.version;
+    const body = JSON.stringify(S.rec);
+    S.unconfirmed.push(body);
     const r = await call(`/api/records/${id}`, { method: "PUT", body: JSON.stringify({ rev: S.rev, record: S.rec }) });
-    S.inflight = false;
-    if (S.id !== id) return; // another record was opened (or this one ended) while this was on its way
+    if (S.gen !== gen) return; // another record was opened (or this one ended) while this was on its way
     if (r.ok) {
       S.rev = r.j.rev;
+      S.unconfirmed = [];
       S.save = S.version === sent ? "saved" : "dirty";
       if (S.msgKind === "err") say("");
       if (S.save === "dirty") S.timer = setTimeout(save, SAVE_DELAY);
     } else if (r.status === 409 && r.j.code === "conflict") {
-      S.save = "conflict";
-      say("別の画面で更新されています。この画面の変更は保存されていません。記録を開き直してください。", "err");
+      // a write of ours whose answer was lost may have landed: when the server holds exactly something we sent, it is ours, not another screen's
+      const g = await call(`/api/records/${id}`);
+      if (S.gen !== gen) return;
+      if (g.ok && S.unconfirmed.includes(JSON.stringify(g.j.record))) {
+        S.rev = g.j.rev;
+        S.unconfirmed = [];
+        S.version += 1; // send again with the revision that is the server's now
+        S.save = "dirty";
+        S.timer = setTimeout(save, 0);
+      } else {
+        S.save = "conflict";
+        say("別の画面で更新されています。この画面の変更は保存されていません。記録を開き直してください（開き直すと、この画面で書いた分は消えます）。", "err");
+      }
     } else if (r.status === 404) {
       S.save = "gone";
       say("この記録は見つかりません（保持期間が過ぎたか、別の画面で終えた可能性があります）。この画面の内容は保存されていません。", "err");
@@ -193,31 +235,56 @@ export function initRecords(ctx) {
     showStatus();
     if (S.msgKind === "err") renderMsg();
   }
-  const flush = () => (S.save === "dirty" || S.save === "error" ? save() : Promise.resolve());
+
+  /** Waits for the save in flight and sends what is still unsaved.  True when everything is saved. */
+  async function settle() {
+    for (let i = 0; i < 4; i++) {
+      clearTimeout(S.timer);
+      if (S.pending) await S.pending;
+      if (S.save === "dirty" || S.save === "error") await save();
+      else break;
+    }
+    return S.save === "saved";
+  }
+  const flush = () => settle();
+
+  /** Before the record is let go: true when it may be (everything saved, or the doctor accepts losing what is not). */
+  async function leave() {
+    if (!S.rec) return true;
+    if (await settle()) return true;
+    return confirm("保存されていない変更があります。破棄して閉じますか？（「キャンセル」で戻ります）");
+  }
+
+  /** The record is let go: nothing refers to it any more. */
+  function reset() {
+    S.gen += 1;
+    S.id = null;
+    S.rec = null;
+    S.list = null;
+    S.unconfirmed = [];
+    S.save = "saved";
+    markLinked();
+  }
 
   async function endRecord() {
-    if (!S.id || !confirm("この症例の記録を終えます（サーバーから削除します）。元に戻せません。よいですか？")) return;
+    if (!S.id || !confirm(END_ASK)) return;
     clearTimeout(S.timer);
+    if (S.pending) await S.pending; // a save on its way must not arrive after the delete
     const r = await call(`/api/records/${S.id}`, { method: "DELETE" });
     if (!r.ok) {
       say(r.j.error || "終えられませんでした", "err");
       return render();
     }
-    S.id = null;
-    S.rec = null;
-    S.list = null;
+    reset();
     say("記録を終えました（削除しました）。", "ok");
     await loadList();
   }
 
   async function deleteFromList(id) {
-    if (!confirm("この症例の記録を終えます（サーバーから削除します）。元に戻せません。よいですか？")) return;
+    if (!confirm(END_ASK)) return;
     const r = await call(`/api/records/${id}`, { method: "DELETE" });
     say(r.ok ? "記録を終えました（削除しました）。" : r.j.error || "終えられませんでした", r.ok ? "ok" : "err");
-    if (S.id === id) {
-      S.id = null;
-      S.rec = null;
-    }
+    if (S.id === id) reset();
     await loadList();
   }
 
@@ -226,6 +293,8 @@ export function initRecords(ctx) {
     const b = $("#casebar-record");
     b.textContent = S.rec ? "記録（連動中）" : "記録";
     b.classList.toggle("linked", !!S.rec);
+    const note = $("#case-linked");
+    if (note) note.hidden = !S.rec; // the case dialog says the pinned case is the open record's
   };
   const mutate = (fn) => {
     S.rec = fn(S.rec);
@@ -277,10 +346,12 @@ export function initRecords(ctx) {
     const pinned = caseCtl.pinned();
     if (pinned) {
       const row = el("div", "btn-row");
-      row.append(btn("いま固定している症例を記録にする", "btn primary", async () => {
+      const make = btn("いま固定している症例を記録にする", "btn primary", async () => {
+        make.disabled = true;
         await createFrom(pinned);
         render();
-      }));
+      });
+      row.append(make);
       body.append(row);
     } else body.append(el("p", "help", "新しく記録を作るには、先に「症例」を固定してください（ヘッダーの「症例」）。固定した症例が、記録の「救急」になります。"));
     if (S.list === null) {
@@ -307,10 +378,8 @@ export function initRecords(ctx) {
     const rec = S.rec;
     const top = el("div", "rec-top");
     top.append(btn("← 記録の一覧", "btn", async () => {
-      await flush();
-      S.id = null;
-      S.rec = null;
-      S.list = null;
+      if (!(await leave())) return;
+      reset();
       render();
     }));
     const status = el("span", "rec-status", "");
@@ -351,18 +420,26 @@ export function initRecords(ctx) {
     d.append(el("h4", "rec-sub", "時間軸（病着からの分）"));
     if (!fa) d.append(el("p", "help", "救急の質問（症例の画面の「場面・症候の質問で入力する」）を使っていないので、時間軸はありません。時刻を入れると、ここに並びます。"));
     else {
-      const t = timeline(fa.flow, fa.answers, rec.ed.case);
+      const t = timeline(fa.flow, fa.answers, rec.ed.case, rec.ed.reading);
       if (t.originMissing) d.append(el("p", "help", `${fa.flow.origin.label}の時刻が未入力のため、時刻だけを並べています（分は出ません）。`));
       if (!t.rows.length) d.append(el("p", "help", "時刻の入力はまだありません。"));
       const ol = el("ol", "rec-axis");
+      const origin = fa.flow.origin.label;
       for (const r of t.rows) {
         const li = el("li", "rec-axis-row");
-        li.append(el("span", "rec-min", r.min === null ? "" : r.isOrigin ? "0分" : `+${r.min}分`), el("span", "rec-clock", r.time), el("span", "rec-what", r.label));
-        if (r.wrapped) li.append(el("span", "rec-note", "（翌日と見なした）"));
+        li.dataset.q = r.id;
+        const mins = r.min === null ? "" : r.min === 0 ? "0分" : `${r.min > 0 ? "+" : ""}${r.min}分`;
+        li.append(el("span", "rec-min", mins), el("span", "rec-clock", r.time), el("span", "rec-what", r.label));
+        if (r.assumed) {
+          // a clock time has no date: the order of the clock disagrees with the usual order, so this is a reading, and the doctor can flip it
+          li.append(el("span", "rec-note", `（日付のない時刻のため、${origin}の${r.reading === "after" ? "後（翌日）" : "前"}として計算）`));
+          const other = r.reading === "after" ? "before" : "after";
+          li.append(btn(`${origin}の${other === "after" ? "後（翌日）" : "前"}として読む`, "btn rec-small rec-reading", () => mutateAndRender((rec2) => setReading(rec2, r.id, other))));
+        }
         if (r.details.length) li.append(el("span", "rec-detail", r.details.join(" ／ ")));
         ol.append(li);
       }
-      d.append(ol, el("p", "help", "時刻は記録するだけです。遅い・早いの判定や、基準の時間との比較はしません。"));
+      d.append(ol, el("p", "help", "時刻は記録するだけです。遅い・早いの判定や、基準の時間との比較はしません。時刻には日付がないので、時刻の並びと食い違うものは仮の読み方をしています（印のある行）。違うときは、読み方を変えてください。"));
     }
     d.append(el("h4", "rec-sub", "注意（入力の状態を数えたもの。判定ではありません）"));
     const checksBox = el("div", "rec-checks");
@@ -385,11 +462,17 @@ export function initRecords(ctx) {
       const opts = [["", "（まだ決めていない）"]];
       if (a.role === "problems") opts.push(["new", "新しい問題にする"]);
       if (a.role === "contingency") opts.push(["outlook", "再評価・コール基準に付ける"]);
-      else rec.problems.forEach((p, i) => opts.push([p.id, `#${i + 1} ${p.label || "（名前なし）"} の${a.role === "plan" ? "計画（予定）" : "評価"}に付ける`]));
+      else rec.problems.forEach((p, i) => p.id !== a.made && opts.push([p.id, `#${i + 1} ${p.label || "（名前なし）"} の${a.role === "plan" ? "計画（予定）" : "評価"}に付ける`]));
       opts.push(["none", "持ってこない"]);
       for (const [v, l] of opts) sel.append(new Option(l, v));
-      sel.value = a.to;
+      sel.value = a.made && a.to === a.made ? "new" : a.to; // the problem the item made is "新しい問題にする", not an assessment of itself
       sel.addEventListener("change", () => {
+        // moving keeps what the doctor changed in the entry; taking it back loses that, so ask
+        const takesBack = ["", "none", "new"].includes(sel.value);
+        if (takesBack && entryModified(S.rec, a.id) && !confirm("この項目から作った行は、先生が編集済みです。持ってくる先を外すと、その編集内容は消えます。よいですか？")) {
+          sel.value = a.made && a.to === a.made ? "new" : a.to;
+          return;
+        }
         const r = attach(S.rec, a.id, sel.value);
         if (!r.ok) {
           say("この項目は、そこには付けられません。", "err");
@@ -599,27 +682,40 @@ export function initRecords(ctx) {
     open,
     /** the id of the record the pinned case belongs to, or null */
     linked: () => S.id,
-    /** the pinned case was pinned again: when it belongs to the open record, the record follows it */
+    /**
+     * The pinned case was pinned again.  When it belongs to the open record, the record follows it; a different age or sex says it may be
+     * another patient: the doctor decides (OK updates this record, cancel lets the record go and keeps the case pinned on its own).
+     */
     onCasePinned(kase) {
-      if (!S.rec || !S.id) return;
+      if (!S.rec || !S.id || S.unlinking) return;
+      const cur = S.rec.ed.case;
+      if ((kase.age !== cur.age || kase.sex !== cur.sex) && !confirm("年代・性別が、この記録の症例と違います。同じ患者の症例を直したのなら［OK］（この記録の症例を更新します）、別の患者なら［キャンセル］（この記録との連動を外します。記録はそのまま残ります）。")) {
+        this.onCaseCleared();
+        return;
+      }
       mutate((r) => setCase(r, kase));
-      if (!dlg.open) return;
-      render();
-    },
-    onCaseCleared() {
-      // the record stays saved; the pinned case no longer belongs to it
-      flush();
-      S.id = null;
-      S.rec = null;
-      S.list = null;
-      markLinked();
       if (dlg.open) render();
+    },
+    /** The pinned case was cleared or replaced from somewhere else: the record stays saved and is let go once what is unsaved has been sent. */
+    onCaseCleared() {
+      if (!S.rec || S.unlinking) return;
+      S.unlinking = true;
+      markLinked();
+      settle().then((ok) => {
+        S.unlinking = false;
+        reset();
+        if (!ok) say("前に開いていた記録の、保存できなかった変更は破棄しました。", "err");
+        if (dlg.open) render();
+      });
     },
     /**
      * Takes adopted draft items into the record of this case (making the record first when the case has none: the doctor pressed the button).
-     * Returns { ok, added, message }.
+     * An answer asked with a case this record never had may be another patient's: the doctor is asked.  Returns { ok, added, message }.
      */
     async addAdopted(kase, items) {
+      if (S.rec && !isRecordCase(S.rec, kase) && !confirm("この回答は、いま開いている記録の症例とは違う症例で作られています（別の患者の可能性があります）。この記録に取り込みますか？")) {
+        return { ok: false, added: 0, message: "取り込みませんでした（別の症例の回答）" };
+      }
       if (!S.rec) {
         if (!(await createFrom(kase))) return { ok: false, added: 0, message: S.msg };
       }
