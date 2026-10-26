@@ -36,6 +36,30 @@ export const headingBase = baseOf;
 /** A run of this many letters/digits shared with a book's text is flagged as copied.  Twin of worker/src/overlap.ts MIN_OVERLAP. */
 export const MIN_OVERLAP = 30;
 
+/** Shown in place of what the screen keeps back while a created case is still being written. */
+export const STREAM_HELD = "（生成中は、見立て以降を表示しません。生成が終わると、見立ては畳んで、経過は日ごとに開けます。）";
+
+/**
+ * What to draw while a created case is streaming in: the text up to the heading of 見立て (the diagnosis, and everything after it: the
+ * pitfall, the lesson and every day of the course).  A trailing heading line that is not finished yet (it could still become 見立て) is held
+ * too.  After the answer is complete the screen shows everything, with 見立て and the course folded (create-ui.js).
+ */
+export function maskStreaming(raw) {
+  const lines = String(raw ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = /^(#{1,6})\s*(.+?)\s*$/.exec(line);
+    const unfinished = i === lines.length - 1 && /^#{1,6}/.test(line); // no newline after it yet: the text of the heading may still grow
+    if ((m && m[1].length <= 2 && baseOf(m[2]) === "見立て") || (unfinished && !(m && m[1].length > 2))) {
+      out.push("", STREAM_HELD);
+      return out.join("\n").replace(/\n+$/, "");
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 /** The sections of the answer by heading: { "導入文": "…", … } (the first of a heading wins; text before the first heading is ignored). */
 export function splitSections(text) {
   const out = {};

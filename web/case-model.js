@@ -160,3 +160,12 @@ export const createRows = (c) => [
   ...(c.days ? [["入院後の経過", `入院${c.days}日目まで、日ごとに作る`]] : []),
 ];
 
+
+/**
+ * The earlier turns sent back to the model as context: the last `n`, without the turns that made a fictional case.
+ * A created case's answer (its 見立て, its course) would otherwise travel as history into a later draft or answer and show the model the
+ * case's own solution (docs/enhancement-plan.md 8.21, step 0).  `entry.mode` is the mode the turn was asked in ("" for a plain question).
+ */
+export function recentHistory(history, n = 4) {
+  return (Array.isArray(history) ? history : []).filter((h) => h && h.mode !== "create").slice(-n);
+}

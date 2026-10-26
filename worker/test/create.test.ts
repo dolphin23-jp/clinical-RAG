@@ -468,3 +468,40 @@ test("pins: the reading of a created case and its screen never send, save, expor
   assert.deepEqual(imports("create-ui.js"), ["./case-create.js", "./case-model.js"]);
   assert.match(readFileSync(web("app.js"), "utf-8"), /initCreate\(\{ el, \$, openDialog, copyText,/);
 });
+
+// ---------------------------------------------------------------------------------- step 0 (docs/enhancement-plan.md 8.21): the solution does not leak
+test("history: the turns that made a fictional case are not sent back as context; the last four of the rest are", () => {
+  const h = (q: string, mode = "") => ({ q, a: `a:${q}`, ack: false, mode });
+  assert.deepEqual(M.recentHistory([h("1"), h("c", "create"), h("2"), h("3", "assess")]).map((x: any) => x.q), ["1", "2", "3"]);
+  assert.deepEqual(M.recentHistory([h("1"), h("2"), h("3"), h("4"), h("5"), h("c", "create")]).map((x: any) => x.q), ["2", "3", "4", "5"]);
+  assert.deepEqual(M.recentHistory([h("c", "create"), h("d", "create")]), []);
+  assert.deepEqual(M.recentHistory(null), []);
+  assert.deepEqual(M.recentHistory([{ q: "old", a: "x" }]).map((x: any) => x.q), ["old"]); // an entry without a mode is a plain question
+  // the screen uses it, and records the mode with every turn it keeps
+  const app = readFileSync(web("app.js"), "utf-8");
+  assert.ok(app.includes("recentHistory(S.history)") && !app.includes("S.history.slice("), "the history sent with a request is built by recentHistory");
+  assert.equal((app.match(/S\.history\.push\(/g) ?? []).length, 2);
+  assert.equal((app.match(/S\.history\.push\([^)]*mode: turn\.mode \?\? ""/g) ?? []).length, 2, "both pushes keep the turn's mode");
+});
+
+test("streaming: a created case is drawn up to 見立て only; the diagnosis and every later part stay hidden until it is complete", () => {
+  const full = "## 導入文\nA。\n\n## 症例の入力用\n- 年齢: 70\n\n## 所見の表\n| 項目 | 値 | 根拠 |\n|---|---|---|\n| x | 1 | y |\n\n## 見立て\n診断は仮のものです。\n\n## 教訓\nなし\n\n## 入院後の経過\n### 入院1日目\nできごと：x\n### 入院2日目\nできごと：y\n";
+  const m = C.maskStreaming(full);
+  assert.ok(m.includes("## 所見の表") && m.includes("| x | 1 | y |"));
+  assert.ok(!m.includes("診断は仮のもの") && !m.includes("教訓") && !m.includes("入院1日目") && !m.includes("入院2日目"));
+  assert.ok(m.trimEnd().endsWith(C.STREAM_HELD));
+  // numbered or bracketed headings are read the same way
+  assert.ok(!C.maskStreaming("## 3. 見立て（最初は畳む）\nX").includes("X"));
+  // a heading that is not finished yet is held (it could still become 見立て); a finished one that is not 見立て is shown
+  assert.ok(!C.maskStreaming("## 導入文\nA\n\n## 見").includes("## 見"));
+  assert.ok(C.maskStreaming("## 導入文\nA\n\n## 症例の入力用\n").includes("## 症例の入力用"));
+  assert.equal(C.maskStreaming("## 導入文\nA。"), "## 導入文\nA。");
+  // before 見立て arrives nothing is held, and an empty or missing text does not break
+  assert.equal(C.maskStreaming(""), "");
+  assert.equal(C.maskStreaming(undefined), "");
+  // a day heading (###) of the course is a sub-heading: it never ends the held text by itself, and a `###` that is still being typed is not held
+  assert.ok(C.maskStreaming("## 導入文\n### 小見出し").includes("### 小見出し"));
+  // the streaming draw uses it for a created case only
+  const app = readFileSync(web("app.js"), "utf-8");
+  assert.ok(app.includes('turn.mode === "create" ? maskStreaming(turn.raw) : turn.raw'));
+});
