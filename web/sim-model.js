@@ -4,8 +4,8 @@
 //
 // The tray: what the case told is not an answer until the doctor takes it in (like a proposal of the memo import).  Nothing is preselected; a
 // negative / unknown / not assessable / waiting answer and a time are taken one at a time; an answer the doctor already has is never overwritten.
-import { STAGES, isReading, optionIds, questionOf, validateSimCase } from "./sim-case.js";
-import { NO_DATA, SAY_TYPES, clockAt } from "./sim-engine.js";
+import { FACT_ENTS, STAGES, effectiveFacts, isReading, optionIds, questionOf, resultIds, validateSimCase } from "./sim-case.js";
+import { NO_DATA, SAY_TYPES, clockAt, replay } from "./sim-engine.js";
 import { byPhase, contextOf, isAnswered, isVisible, renderStructured, setAnswer, valueText } from "./intake.js";
 
 /** Put above every copy of the simulation's note: it cannot be taken off. */
@@ -165,3 +165,95 @@ export function debrief(setting, flow, records) {
 }
 export const KEY_STATUS = { before: "行き先を記録する前に聞いた", after: "行き先を記録した後に聞いた", never: "聞かなかった" };
 export { SAY_TYPES, isReading };
+
+// ---------------------------------------------------------------- continuations written by the AI (step 2; the doctor's decision D4 c)
+/** The difficulty of an AI-written setting (a word for the author; nothing is scored). */
+export const LEVELS = ["易", "標準", "難"];
+/** The longest theme of a request (the Worker takes the same: worker/src/sim.ts THEME_LIMIT). */
+export const THEME_LIMIT = 200;
+
+const ownFacts = (setting, id) => (id === "s0" ? [] : ((setting.states ?? []).find((s) => s.id === id)?.facts ?? []));
+const nextStateId = (setting) => `s${Math.max(0, ...(setting.states ?? []).map((s) => Number(String(s.id).slice(1)) || 0)) + 1}`;
+
+/** The state the case is in after the first `n` acts of the log (fills at n included). */
+export const stateAfter = (setting, flow, log, n, readings) => replay(setting, flow, log.slice(0, n), { readings }).internal.state;
+
+/**
+ * Adds a continuation the AI wrote to a setting: { ok, setting, errors }.  The setting itself is not changed (a new one is returned).
+ *  kind "boundary": `after` is the index of the wait / stage act of the log it is for; the new state is the state before that act with `facts`
+ *                   laid over it (no facts and no event: the case stays).
+ *  kind "fill":     `after` is the length of the log now (it applies before the next act); `facts` may only give items the state has no value for.
+ * The result is checked like any setting (sim-case.js), without the coverage of every item (a later fill gives what is still missing).
+ */
+export function addContinuation(setting, flow, log, c, readings) {
+  const errors = [];
+  const after = c?.after;
+  const facts = Array.isArray(c?.facts) ? c.facts : [];
+  const acts = Array.isArray(log) ? log : [];
+  if (c?.kind === "boundary") {
+    if (!Number.isInteger(after) || !["wait", "stage"].includes(acts[after]?.act)) errors.push({ code: "cont", where: "after", msg: "境界（待つ・次の段へ）の行為の番号ではありません" });
+  } else if (c?.kind === "fill") {
+    if (after !== acts.length) errors.push({ code: "cont", where: "after", msg: "補充は、いまの行為の記録の後ろにだけ足します" });
+  } else errors.push({ code: "cont", where: "kind", msg: "kind は boundary か fill" });
+  if (errors.length) return { ok: false, setting, errors };
+  const from = stateAfter(setting, flow, acts, after, readings);
+  const have = effectiveFacts(setting, from);
+  if (c.kind === "fill") {
+    const again = facts.filter((f) => f && f.q in have);
+    if (again.length) return { ok: false, setting, errors: again.map((f) => ({ code: "cont", where: f.q, msg: `${f.q} にはすでに値があります（補充は値のない項目だけ）` })) };
+    if (!facts.length) return { ok: false, setting, errors: [{ code: "cont", where: "facts", msg: "補充する値がありません" }] };
+  }
+  const merged = new Map(ownFacts(setting, from).map((f) => [f.q, f]));
+  for (const f of facts) merged.set(f.q, f);
+  const changes = facts.some((f) => JSON.stringify(have[f.q]?.v) !== JSON.stringify(f.v));
+  const next = JSON.parse(JSON.stringify(setting));
+  next.cont = Array.isArray(next.cont) ? next.cont : [];
+  let to = null;
+  if (changes) {
+    to = nextStateId(next);
+    next.states.push({ id: to, facts: [...merged.values()], ...(c.kind === "boundary" && c.event ? { event: c.event } : {}) });
+  }
+  next.cont.push({ after, kind: c.kind, to, ...(c.event && !changes ? { event: c.event } : {}), basis: Array.isArray(c.basis) ? c.basis : [] });
+  const report = validateSimCase(next, flow, { strict: false, readings });
+  return report.ok ? { ok: true, setting: next, errors: [] } : { ok: false, setting, errors: report.errors };
+}
+
+/** Whether asking `q` now would find no value (the AI may fill it first): a fact question, askable, not a result, with no value in the state. */
+export function needsFill(setting, flow, log, q, readings) {
+  const r = replay(setting, flow, log, { readings });
+  if (!r.askable.includes(q) || resultIds(setting).has(q)) return false;
+  return !(q in effectiveFacts(setting, r.internal.state));
+}
+
+/** The result questions of an order that have no value in the state the case is in now (the AI may fill them before the order is recorded). */
+export function orderNeeds(setting, flow, log, key, readings) {
+  const o = (setting.orders ?? []).find((x) => x.order === key);
+  if (!o) return [];
+  const have = effectiveFacts(setting, replay(setting, flow, log, { readings }).internal.state);
+  return o.results.filter((q) => !(q in have));
+}
+
+/** The fact questions the AI may give values for (the flow's facts, without the readings, age and sex). */
+export const factQuestions = (flow, readings) =>
+  (flow.questions ?? []).filter((q) => FACT_ENTS.includes(q.br?.ent) && !isReading(q, readings) && !["age", "sex"].includes(q.id)).map((q) => q.id);
+
+/** How many continuations the AI wrote into this setting. */
+export const contCount = (setting) => (Array.isArray(setting?.cont) ? setting.cont.length : 0);
+
+/**
+ * Checks a setting the AI wrote (the answer of /api/sim op "author"): { ok, setting, errors }.  Text copied from a book (the Worker's overlap
+ * check) is an error like any other, so the screen asks again instead of using it.
+ */
+export function checkAiSetting(answer, flow, readings) {
+  const errors = (Array.isArray(answer?.overlap) ? answer.overlap : []).map((o) => ({ code: "copied", where: `書籍 ${o.page ?? ""}`.trim(), msg: `書籍の文と ${o.length} 字続けて同じです` }));
+  const setting = answer?.setting;
+  const report = validateSimCase(setting, flow, { strict: true, readings });
+  return { ok: !errors.length && report.ok, setting, errors: [...errors, ...report.errors] };
+}
+
+/** The setting as it was written at the start: without the continuations and the states they made (to play it again from the start). */
+export function baseSetting(setting) {
+  const made = new Set((setting?.cont ?? []).map((c) => c?.to).filter(Boolean));
+  const { cont: _cont, ...rest } = setting;
+  return { ...rest, states: (setting.states ?? []).filter((s) => !made.has(s.id)) };
+}

@@ -1,7 +1,7 @@
 // The setting of a simulated fictional case (docs/enhancement-plan.md 8.21, step 1a): the hidden truth the engine (sim-engine.js) plays back, and
 // the checks it must pass before it is frozen.  Pure functions over a setting and the imported flow (web/flow-schema.js): no DOM, no network,
-// no storage, no clock, no random, no AI.  A twin for the Worker (the AI writes the setting once, step 2) comes with that step; the shared
-// vectors are tests/vectors/simcase.json.
+// no storage, no clock, no random, no AI.  The Worker (worker/src/sim.ts, step 2) asks the AI for a setting and for continuations and checks
+// their shape against the flow's catalog; the full check is this one, on the screen, before anything is used.  Vectors: tests/vectors/simcase.json.
 //
 // A setting is JSON made of arrays only (a structured-output schema cannot hold a dictionary with open keys):
 //   { v: 1, flow, schema, patient: {age, sex}, clock?: {start: "HH:MM"},
@@ -9,7 +9,14 @@
 //     states: [{id, facts: [{q, v, who, how}], event?: {who, text}}],        s0 first; every other state is s0's facts overlaid by its own
 //     orders: [{order: "q=option", results: [q, ...]}],                      an order of the flow's action question and the result questions it returns
 //     moves: [{from, to, if_done?, if_not_done?, at, basis: [sectionId]}],   at: "next" | "enter:<stage id>"; the first listed move that holds wins
-//     assumed: {dx: [..], ddx: [..], key: [..], pitfall, lesson} }           the author's assumption (AI made, not confirmed by the doctor): never called "the answer"
+//     assumed: {dx: [..], ddx: [..], key: [..], pitfall, lesson},           the author's assumption (AI made, not confirmed by the doctor): never called "the answer"
+//     cont?: [{after, kind, to, event?, basis}],                             continuations the AI wrote during play (the doctor's decision D4 c, 2026-10-26)
+//     origin?: {by: "ai" | "paste", sources: [{id, title, page}]} }          where the setting came from (shown, never used by the engine)
+//
+// A continuation is a state the case moves to (`to`, a state of `states`) or none (`to: null`, the case stays), with an optional event:
+//   kind "boundary": at the wait / stage act at index `after` of the doctor's log, in place of the setting's moves;
+//   kind "fill":     before the act at index `after` (no time passes): the same state with values for items it had none for.
+// It takes effect only from where it was added, so what the doctor was told before is never rewritten (sim-engine.js).
 //
 // What a setting must not hold (each is an error code below):
 //  - a value for the doctor's reading or act (a question whose entity is assessment / reason / none / action, or one named in `opts.readings`):
@@ -30,7 +37,9 @@ export const STAGES = [
   { id: "close", label: "締め括り" },
 ];
 /** Design limits (about the size of a setting, not clinical numbers). */
-export const LIMITS = { states: 6, moves: 8, orders: 8, facts: 120, opening: 6, text: 400, basis: 4, assumed: 6 };
+export const LIMITS = { states: 6, moves: 8, orders: 8, facts: 120, opening: 6, text: 400, basis: 4, assumed: 6, cont: 60, sources: 12 };
+/** The kinds of a continuation (see the head of this file). */
+export const CONT_KINDS = ["boundary", "fill"];
 /** Who gave the fact, and how it was got: the screen puts what an ambulance crew measured in S and what the hospital measured in O. */
 export const WHO = ["患者", "家族", "救急隊", "看護師", "検査"];
 export const HOW = ["問診", "診察", "測定", "救急隊の測定", "検査"];
@@ -39,7 +48,7 @@ export const FACT_ENTS = ["observation", "context", "condition"];
 /** Entities of questions that are the doctor's own reading or act: no value, ever. */
 export const READING_ENTS = ["assessment", "reason", "none", "action"];
 
-const TOP_KEYS = ["v", "flow", "schema", "patient", "clock", "opening", "states", "orders", "moves", "assumed"];
+const TOP_KEYS = ["v", "flow", "schema", "patient", "clock", "opening", "states", "orders", "moves", "assumed", "cont", "origin"];
 const EVAL_RE = /適切|不適切|正解|誤り|間違い|べき|見逃し|遅れ|遅い|不十分|妥当|望ましい|良い対応|悪い対応/;
 const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const str = (x) => typeof x === "string" && x.trim() !== "";
@@ -87,7 +96,12 @@ export function validateSimCase(setting, flow, opts = {}) {
   if (errors.length) return done();
 
   const { states, orders, moves, opening } = setting;
-  if (states.length === 0 || states.length > LIMITS.states) err("limit", "states", `状態は1〜${LIMITS.states}`);
+  const cont = setting.cont === undefined ? [] : setting.cont;
+  if (!Array.isArray(cont)) return err("shape", "cont", "cont は配列"), done();
+  if (cont.length > LIMITS.cont) err("limit", "cont", `続きは${LIMITS.cont}まで`);
+  const contMade = new Set(cont.map((c) => c?.to).filter((t) => typeof t === "string"));
+  const authored = states.filter((s) => !contMade.has(s?.id));
+  if (authored.length === 0 || authored.length > LIMITS.states) err("limit", "states", `状態は1〜${LIMITS.states}（続きで足した状態を除く）`);
   if (moves.length > LIMITS.moves) err("limit", "moves", `遷移は${LIMITS.moves}まで`);
   if (orders.length > LIMITS.orders) err("limit", "orders", `オーダーは${LIMITS.orders}まで`);
   if (opening.length > LIMITS.opening) err("limit", "opening", `導入は${LIMITS.opening}まで`);
@@ -111,6 +125,8 @@ export function validateSimCase(setting, flow, opts = {}) {
   };
   const resultQs = resultIds(setting);
   const seenS0 = new Set();
+  const s0Values = new Map((Array.isArray(states[0]?.facts) ? states[0].facts : []).filter((f) => isObj(f)).map((f) => [f.q, f.v]));
+  const contextSeen = new Map();
   states.forEach((st, i) => {
     const w = `states[${i}]`;
     if (!isObj(st) || !Array.isArray(st.facts)) return err("shape", w, "状態は {id, facts, event?}");
@@ -132,7 +148,11 @@ export function validateSimCase(setting, flow, opts = {}) {
       if (ent === "time") {
         if (!preArrival.has(f.q)) err("time_fact", fw, `${f.q} は時刻の質問です。設定は持ちません`);
       } else if (!FACT_ENTS.includes(ent)) err("reading_value", fw, `${f.q} は事実の質問ではありません`);
-      if (ent === "context" && i > 0) err("background_changes", fw, `${f.q} は背景です。s0 のあとで変えません`);
+      // the background never changes: a later state may hold a background item s0 had no value for (a continuation filled it), with one value only
+      if (ent === "context" && i > 0 && (s0Values.has(f.q) ? JSON.stringify(s0Values.get(f.q)) !== JSON.stringify(f.v) : contextSeen.has(f.q) && JSON.stringify(contextSeen.get(f.q)) !== JSON.stringify(f.v))) {
+        err("background_changes", fw, `${f.q} は背景です。s0 のあとで変えません`);
+      }
+      if (ent === "context" && i > 0 && !contextSeen.has(f.q)) contextSeen.set(f.q, f.v);
       if (i === 0) seenS0.add(f.q);
       // the value must be one the question takes
       const cleaned = cleanAnswers(flow, { [f.q]: f.v });
@@ -189,6 +209,42 @@ export function validateSimCase(setting, flow, opts = {}) {
     else if (basis.length === 0) inferred.push(i);
   });
 
+  // ---- where the setting came from (shown only)
+  if (setting.origin !== undefined) {
+    const o = setting.origin;
+    if (!isObj(o) || !["ai", "paste"].includes(o.by) || !Array.isArray(o.sources) || o.sources.length > LIMITS.sources) err("origin", "origin", "origin は {by: ai|paste, sources}");
+    else
+      o.sources.forEach((x, i) => {
+        if (!isObj(x) || !str(x.id) || typeof x.title !== "string" || typeof x.page !== "string" || x.title.length > 200 || x.page.length > 40) err("origin", `origin.sources[${i}]`, "出典は {id, title, page}");
+      });
+  }
+
+  // ---- continuations
+  const sourceIds = new Set(isObj(setting.origin) && Array.isArray(setting.origin.sources) ? setting.origin.sources.map((x) => x?.id) : []);
+  const contAt = new Set();
+  cont.forEach((c, i) => {
+    const w = `cont[${i}]`;
+    if (!isObj(c)) return err("cont", w, "続きはオブジェクト");
+    for (const k of Object.keys(c)) if (!["after", "kind", "to", "event", "basis"].includes(k)) err("unknown_key", `${w}.${k}`, `知らない項目 ${k}`);
+    if (!Number.isInteger(c.after) || c.after < 0) err("cont", `${w}.after`, "after は0以上の整数（行為の番号）");
+    if (!CONT_KINDS.includes(c.kind)) err("cont", `${w}.kind`, `kind は ${CONT_KINDS.join("・")}`);
+    if (c.to !== null && !(typeof c.to === "string" && ids.includes(c.to) && c.to !== "s0")) err("cont", `${w}.to`, "to は、足した状態の id か null");
+    if (c.kind === "fill" && c.to === null) err("cont", `${w}.to`, "補充（fill）は、値を足した状態に移ります");
+    const key = `${c.kind}:${c.after}`;
+    if (contAt.has(key)) err("cont", w, "同じ行為の番号に、同じ種類の続きが2つあります");
+    contAt.add(key);
+    if (c.event !== undefined) {
+      if (!isObj(c.event) || !WHO.includes(c.event.who)) err("event", `${w}.event`, "event は {who, text}");
+      else noteText(`${w}.event.text`, c.event.text, "event");
+    }
+    const basis = Array.isArray(c.basis) ? c.basis : null;
+    if (!basis || basis.length > LIMITS.basis || basis.some((b) => !str(b))) err("basis", `${w}.basis`, `basis は節の id の配列（${LIMITS.basis}まで。なければ空）`);
+    else if (basis.some((b) => !sourceIds.has(b))) err("basis", `${w}.basis`, "basis は、設定の出典（origin.sources）の節だけ");
+  });
+  const usedTo = cont.map((c) => c?.to).filter((t) => typeof t === "string");
+  if (new Set(usedTo).size !== usedTo.length) err("cont", "cont", "1つの状態に移る続きは1つだけ");
+  for (const mv of moves) if (isObj(mv) && (contMade.has(mv.from) || contMade.has(mv.to))) err("move", "moves", "続きで足した状態は、遷移（moves）に使いません");
+
   // ---- reachability, and a way out without any act
   if (!errors.some((e) => e.code === "move" || e.code === "states")) {
     const reach = new Set(["s0"]);
@@ -196,8 +252,10 @@ export function validateSimCase(setting, flow, opts = {}) {
       grew = false;
       for (const mv of moves) if (reach.has(mv.from) && !reach.has(mv.to)) (reach.add(mv.to), (grew = true));
     }
+    for (const t of contMade) reach.add(t); // a continuation's state is reached by the act it was written for
     for (const id of ids) if (!reach.has(id)) err("unreachable", id, `状態 ${id} に s0 から届きません`);
     for (const id of ids) {
+      if (contMade.has(id)) continue;
       const out = moves.filter((m) => m.from === id);
       if (out.length && !out.some((m) => m.if_done === undefined)) err("no_natural_move", id, `状態 ${id} は行為がないと進めません。自然経過の遷移が1つ要ります`);
     }

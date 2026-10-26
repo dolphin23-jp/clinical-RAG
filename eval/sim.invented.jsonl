@@ -1,0 +1,8 @@
+{"id": "sim1", "flow": "emergency-department.shock", "theme": "敗血症性ショック", "level": "標準", "act": "fluid=given"}
+{"id": "sim2", "flow": "emergency-department.shock", "theme": "心原性ショック", "level": "難", "act": "fluid=given"}
+{"id": "sim3", "flow": "emergency-department.dyspnea", "theme": "急性心不全（肺水腫）", "level": "標準", "act": "resp_tx=niv"}
+{"id": "sim4", "flow": "emergency-department.chest-pain", "theme": "急性冠症候群", "level": "易", "act": "tx=aspirin"}
+{"id": "sim5", "flow": "emergency-department.syncope", "theme": "徐脈性不整脈による失神", "level": "標準", "act": "tests=ecg_repeat"}
+{"id": "sim6", "flow": "emergency-department.gi-bleeding", "theme": "上部消化管出血", "level": "標準", "act": "blood=given"}
+{"id": "sim7", "flow": "emergency-department.consciousness", "theme": "低血糖による意識障害", "level": "易", "act": "resp_tx=o2"}
+{"id": "sim8", "flow": "emergency-department.fever", "theme": "尿路感染症からの敗血症", "level": "難", "act": "abx=before_bc"}

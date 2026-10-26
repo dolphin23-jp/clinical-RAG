@@ -1,16 +1,20 @@
 // The screen of a simulated fictional case (docs/enhancement-plan.md 8.21, step 1b; the doctor's decisions in docs/clinical-use.md 1h).
-// The doctor pastes a setting (step 2 will let the AI write one), plays the emergency course (asks, examines, records acts, waits, moves to the
-// next stage), takes what the case told into the answers, fills in the readings and the own assessment and plan, and reads the A04 note that
-// grows from the answers.  The debrief lays things side by side; nothing is judged.
+// The AI writes a setting from a theme and a difficulty (step 2), or the doctor pastes one; the doctor plays the emergency course (asks,
+// examines, records acts, waits, moves to the next stage), takes what the case told into the answers, fills in the readings and the own
+// assessment and plan, and reads the A04 note that grows from the answers.  The debrief lays things side by side; nothing is judged.
 //
-// Memory only: nothing is sent (no AI, no network), saved, or put in the browser's storage; the note is copied as text with a header that
-// cannot be taken off.  The hidden setting stays in this tab's memory and is shown only in the debrief, after a confirmation.  Every string
-// reaches the DOM through textContent / .value.
+// With a setting the AI wrote, the AI also writes what happens next (the doctor's decision D4 c): at each wait / next stage, and for an item the
+// state has no value for yet (before the ask or the order).  Every answer of the AI is checked (sim-model.js addContinuation, sim-case.js) before
+// it is used; one that fails is not used.  The only call is /api/sim, through the app's `api`; it counts against the daily cap (shown here).
+// Memory only: nothing is saved or put in the browser's storage; the note is copied as text with a header that cannot be taken off.  The hidden
+// setting stays in this tab's memory and is shown only in the debrief, after a confirmation.  Every string reaches the DOM through textContent /
+// .value.
 import { STAGES } from "./sim-case.js";
 import { clockAt, replay } from "./sim-engine.js";
 import {
-  KEY_STATUS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, actText, applyAct, boardQuestions, debrief, doctorQuestions,
-  memoLines, parseSetting, simKase, simReadings, takeRows, trayRows,
+  KEY_STATUS, LEVELS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, THEME_LIMIT, actText, addContinuation, applyAct, boardQuestions,
+  baseSetting, checkAiSetting, contCount, debrief, doctorQuestions, isEmergencyFlow, memoLines, needsFill, orderNeeds, parseSetting, simKase, simReadings, takeRows,
+  trayRows,
 } from "./sim-model.js";
 import { JUDGMENT_IDS } from "./extract-model.js";
 import { assemble, toText } from "./note-assemble.js";
@@ -19,13 +23,16 @@ import { scan } from "./id-guard.js";
 
 const plain = (s) => String(s ?? "").replace(/^★\d+\s*/, "").trim();
 
-export function initSim({ el, $, openDialog, copyText }) {
+export function initSim({ el, $, openDialog, copyText, api }) {
   const dlg = $("#sim");
   const body = $("#sim-body");
   const readings = simReadings(JUDGMENT_IDS);
   let FLOWS = null;
+  let SCHEMA = "";
+  // how many times this tab asked the AI for the simulation (the daily cap is the same as for the answers: D8 a)
+  let aiCalls = 0;
   // the run, in this tab's memory only
-  let S = null; // { setting, flow, log, answers, own, minutes, taken: Set, filter, ended }
+  let S = null; // { setting, flow, log, answers, own, minutes, taken: Set, filter, ended, busy, aiMsg, failed }
 
   const btn = (text, cls = "btn", onClick) => {
     const b = el("button", cls, text);
@@ -42,17 +49,87 @@ export function initSim({ el, $, openDialog, copyText }) {
   const play = () => replay(S.setting, S.flow, S.log, { readings });
 
   async function loadFlows() {
-    if (!FLOWS) FLOWS = (await import("./flow-schema.js")).FLOWS;
+    if (!FLOWS) {
+      const m = await import("./flow-schema.js");
+      FLOWS = m.FLOWS;
+      SCHEMA = m.FLOW_SCHEMA_SOURCE?.commit ?? "";
+    }
     return FLOWS;
+  }
+  const isAi = () => S?.setting?.origin?.by === "ai";
+  const usageText = () => `この画面で AI を使った回数: ${aiCalls}（1日の上限は、回答と同じ枠に数えます）`;
+
+  /** One call to /api/sim: the parsed answer, or an Error with the server's message. */
+  async function callSim(req) {
+    await loadFlows();
+    const res = await api("/api/sim", { method: "POST", body: JSON.stringify({ ...req, schema: SCHEMA }) });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok || res.status === 502) aiCalls++;
+    if (!res.ok) throw new Error(j?.error || `エラー（${res.status}）`);
+    return j;
   }
 
   // ---------------------------------------------------------------- loading a setting
   function renderLoad(msg = "", errors = []) {
     body.replaceChildren();
     body.append(
-      el("p", "help", "架空症例の設定（隠れた真の状態の JSON）を貼ると、先生の行為に応じて進む模擬を始めます。設定は検査を通したものだけを使い、進行中に AI は使いません（いまは、AI が設定を書く機能はまだありません）。"),
-      el("p", "help", "この画面のものは、送信も保存もしません（タブを閉じると消えます）。実在の患者の情報は入れません。"),
+      el("p", "help", "架空症例を相手に、聞く・診る・測る・オーダーする・待つ、を進める模擬です。AI が、テーマ（病名・症候）と難しさから、書籍を根拠に症例の設定を書き、進行中も、先生の行為に応じた続きを書きます。AI の答えは、検査を通したものだけを使います。"),
+      el("p", "help", "この画面のものは保存しません（タブを閉じると消えます）。AI には、テーマと、先生の行為の記録・先生の言葉だけを送ります。実在の患者の情報は入れません。"),
     );
+    // the AI writes the setting
+    const ai = el("div", "sim-ai");
+    const flowSel = el("select");
+    flowSel.id = "sim-flow";
+    flowSel.setAttribute("aria-label", "救急外来の症候");
+    const theme = el("input");
+    theme.id = "sim-theme";
+    theme.maxLength = THEME_LIMIT;
+    theme.placeholder = "テーマ（病名・症候。例: 敗血症性ショック）";
+    theme.setAttribute("aria-label", "テーマ");
+    const level = el("select");
+    level.id = "sim-level";
+    level.setAttribute("aria-label", "難しさ");
+    for (const l of LEVELS) level.append(new Option(`難しさ: ${l}`, l));
+    level.value = "標準";
+    const aiMsg = el("p", "msg err");
+    aiMsg.hidden = true;
+    const say = (t) => ((aiMsg.hidden = !t), (aiMsg.textContent = t));
+    loadFlows().then((F) => {
+      for (const f of Object.values(F).filter((x) => isEmergencyFlow(x.id))) flowSel.append(new Option(f.title, f.id));
+    });
+    const make = btn("AI に設定を作らせる", "btn primary", async () => {
+      const t = theme.value.trim();
+      if (!t) return say("テーマを入れてください。");
+      const hits = scan(t);
+      if (hits.length) return say(`識別情報らしき文字があります（${hits.map((h) => h.label).join("、")}）。テーマは病名・症候だけにします。`);
+      make.disabled = true;
+      say("");
+      const wait = el("p", "help", "AI が設定を書いています…（検査を通らなければ、1回だけ直させます）");
+      ai.append(wait);
+      try {
+        const F = await loadFlows();
+        const flow = F[flowSel.value];
+        let j = await callSim({ op: "author", flow: flow.id, theme: t, level: level.value });
+        let c = checkAiSetting(j, flow, readings);
+        if (!c.ok && c.setting) {
+          j = await callSim({ op: "author", flow: flow.id, theme: t, level: level.value, repair: { setting: c.setting, errors: c.errors.slice(0, 40) } });
+          c = checkAiSetting(j, flow, readings);
+        }
+        if (!c.ok) return renderLoad("AI の設定が検査を通りませんでした。もう一度作るか、テーマを変えてください。", c.errors);
+        S = fresh(c.setting, flow, Number(seg.value), []);
+        renderPlay();
+      } catch (e) {
+        say(e.message);
+      } finally {
+        make.disabled = false;
+        wait.remove();
+      }
+    });
+    make.id = "sim-author";
+    ai.append(el("label", "field", "救急外来の症候（フロー）"), flowSel, el("label", "field", "テーマと難しさ"), theme, level, aiMsg, el("div", "btn-row"));
+    ai.lastChild.append(make);
+    ai.append(el("p", "help", usageText()));
+    body.append(ai);
     const ta = el("textarea", "case-text");
     ta.id = "sim-paste";
     ta.rows = 8;
@@ -70,21 +147,78 @@ export function initSim({ el, $, openDialog, copyText }) {
       for (const e of errors.slice(0, 30)) ul.append(el("li", null, `${e.where}: ${e.msg}`));
       out.append(ul);
     }
-    const go = btn("読み込んで始める", "btn primary", async () => {
+    const go = btn("読み込んで始める", "btn", async () => {
       const r = parseSetting(ta.value, await loadFlows(), readings);
       if (!r.ok) return renderLoad(r.error, r.report?.errors ?? []);
-      S = { setting: r.setting, flow: r.flow, log: [], answers: {}, own: "", minutes: Number(seg.value), taken: new Set(), filter: "", ended: false, missing: r.report.missing ?? [] };
+      S = fresh(r.setting, r.flow, Number(seg.value), r.report.missing ?? []);
       renderPlay();
     });
     go.id = "sim-load";
-    body.append(el("label", "field", "設定（JSON）"), ta, el("label", "field", "時計"), seg, out, el("div", "btn-row", null));
-    body.lastChild.append(go);
+    ai.before(el("label", "field", "時計（1区切りの分。表示だけ）"), seg);
+    ai.after(out);
+    const paste = section("設定（JSON）を貼る（試験用）", false);
+    paste.id = "sim-paste-sec";
+    paste.append(el("p", "help", "先生や作成者が書いた設定を貼るときに使います。AI は使いません。"), ta, el("div", "btn-row"));
+    paste.lastChild.append(go);
+    body.append(paste);
   }
 
+  const fresh = (setting, flow, minutes, missing) => ({ setting, flow, log: [], answers: {}, own: "", minutes, taken: new Set(), filter: "", ended: false, missing, busy: false, aiMsg: "", failed: null });
+
   // ---------------------------------------------------------------- playing
-  function act(a) {
-    S.log.push(a);
+  /** One act of the doctor.  With an AI setting, the AI first fills what the act needs, or writes what happens at a boundary. */
+  async function act(a) {
+    if (S.busy) return;
+    if (!isAi()) {
+      S.log.push(a);
+      return renderPlay();
+    }
+    const boundaryAct = a.act === "wait" || a.act === "stage";
+    S.busy = true;
+    S.aiMsg = "";
+    S.failed = null;
     renderPlay();
+    try {
+      if (a.act === "ask" && needsFill(S.setting, S.flow, S.log, a.q, readings)) await fill([a.q]);
+      if (a.act === "do") {
+        const need = orderNeeds(S.setting, S.flow, S.log, a.key, readings);
+        if (need.length) await fill(need);
+      }
+      if (boundaryAct) await boundary(a);
+      else S.log.push(a);
+    } catch (e) {
+      S.aiMsg = e.message;
+      if (boundaryAct) S.failed = a; // the time does not pass until the doctor tries again or goes on without the AI
+      else S.log.push(a); // the act happens anyway: an item without a value answers "no setting" (never a negative)
+    } finally {
+      S.busy = false;
+      renderPlay();
+    }
+  }
+
+  /** The AI writes what happens at the boundary act `a` (checked before it is used). */
+  async function boundary(a) {
+    const before = replay(S.setting, S.flow, S.log, { readings });
+    const log = [...S.log, a];
+    const after = replay(S.setting, S.flow, log, { readings });
+    const j = await callSim({ op: "next", flow: S.flow.id, setting: S.setting, log, state: before.internal.state, t: after.t, stage: after.stage });
+    if (j.overlap?.length) throw new Error("AI の続きが、書籍の文を写していました。使いません。もう一度試してください。");
+    const r = addContinuation(S.setting, S.flow, log, { kind: "boundary", after: log.length - 1, facts: j.facts ?? [], event: j.event, basis: j.basis ?? [] }, readings);
+    if (!r.ok) throw new Error(`AI の続きが検査を通りませんでした（${r.errors.slice(0, 3).map((e) => e.msg).join("・")}）。使いません。`);
+    S.setting = r.setting;
+    S.log = log;
+  }
+
+  /** The AI gives values for items the state has none for yet (before the ask or the order that needs them). */
+  async function fill(qs) {
+    const now = replay(S.setting, S.flow, S.log, { readings });
+    const j = await callSim({ op: "fill", flow: S.flow.id, setting: S.setting, log: S.log, state: now.internal.state, t: now.t, stage: now.stage, qs });
+    if (j.overlap?.length) throw new Error("AI の答えが、書籍の文を写していました。使いません。");
+    const facts = (j.facts ?? []).filter((f) => qs.includes(f.q));
+    if (!facts.length) return;
+    const r = addContinuation(S.setting, S.flow, S.log, { kind: "fill", after: S.log.length, facts, basis: [] }, readings);
+    if (!r.ok) throw new Error(`AI の答えが検査を通りませんでした（${r.errors.slice(0, 3).map((e) => e.msg).join("・")}）。`);
+    S.setting = r.setting;
   }
 
   function renderPlay() {
@@ -95,9 +229,34 @@ export function initSim({ el, $, openDialog, copyText }) {
     body.replaceChildren();
 
     // the mark of a fictional case and where its setting came from
-    const mark = el("p", "notice sim-mark", `${SIM_MARK}・設定の出どころ: 先生が貼った設定（医師未確認）`);
+    const mark = el("p", "notice sim-mark", `${SIM_MARK}・設定の出どころ: ${isAi() ? "AI（書籍を根拠に作成・医師未確認）" : "貼った設定（医師未確認）"}`);
     mark.id = "sim-mark";
     body.append(mark);
+    if (isAi()) {
+      const src = section("AI が根拠にした書籍の節", false);
+      src.id = "sim-sources";
+      const ul = el("ul");
+      for (const x of setting.origin.sources ?? []) ul.append(el("li", null, `${x.title} ${x.page}`));
+      if (!(setting.origin.sources ?? []).length) ul.append(el("li", null, "（見つかった節はありません）"));
+      src.append(ul);
+      body.append(src, el("p", "help sim-usage", `${usageText()}・この症例で AI が書いた続き: ${contCount(setting)}件`));
+    }
+    if (S.busy) body.append(el("p", "notice", "AI が続きを書いています…"));
+    if (S.aiMsg) {
+      const m = el("div", "notice err", S.aiMsg);
+      m.id = "sim-ai-msg";
+      if (S.failed) {
+        const a = S.failed;
+        const row = el("div", "btn-row");
+        const again = btn("もう一度", "btn small", () => act(a));
+        again.id = "sim-retry";
+        const without = btn("AI なしで進める（時間だけ進む）", "btn small", () => ((S.log.push(a), (S.failed = null), (S.aiMsg = "")), renderPlay()));
+        without.id = "sim-without";
+        row.append(again, without);
+        m.append(row);
+      }
+      body.append(m);
+    }
     const head = el("div", "sim-head");
     head.append(
       el("p", "sim-patient", `${setting.patient.age}歳 ${setting.patient.sex}`),
@@ -356,6 +515,11 @@ export function initSim({ el, $, openDialog, copyText }) {
     pair("鑑別", (d.assumed.ddx ?? []).join("、") || "—");
     pair("落とし穴", d.assumed.pitfall || "—");
     pair("教訓", d.assumed.lesson || "—");
+    if (isAi()) {
+      pair("設定の出どころ", "AI（書籍を根拠に作成・医師未確認）");
+      pair("AI が書いた続き", `${contCount(S.setting)}件`);
+      pair("根拠にした書籍の節", (S.setting.origin.sources ?? []).map((x) => `${x.title} ${x.page}`).join("、") || "—");
+    }
     a.append(dl);
     body.append(a);
     const k = section("鍵の所見");
@@ -373,7 +537,7 @@ export function initSim({ el, $, openDialog, copyText }) {
     memo.append(ol);
     body.append(memo);
     body.append(el("div", "btn-row"));
-    body.lastChild.append(btn("同じ設定で最初から", "btn", () => ((S = { ...S, log: [], answers: {}, own: "", taken: new Set(), ended: false }), renderPlay())), btn("別の設定にする", "btn", () => ((S = null), renderLoad())));
+    body.lastChild.append(btn("同じ設定で最初から", "btn", () => ((S = { ...fresh(baseSetting(S.setting), S.flow, S.minutes, S.missing) }), renderPlay())), btn("別の設定にする", "btn", () => ((S = null), renderLoad())));
   }
 
   return {

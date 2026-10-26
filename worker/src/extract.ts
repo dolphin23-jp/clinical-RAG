@@ -282,20 +282,23 @@ export class ExtractUpstreamError extends Error {
   }
 }
 
-/** One call to the model (not streamed).  The memo is not logged and not kept; an upstream error carries its status and type, never the memo. */
-export async function runExtract(deps: ExtractDeps, req: ExtractRequest): Promise<ExtractResult> {
+/**
+ * One call to the Messages API (not streamed), with the refusal fallback when the API takes it.  `makeBody(fallback)` builds the request.  An
+ * upstream error carries its status and type, never the request's text.  Shared by the extraction and the simulation (worker/src/sim.ts).
+ */
+export async function postMessages(deps: ExtractDeps, makeBody: (fallback: boolean) => Record<string, unknown>): Promise<any> {
   const f = deps.fetchImpl ?? fetch;
   const url = `${deps.apiBase ?? "https://api.anthropic.com"}/v1/messages`;
   const post = (fallback: boolean) =>
     f(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": deps.apiKey, "anthropic-version": API_VERSION, ...(fallback ? { "anthropic-beta": FALLBACK_BETA } : {}) },
-      body: JSON.stringify(buildBody(req.flow, req.text, deps.model, fallback)),
+      body: JSON.stringify(makeBody(fallback)),
       signal: deps.signal,
     });
   let res = await post(true);
   if (res.status === 400) {
-    // the refusal fallback is an extra; if the API does not take it, the extraction is asked once more without it
+    // the refusal fallback is an extra; if the API does not take it, the request is sent once more without it
     const j: any = await res.clone().json().catch(() => null);
     if (/fallback|beta/i.test(String(j?.error?.message ?? ""))) res = await post(false);
   }
@@ -303,15 +306,30 @@ export async function runExtract(deps: ExtractDeps, req: ExtractRequest): Promis
     const j: any = await res.json().catch(() => null);
     throw new ExtractUpstreamError(`Anthropic API ${res.status}${j?.error?.type ? ` (${String(j.error.type).slice(0, 60)})` : ""}`);
   }
-  const msg: any = await res.json().catch(() => null);
-  if (msg?.stop_reason === "refusal") throw new ExtractUpstreamError("モデルが、この文章の処理を断りました。文章を確認してください", "refused");
-  if (msg?.stop_reason === "max_tokens") throw new ExtractUpstreamError("提案が長くなりすぎました。文章を分けて貼ってください", "output_too_long");
+  return await res.json().catch(() => null);
+}
+
+/** The text of a message, and its token counts. */
+export function messageText(msg: any): { raw: string; usage: ExtractResult["usage"]; model?: string } {
   const raw = (Array.isArray(msg?.content) ? msg.content : []).filter((b: any) => b?.type === "text").map((b: any) => String(b.text ?? "")).join("");
   const u = msg?.usage ?? {};
   const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
   return {
-    ...(typeof msg?.model === "string" ? { model: msg.model.slice(0, 80) } : {}),
-    ...parseOutput(raw, req.flow, req.text),
+    raw,
     usage: { input_tokens: n(u.input_tokens), output_tokens: n(u.output_tokens), cache_read_input_tokens: n(u.cache_read_input_tokens), cache_creation_input_tokens: n(u.cache_creation_input_tokens) },
+    ...(typeof msg?.model === "string" ? { model: msg.model.slice(0, 80) } : {}),
+  };
+}
+
+/** One call to the model (not streamed).  The memo is not logged and not kept; an upstream error carries its status and type, never the memo. */
+export async function runExtract(deps: ExtractDeps, req: ExtractRequest): Promise<ExtractResult> {
+  const msg = await postMessages(deps, (fallback) => buildBody(req.flow, req.text, deps.model, fallback));
+  if (msg?.stop_reason === "refusal") throw new ExtractUpstreamError("モデルが、この文章の処理を断りました。文章を確認してください", "refused");
+  if (msg?.stop_reason === "max_tokens") throw new ExtractUpstreamError("提案が長くなりすぎました。文章を分けて貼ってください", "output_too_long");
+  const { raw, usage, model } = messageText(msg);
+  return {
+    ...(model ? { model } : {}),
+    ...parseOutput(raw, req.flow, req.text),
+    usage,
   };
 }

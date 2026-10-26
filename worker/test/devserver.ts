@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { handle } from "../src/handler.ts";
 import { openDb, openRw, REPO } from "./nodeDb.ts";
+import { fakeSim } from "./simfake.ts";
 
 const dbPath = process.argv[2];
 const port = Number(process.argv[3] ?? 8787);
@@ -75,6 +76,8 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
   const body = JSON.parse(init.body);
   if (body.output_config?.format?.type === "json_schema") {
     if (/__apierror__/.test(body.messages[0].content)) return new Response(JSON.stringify({ error: { type: "overloaded_error", message: "overloaded (fake)" } }), { status: 529 });
+    const props = body.output_config.format.schema.properties;
+    if (props.assumed || props.event_text || (props.facts && !props.proposals)) return fakeSim(body);
     return fakeExtract(body);
   }
   const web = (body.tools ?? []).some((t: any) => t.name === "web_search");
