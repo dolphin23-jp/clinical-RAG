@@ -15,6 +15,11 @@
 // What is told: a fact the case holds, the doctor's reading or act never (a refusal), an item the setting does not hold ("nodata", never a
 // normal and never a negative).  An item asked again answers with the value of the state the case is in now, as a new record: an earlier
 // record is never rewritten.  The state id and the setting's assumption are in `internal`, never in `records`.
+//
+// Continuations (setting.cont, written by the AI during play: the doctor's decision D4 c): a "boundary" one at the wait / stage act at index
+// `after` takes the place of the setting's moves there; a "fill" one moves the case, before the act at index `after` and without time passing, to
+// a state with values for items it had none for.  Either takes effect only from there on, so a shorter log plays back exactly as it did before
+// the continuation was added.
 import { STAGES, effectiveFacts, isReading, questionOf, resultIds } from "./sim-case.js";
 import { contextOf, isVisible } from "./intake.js";
 
@@ -54,6 +59,12 @@ export function replay(setting, flow, log, opts = {}) {
   let stageIdx = 0;
   let seq = 0;
   const push = (r) => records.push({ seq, t, ...r });
+  const conts = Array.isArray(setting.cont) ? setting.cont : [];
+  const contOf = (kind, after) => conts.find((c) => c && c.kind === kind && c.after === after);
+  const fillAt = (i) => {
+    const c = contOf("fill", i);
+    if (c && typeof c.to === "string") state = c.to;
+  };
   const refuse = (act, reason) => push({ kind: "refused", act, reason });
   const told = {}; // what the doctor has been told: { q: value } (the latest answer or delivered result)
   // whether a question can be asked depends only on what the doctor knows and did, never on the hidden setting (that would tell it)
@@ -64,7 +75,7 @@ export function replay(setting, flow, log, opts = {}) {
   };
   const factOf = (facts, q) => (q in facts ? { value: facts[q].v, who: facts[q].who, how: facts[q].how } : null);
 
-  const boundary = (toStage) => {
+  const boundary = (toStage, at) => {
     t += 1;
     push({ kind: "boundary", ...(toStage ? { to: toStage } : {}) });
     for (const p of pending) {
@@ -77,6 +88,14 @@ export function replay(setting, flow, log, opts = {}) {
       push({ kind: "result", key: p.key, items });
     }
     pending = [];
+    const c = contOf("boundary", at);
+    if (c) {
+      // the AI's continuation for this boundary: its state (or none: the case stays), and its event or the state's
+      if (typeof c.to === "string") state = c.to;
+      const ev = c.event ?? (typeof c.to === "string" ? (setting.states ?? []).find((s) => s.id === c.to)?.event : undefined);
+      if (ev) push({ kind: "event", who: ev.who, text: ev.text });
+      return;
+    }
     const holds = (m) => (m.if_done !== undefined ? doneKeys.has(m.if_done) : m.if_not_done !== undefined ? !doneKeys.has(m.if_not_done) : true);
     const move = (setting.moves ?? []).find((m) => m.from === state && (m.at === "next" || (toStage && m.at === `enter:${toStage}`)) && holds(m));
     if (move) {
@@ -86,7 +105,9 @@ export function replay(setting, flow, log, opts = {}) {
     }
   };
 
-  (Array.isArray(log) ? log : []).forEach((act, i) => {
+  const acts = Array.isArray(log) ? log : [];
+  acts.forEach((act, i) => {
+    fillAt(i);
     seq = i + 1;
     const name = typeof act?.act === "string" ? act.act : "";
     if (name === "ask") {
@@ -119,7 +140,7 @@ export function replay(setting, flow, log, opts = {}) {
       return push({ kind: "say", type: act.type, text });
     }
     if (name === "wait") {
-      boundary(null);
+      boundary(null, i);
       return;
     }
     if (name === "stage") {
@@ -127,11 +148,12 @@ export function replay(setting, flow, log, opts = {}) {
       if (to < 0) return refuse(name, "bad_stage");
       if (to <= stageIdx) return refuse(name, "stage_back");
       stageIdx = to;
-      boundary(act.to);
+      boundary(act.to, i);
       return;
     }
     refuse(name || "?", "act");
   });
+  fillAt(acts.length);
   const now = ctx();
   // the items the doctor can ask now: the case's fact questions that what the doctor knows and did make visible (results once ordered)
   const askable = (flow.questions ?? [])

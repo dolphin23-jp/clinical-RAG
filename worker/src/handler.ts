@@ -7,6 +7,7 @@ import { ConvInputError, convStore } from "./convstore.ts";
 import { ExtractInputError, ExtractUpstreamError, guardForms, parseExtractRequest, runExtract } from "./extract.ts";
 import { EvalInputError, evalStore, ID_RE, type D1Rw } from "./evalstore.ts";
 import { RecordInputError, recordStore } from "./recordstore.ts";
+import { parseSimRequest, runSim, SimInputError, simTexts } from "./sim.ts";
 import { scanAll } from "./idguard.ts";
 import { numericWorksheet } from "./numsample.ts";
 import { caseSystem, createSystem } from "./prompt.ts";
@@ -271,6 +272,35 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
         const model = deps.extractModel ?? deps.model;
         const r = await runExtract({ apiKey: deps.apiKey, model, apiBase: deps.apiBase, fetchImpl: deps.fetchImpl, signal: req.signal }, parsed);
         return json({ proposals: r.proposals, dropped: r.dropped, usage: r.usage, model: r.model ?? model });
+      } catch (e) {
+        if (e instanceof ExtractUpstreamError) return json({ error: e.message, code: e.code }, 502);
+        throw e;
+      }
+    }
+
+    // The simulation of a fictional case (docs/enhancement-plan.md 8.21, step 2): the AI writes the setting and what happens next.  Stateless; the
+    // daily cap counts it (D8 a), the daily answer counts do not (F4; D7: it is not an answer from the books).
+    if (path === "/api/sim" && req.method === "POST") {
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid JSON" }, 400);
+      }
+      let parsed;
+      try {
+        parsed = parseSimRequest(body);
+      } catch (e) {
+        if (e instanceof SimInputError) return json({ error: e.message, code: e.code }, e.status);
+        throw e;
+      }
+      const refused = identifierRefusal(simTexts(parsed).flatMap(guardForms), undefined);
+      if (refused) return refused;
+      const capped = await overDailyLimit(deps);
+      if (capped) return capped;
+      try {
+        const r = await runSim({ db: deps.db, apiKey: deps.apiKey, model: deps.model, apiBase: deps.apiBase, fetchImpl: deps.fetchImpl, signal: req.signal }, parsed);
+        return json(r);
       } catch (e) {
         if (e instanceof ExtractUpstreamError) return json({ error: e.message, code: e.code }, 502);
         throw e;

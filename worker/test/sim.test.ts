@@ -369,7 +369,10 @@ test("the simulation's screen modules send nothing, keep nothing in the browser 
     const src = readFileSync(web(file), "utf-8");
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     assert.deepEqual([...src.matchAll(/^import [\s\S]*? from "(.+)";$/gm)].map((m) => m[1]), imports, file);
-    assert.ok(!/\b(fetch|XMLHttpRequest|localStorage|sessionStorage|indexedDB|innerHTML|outerHTML|insertAdjacentHTML|sendBeacon|\/api\/|print\(|navigator\.share|Math\.random|Date\.now)\b/.test(code), `${file} touches something it must not`);
+    assert.ok(!/\b(fetch|XMLHttpRequest|localStorage|sessionStorage|indexedDB|innerHTML|outerHTML|insertAdjacentHTML|sendBeacon|print\(|navigator\.share|Math\.random|Date\.now)\b/.test(code), `${file} touches something it must not`);
+    // the only network use: /api/sim, through the app's own api() (sim-model.js has none)
+    assert.deepEqual([...code.matchAll(/\/api\/[a-z/]*/g)].map((m) => m[0]), file === "sim-ui.js" ? ["/api/sim"] : [], file);
+    assert.equal([...code.matchAll(/\bapi\(/g)].length, file === "sim-ui.js" ? 1 : 0, file);
   }
   // the only lazy import of the screen is the imported flows
   assert.deepEqual([...readFileSync(web("sim-ui.js"), "utf-8").matchAll(/import\("(.+?)"\)/g)].map((m) => m[1]), ["./flow-schema.js"]);
@@ -377,4 +380,136 @@ test("the simulation's screen modules send nothing, keep nothing in the browser 
   const ui = readFileSync(web("sim-ui.js"), "utf-8");
   assert.ok(ui.includes("`${SIM_HEADER}\\n${toText(note)}`"));
   assert.ok(!/正解/.test(ui + readFileSync(web("sim-model.js"), "utf-8")));
+});
+
+// ---------------------------------------------------------------------------------- continuations written by the AI (step 2; D4 c)
+const AI_ORIGIN = { by: "ai", sources: [{ id: "fx:ch01:A", title: "試験の書籍", page: "p.1" }] };
+const aiSetting = (edit?: (s: any) => void) => {
+  const s = clone(V.valid);
+  s.origin = clone(AI_ORIGIN);
+  edit?.(s);
+  return s;
+};
+const withoutS0 = (q: string) => aiSetting((s) => (s.states[0].facts = s.states[0].facts.filter((f: any) => f.q !== q)));
+
+test("a boundary continuation takes the place of the moves at its act, and changes nothing told before it", () => {
+  const s = aiSetting();
+  const log = [{ act: "ask", q: "rr" }, { act: "do", key: "fluid=given" }, { act: "wait" }, { act: "ask", q: "rr" }];
+  const was = play(log, s);
+  assert.equal(was.internal.state, "s1", "without a continuation the setting's move is taken");
+  const frozen = JSON.stringify(s);
+  const r = SM.addContinuation(s, V.flow, log.slice(0, 3), { kind: "boundary", after: 2, facts: [{ q: "rr", v: 40, who: "看護師", how: "測定" }], event: { who: "看護師", text: "試験の続き。" }, basis: ["fx:ch01:A"] }, readings);
+  assert.deepEqual(r.errors, []);
+  assert.equal(JSON.stringify(s), frozen, "the setting given is not changed");
+  const now = play(log, r.setting);
+  assert.equal(now.internal.state, "s3");
+  assert.deepEqual(now.records.filter((x: any) => x.seq <= 2), was.records.filter((x: any) => x.seq <= 2), "what was told before the boundary is the same");
+  assert.ok(now.records.some((x: any) => x.kind === "event" && x.text === "試験の続き。"));
+  assert.equal(now.records.at(-1).value, 40);
+  // the new state is the state before the boundary with the AI's values laid over it
+  const s3 = r.setting.states.find((x: any) => x.id === "s3");
+  assert.deepEqual(C.effectiveFacts(r.setting, "s3").limbs, C.effectiveFacts(s, "s0").limbs);
+  assert.equal(s3.event.text, "試験の続き。");
+  assert.deepEqual(r.setting.cont, [{ after: 2, kind: "boundary", to: "s3", basis: ["fx:ch01:A"] }]);
+  // nothing changes: the case stays, with the event only
+  const q = SM.addContinuation(s, V.flow, log.slice(0, 3), { kind: "boundary", after: 2, facts: [], event: { who: "家族", text: "家族が到着しました。" }, basis: [] }, readings);
+  assert.deepEqual(q.setting.cont, [{ after: 2, kind: "boundary", to: null, event: { who: "家族", text: "家族が到着しました。" }, basis: [] }]);
+  assert.equal(play(log, q.setting).internal.state, "s0", "the continuation takes the place of the move: the case stays");
+  // only at a boundary act, and only one per act
+  assert.ok(!SM.addContinuation(s, V.flow, log, { kind: "boundary", after: 0, facts: [] }, readings).ok);
+  assert.ok(!SM.addContinuation(r.setting, V.flow, log.slice(0, 3), { kind: "boundary", after: 2, facts: [{ q: "rr", v: 41, who: "看護師", how: "測定" }] }, readings).ok);
+});
+
+test("a fill gives values for items the state has none for, before the next act, with no time passing", () => {
+  const s = withoutS0("spo2");
+  assert.ok(SM.needsFill(s, V.flow, [], "spo2", readings));
+  assert.ok(!SM.needsFill(s, V.flow, [], "rr", readings), "an item with a value needs no fill");
+  assert.ok(!SM.needsFill(s, V.flow, [], "vbg_lactate", readings), "a result is not asked before it is back");
+  assert.equal(play([{ act: "ask", q: "spo2" }], s).records[0].kind, "nodata");
+  const r = SM.addContinuation(s, V.flow, [], { kind: "fill", after: 0, facts: [{ q: "spo2", v: 95, who: "看護師", how: "測定" }] }, readings);
+  assert.deepEqual(r.errors, []);
+  const p = play([{ act: "ask", q: "spo2" }], r.setting);
+  assert.equal(p.records[0].value, 95);
+  assert.equal(p.t, 0, "no time passes");
+  assert.ok(!SM.needsFill(r.setting, V.flow, [], "spo2", readings));
+  // only items without a value, only at the end of the log
+  assert.ok(!SM.addContinuation(s, V.flow, [], { kind: "fill", after: 0, facts: [{ q: "rr", v: 10, who: "看護師", how: "測定" }] }, readings).ok);
+  assert.ok(!SM.addContinuation(s, V.flow, [{ act: "wait" }], { kind: "fill", after: 0, facts: [{ q: "spo2", v: 95, who: "看護師", how: "測定" }] }, readings).ok);
+  assert.ok(!SM.addContinuation(s, V.flow, [], { kind: "fill", after: 0, facts: [] }, readings).ok);
+  // a reading is never filled (the screen's check refuses it)
+  assert.ok(!SM.addContinuation(withoutS0("rr"), V.flow, [], { kind: "fill", after: 0, facts: [{ q: "shock_judge", v: "shock", who: "看護師", how: "測定" }] }, readings).ok);
+  // an order whose result has no value yet asks for it first
+  const o = withoutS0("vbg_lactate");
+  assert.deepEqual(SM.orderNeeds(o, V.flow, [], "tests=vbg", readings), ["vbg_lactate"]);
+  assert.deepEqual(SM.orderNeeds(s, V.flow, [], "tests=vbg", readings), []);
+});
+
+test("continuations over 200 random logs: what was told before a continuation never changes", () => {
+  const rnd = lcg(1026);
+  const base = withoutS0("spo2");
+  let fills = 0;
+  let bounds = 0;
+  for (let n = 0; n < 200; n++) {
+    const log = randomLog(rnd);
+    const k = Math.floor(rnd() * (log.length + 1));
+    const was = play(log, base);
+    const kept = (r: any) => r.records.filter((x: any) => x.seq <= k);
+    if (SM.needsFill(base, V.flow, log.slice(0, k), "spo2", readings)) {
+      const r = SM.addContinuation(base, V.flow, log.slice(0, k), { kind: "fill", after: k, facts: [{ q: "spo2", v: 97, who: "看護師", how: "測定" }] }, readings);
+      assert.deepEqual(r.errors, []);
+      assert.deepEqual(kept(play(log, r.setting)), kept(was));
+      fills++;
+    }
+    const b = log.findIndex((a: any, i: number) => i >= k && (a.act === "wait" || (a.act === "stage" && play(log.slice(0, i + 1), base).records.at(-1)?.kind !== "refused")));
+    if (b >= 0) {
+      const r = SM.addContinuation(base, V.flow, log.slice(0, b + 1), { kind: "boundary", after: b, facts: [{ q: "rr", v: 44, who: "看護師", how: "測定" }], basis: [] }, readings);
+      assert.deepEqual(r.errors, []);
+      const now = play(log, r.setting);
+      assert.deepEqual(now.records.filter((x: any) => x.seq <= b), was.records.filter((x: any) => x.seq <= b));
+      assert.deepEqual(play(log, r.setting), now, "still deterministic");
+      bounds++;
+    }
+  }
+  assert.ok(fills > 20 && bounds > 20, `${fills} fills, ${bounds} boundaries`);
+});
+
+test("the check of continuations: shape, sections of the setting only, one per act, never the background changed, never in the moves", () => {
+  const ok = SM.addContinuation(aiSetting(), V.flow, [{ act: "wait" }], { kind: "boundary", after: 0, facts: [{ q: "rr", v: 40, who: "看護師", how: "測定" }], basis: [] }, readings).setting;
+  const codes = (s: any) => C.validateSimCase(s, V.flow, { readings, strict: false }).errors.map((e: any) => e.code);
+  assert.deepEqual(codes(ok), []);
+  const mut = (f: (s: any) => void) => {
+    const s = clone(ok);
+    f(s);
+    return codes(s);
+  };
+  assert.ok(mut((s) => (s.cont[0].basis = ["not:given"])).includes("basis"), "a section the setting was not written from");
+  assert.ok(mut((s) => s.cont.push({ ...s.cont[0], to: null })).includes("cont"), "two continuations for one act");
+  assert.ok(mut((s) => (s.cont[0].to = "s0")).includes("cont"));
+  assert.ok(mut((s) => (s.cont[0].kind = "later")).includes("cont"));
+  assert.ok(mut((s) => (s.cont[0].after = -1)).includes("cont"));
+  assert.ok(mut((s) => (s.cont[0].extra = 1)).includes("unknown_key"));
+  assert.ok(mut((s) => s.cont.push({ after: 3, kind: "fill", to: null, basis: [] })).includes("cont"), "a fill moves to the state with the values");
+  assert.ok(mut((s) => s.moves.push({ from: "s3", to: "s1", at: "next", basis: [] })).includes("move"), "a continuation's state is not in the moves");
+  assert.ok(mut((s) => s.states[3].facts.push({ q: "allergy", v: "drug", who: "患者", how: "問診" })).includes("background_changes"));
+  assert.ok(mut((s) => (s.cont[0].event = { who: "看護師", text: "対応が遅れたため悪化。" })).includes("eval_word"));
+  assert.ok(mut((s) => (s.origin = { by: "robot", sources: [] })).includes("origin"));
+  // a background item s0 had no value for may be filled later (one value only)
+  const filled = SM.addContinuation(withoutS0("allergy"), V.flow, [], { kind: "fill", after: 0, facts: [{ q: "allergy", v: "none", who: "患者", how: "問診" }] }, readings);
+  assert.deepEqual(filled.errors, []);
+  // the states a continuation made do not count against the setting's own limit
+  let s = aiSetting();
+  const log: any[] = [];
+  for (let i = 0; i < 10; i++) {
+    log.push({ act: "wait" });
+    const r = SM.addContinuation(s, V.flow, log, { kind: "boundary", after: i, facts: [{ q: "rr", v: 20 + i, who: "看護師", how: "測定" }], basis: [] }, readings);
+    assert.deepEqual(r.errors, [], `continuation ${i}`);
+    s = r.setting;
+  }
+  assert.equal(s.states.length, 13);
+  assert.equal(play(log, s).records.filter((x: any) => x.kind === "boundary").length, 10);
+  // playing again from the start: the setting as it was written
+  const b = SM.baseSetting(s);
+  assert.equal(b.cont, undefined);
+  assert.deepEqual(b.states.map((x: any) => x.id), ["s0", "s1", "s2"]);
+  assert.deepEqual(play(log, b), play(log, aiSetting()));
 });

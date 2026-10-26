@@ -969,7 +969,7 @@ $("#case-create").addEventListener("click", () => {
   creator.open();
 });
 // the simulated fictional case (docs/enhancement-plan.md 8.21): its own screen, memory only, no AI, nothing sent or saved
-const sim = initSim({ el, $, openDialog, copyText });
+const sim = initSim({ el, $, openDialog, copyText, api });
 $("#case-sim").addEventListener("click", () => {
   $("#case").close();
   sim.open();
