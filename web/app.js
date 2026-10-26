@@ -1,6 +1,7 @@
 import { buildAnswerMarkdown } from "./answer-marks.js";
 import { initCase } from "./case.js";
 import { initCreate } from "./create-ui.js";
+import { initSim } from "./sim-ui.js";
 import { maskStreaming } from "./case-create.js";
 import { initNotes } from "./note-ui.js";
 import { initRecords } from "./record-ui.js";
@@ -966,6 +967,12 @@ const creator = initCreate({ el, $, openDialog, copyText, runCreate: (params) =>
 $("#case-create").addEventListener("click", () => {
   $("#case").close();
   creator.open();
+});
+// the simulated fictional case (docs/enhancement-plan.md 8.21): its own screen, memory only, no AI, nothing sent or saved
+const sim = initSim({ el, $, openDialog, copyText });
+$("#case-sim").addEventListener("click", () => {
+  $("#case").close();
+  sim.open();
 });
 $("#casebar-note").addEventListener("click", () => notes.open({ kase: caseCtl.pinned(), label: "固定中の症例だけ", items: () => [] }));
 updateChips();

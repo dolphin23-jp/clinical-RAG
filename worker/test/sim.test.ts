@@ -130,6 +130,28 @@ test("engine: no act -> the natural course after the doctor enters the stage; ti
   assert.equal(play([{ act: "stage", to: "workup" }, { act: "do", key: "fluid=held" }, { act: "stage", to: "reassess" }]).internal.state, "s2");
 });
 
+test("engine: whether an item can be asked depends on what the doctor knows and did, never on the hidden setting", () => {
+  const s = clone(V.valid);
+  // a follow-up question that is visible only when a finding is known: the doctor must ask the finding first
+  const flow = clone(V.flow);
+  flow.questions.push({ id: "cold_where", slot: 1, label: "冷たい部位", type: "text", when: "limbs=cold", br: { ent: "observation" } });
+  s.states[2].facts.push({ q: "cold_where", v: "手足の先", who: "患者", how: "診察" });
+  const go = (log: any[]) => E.replay(s, flow, log, { readings });
+  const notYet = go([{ act: "stage", to: "reassess" }, { act: "ask", q: "cold_where" }]); // limbs is cold in s2, but the doctor has not looked
+  assert.equal(notYet.records.at(-1).reason, "hidden");
+  assert.ok(!notYet.askable.includes("cold_where"));
+  const known = go([{ act: "stage", to: "reassess" }, { act: "ask", q: "limbs" }, { act: "ask", q: "cold_where" }]);
+  assert.equal(known.records.at(-1).value, "手足の先");
+  assert.ok(known.askable.includes("cold_where"));
+  // the askable list: fact questions only, results once they are back, acts' follow-ups once done
+  const start = play([]);
+  assert.deepEqual(start.askable, ["cc", "pmh", "allergy", "rr", "spo2", "limbs", "consc"]);
+  assert.ok(play([{ act: "do", key: "tests=vbg" }]).askable.every((q: string) => q !== "vbg_lactate"));
+  assert.ok(play([{ act: "do", key: "tests=vbg" }, { act: "wait" }]).askable.includes("vbg_lactate"));
+  assert.ok(play([{ act: "do", key: "fluid=given" }]).askable.includes("rr_after"));
+  assert.ok(!play([{ act: "do", key: "fluid=given" }]).askable.includes("fluid_resp")); // the doctor's reading
+});
+
 test("engine: asking and examining take no time; the careful doctor loses nothing", () => {
   const many = play(Array.from({ length: 30 }, () => ({ act: "ask", q: "rr" })));
   assert.equal(many.t, 0);
@@ -255,4 +277,104 @@ test("sim-case.js and sim-engine.js are pure: no DOM, network, storage, clock, r
   assert.match(V._note, /臨床の中身ではない/);
   assert.equal(V.flow.id, "fixture.sim");
   assert.equal(V.valid.flow, V.flow.id);
+});
+
+// ---------------------------------------------------------------------------------- step 1b: what the screen shows and keeps (web/sim-model.js)
+const SM: any = await import(web("sim-model.js"));
+
+test("screen model: the memo says what happened in the case's own sentences; refusals say why; no state id, no assumption", () => {
+  const r = play([{ act: "ask", q: "rr" }, { act: "ask", q: "shock_judge" }, { act: "do", key: "tests=vbg" }, { act: "wait" }, { act: "say", type: "disposition", text: "入院" }]);
+  const lines = SM.memoLines(V.valid, V.flow, r.records, 10);
+  assert.deepEqual(lines.map((l: any) => [l.clock, l.who, l.text]), [
+    ["02:10", "看護師", "呼吸数は、28 回/分。"],
+    ["02:10", "", "その項目は先生が選ぶ項目です（症例は答えません）。"],
+    ["02:10", "先生", "記録: 出した検査：vbg"],
+    ["02:20", "", "── 待つ（時間が進む）"],
+    ["02:20", "検査", "乳酸は、3.9。"],
+    ["02:20", "先生", "行き先: 入院"],
+  ]);
+  assert.ok(!JSON.stringify(lines).includes("敗血症") && !JSON.stringify(lines).includes("s0"));
+  assert.equal(SM.memoLines({ ...V.valid, clock: undefined }, V.flow, r.records, 10)[0].clock, "区切り0");
+});
+
+test("screen model: the tray takes nothing by itself; careful rows are one at a time; an answer the doctor has is never overwritten", () => {
+  const s = clone(V.valid);
+  s.states[0].facts.find((f: any) => f.q === "pmh").v = ["none"]; // a declared negative
+  const flow = clone(V.flow);
+  flow.questions.find((q: any) => q.id === "pmh").br.neg = ["none"];
+  const r = E.replay(s, flow, [{ act: "ask", q: "rr" }, { act: "ask", q: "pmh" }, { act: "ask", q: "rr" }], { readings });
+  const rows = SM.trayRows(flow, r.records, {});
+  assert.deepEqual(rows.map((x: any) => [x.q, x.careful, x.filled]), [["rr", false, false], ["pmh", true, false], ["rr", false, false]]);
+  // taken: the first rr goes in; the second rr does not overwrite it
+  const a1 = SM.takeRows(flow, {}, [rows[0]]);
+  assert.deepEqual(a1, { rr: 28 });
+  assert.deepEqual(SM.takeRows(flow, a1, [rows[2]]), { rr: 28 });
+  assert.equal(SM.trayRows(flow, r.records, a1)[2].filled, true);
+  // a result's items are rows too
+  const res = play([{ act: "do", key: "tests=vbg" }, { act: "wait" }]);
+  assert.deepEqual(SM.trayRows(V.flow, res.records, {}).map((x: any) => [x.q, x.who]), [["vbg_lactate", "検査"]]);
+});
+
+test("screen model: the doctor's act becomes the answer of the action question, with the shown clock in its time question when that is empty", () => {
+  const flow = clone(V.flow);
+  flow.questions.find((q: any) => q.id === "fluid").br.at = "t_arrival"; // a time question declared by the act (fixture)
+  assert.deepEqual(SM.applyAct(flow, {}, "fluid=given", "02:30"), { fluid: "given", t_arrival: "02:30" });
+  assert.deepEqual(SM.applyAct(flow, { t_arrival: "02:10" }, "fluid=given", "02:30"), { t_arrival: "02:10", fluid: "given" });
+  assert.deepEqual(SM.applyAct(V.flow, { tests: ["ecg"] }, "tests=vbg", ""), { tests: ["ecg", "vbg"] });
+  assert.deepEqual(SM.applyAct(V.flow, {}, "rr=1", "02:10"), {}); // not an act
+  assert.deepEqual(SM.boardQuestions(V.flow).map((q: any) => q.id), ["tests", "fluid"]);
+});
+
+test("screen model: the doctor fills in the readings and decisions; the note's case holds nothing of the hidden setting", () => {
+  const flow = clone(V.flow);
+  flow.phases = [{ id: "p1", name: "全部", short: "全部", slots: [1] }];
+  const groups = SM.doctorQuestions(flow, { fluid: "given" }, "男性", readings);
+  assert.deepEqual(groups[0].questions.map((q: any) => q.id), ["fluid_resp", "shock_judge", "dispo"]);
+  assert.deepEqual(SM.doctorQuestions(flow, {}, "男性", readings)[0].questions.map((q: any) => q.id), ["shock_judge", "dispo"]); // fluid_resp shows after the act
+  const k = SM.simKase(V.valid, flow, { rr: 28 }, " 自分の評価 ");
+  assert.equal(k.own, "自分の評価");
+  assert.equal(k.age, "70");
+  assert.deepEqual(k.intake, { flow: "fixture.sim", answers: { rr: 28 } });
+  assert.ok(!JSON.stringify(k).includes("敗血症") && !JSON.stringify(k).includes("states"));
+});
+
+test("screen model: the debrief lays the key items side by side (before / after the disposition / not asked), no judgment words", () => {
+  const before = play([{ act: "ask", q: "limbs" }, { act: "say", type: "disposition", text: "入院" }]);
+  assert.deepEqual(SM.debrief(V.valid, V.flow, before.records).key, [{ q: "limbs", label: "四肢の所見", status: "before" }]);
+  const after = play([{ act: "say", type: "disposition", text: "入院" }, { act: "ask", q: "limbs" }]);
+  assert.equal(SM.debrief(V.valid, V.flow, after.records).key[0].status, "after");
+  assert.equal(SM.debrief(V.valid, V.flow, play([]).records).key[0].status, "never");
+  assert.ok(!/正解|誤り|見逃し|遅い|適切/.test(JSON.stringify(SM.KEY_STATUS)));
+});
+
+test("screen model: a pasted setting is read, checked, and only an emergency flow of the imported schema is played", () => {
+  const FLOWS = { "fixture.sim": V.flow, "emergency-department.fixture": { ...V.flow, id: "emergency-department.fixture" } };
+  assert.equal(SM.parseSetting("{", FLOWS, readings).error, "JSON として読めません。");
+  assert.match(SM.parseSetting(JSON.stringify(V.valid), FLOWS, readings).error, /救急外来/);
+  const ok = SM.parseSetting(JSON.stringify({ ...V.valid, flow: "emergency-department.fixture" }), FLOWS, readings);
+  assert.equal(ok.ok, true);
+  const bad = SM.parseSetting(JSON.stringify({ ...V.valid, flow: "emergency-department.fixture", opening: [{ who: "救急隊", text: "敗血症性ショックです。" }] }), FLOWS, readings);
+  assert.equal(bad.ok, false);
+  assert.ok(bad.report.errors.some((e: any) => e.code === "leak_dx"));
+  // the readings of a simulation: JUDGMENT_IDS without the raw bedside data the case shows
+  const R = SM.simReadings(new Set(["first", "hi", "orth", "re_change"]));
+  assert.deepEqual([...R], ["first", "re_change"]);
+});
+
+test("the simulation's screen modules send nothing, keep nothing in the browser and write no HTML", () => {
+  for (const [file, imports] of [
+    ["sim-model.js", ["./sim-case.js", "./sim-engine.js", "./intake.js"]],
+    ["sim-ui.js", ["./sim-case.js", "./sim-engine.js", "./sim-model.js", "./extract-model.js", "./note-assemble.js", "./intake.js", "./id-guard.js"]],
+  ] as const) {
+    const src = readFileSync(web(file), "utf-8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    assert.deepEqual([...src.matchAll(/^import [\s\S]*? from "(.+)";$/gm)].map((m) => m[1]), imports, file);
+    assert.ok(!/\b(fetch|XMLHttpRequest|localStorage|sessionStorage|indexedDB|innerHTML|outerHTML|insertAdjacentHTML|sendBeacon|\/api\/|print\(|navigator\.share|Math\.random|Date\.now)\b/.test(code), `${file} touches something it must not`);
+  }
+  // the only lazy import of the screen is the imported flows
+  assert.deepEqual([...readFileSync(web("sim-ui.js"), "utf-8").matchAll(/import\("(.+?)"\)/g)].map((m) => m[1]), ["./flow-schema.js"]);
+  // the copy of the note carries the fictional header, and the screen never calls the assumption "the answer"
+  const ui = readFileSync(web("sim-ui.js"), "utf-8");
+  assert.ok(ui.includes("`${SIM_HEADER}\\n${toText(note)}`"));
+  assert.ok(!/正解/.test(ui + readFileSync(web("sim-model.js"), "utf-8")));
 });

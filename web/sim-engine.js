@@ -31,7 +31,8 @@ export function clockAt(setting, t, minutesPerSegment) {
 }
 
 /**
- * replay(setting, flow, log, { readings }) -> { records, t, stage, pending, internal: { state } }
+ * replay(setting, flow, log, { readings }) -> { records, t, stage, pending, askable, internal: { state } }
+ * askable: the fact questions the doctor can ask now (visible by what the doctor was told and did; a result once it is back).
  * records: [{ seq, t, kind, … }] in the order they happened; seq is the number of the act (1-based) that made the record.
  *  answer  { q, value, who, how }       nodata { q }          refused { act, reason }
  *  do      { key }                      result { key, items: [{ q, value, who, how } | { q, nodata: true }] }
@@ -54,9 +55,11 @@ export function replay(setting, flow, log, opts = {}) {
   let seq = 0;
   const push = (r) => records.push({ seq, t, ...r });
   const refuse = (act, reason) => push({ kind: "refused", act, reason });
+  const told = {}; // what the doctor has been told: { q: value } (the latest answer or delivered result)
+  // whether a question can be asked depends only on what the doctor knows and did, never on the hidden setting (that would tell it)
   const ctx = () => {
-    const answers = Object.fromEntries(Object.entries(effectiveFacts(setting, state)).map(([q, f]) => [q, f.v]));
-    for (const [q, opts_] of Object.entries(done)) answers[q] = questionOf(flow, q)?.type === "multi" ? [...opts_] : opts_[opts_.length - 1];
+    const answers = { ...told };
+    for (const [q, opts_] of Object.entries(done)) answers[q] = questionOf(flow, q)?.type === "multi" ? [...new Set(opts_)] : opts_[opts_.length - 1];
     return contextOf(answers, { sex: setting.patient?.sex });
   };
   const factOf = (facts, q) => (q in facts ? { value: facts[q].v, who: facts[q].who, how: facts[q].how } : null);
@@ -68,7 +71,7 @@ export function replay(setting, flow, log, opts = {}) {
       const facts = effectiveFacts(setting, p.state);
       const items = (results[p.key] ?? []).map((q) => {
         const f = factOf(facts, q);
-        if (f) delivered[q] = facts[q];
+        if (f) (delivered[q] = facts[q]), (told[q] = facts[q].v);
         return f ? { q, ...f } : { q, nodata: true };
       });
       push({ kind: "result", key: p.key, items });
@@ -97,6 +100,7 @@ export function replay(setting, flow, log, opts = {}) {
         return f ? push({ kind: "answer", q: q.id, value: f.v, who: f.who, how: f.how }) : refuse(name, "not_ready");
       }
       const f = factOf(effectiveFacts(setting, state), q.id);
+      if (f) told[q.id] = f.value;
       return f ? push({ kind: "answer", q: q.id, ...f }) : push({ kind: "nodata", q: q.id });
     }
     if (name === "do") {
@@ -128,11 +132,18 @@ export function replay(setting, flow, log, opts = {}) {
     }
     refuse(name || "?", "act");
   });
+  const now = ctx();
+  // the items the doctor can ask now: the case's fact questions that what the doctor knows and did make visible (results once ordered)
+  const askable = (flow.questions ?? [])
+    .filter((q) => ["observation", "context", "condition"].includes(q.br?.ent) && !isReading(q, readings) && !["age", "sex"].includes(q.id))
+    .filter((q) => isVisible(flow, q, now) && (!resultQs.has(q.id) || q.id in delivered))
+    .map((q) => q.id);
   return {
     records,
     t,
     stage: STAGES[stageIdx].id,
     pending: pending.map((p) => p.key),
+    askable,
     internal: { state },
   };
 }
