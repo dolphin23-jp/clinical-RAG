@@ -12,13 +12,13 @@
 import { STAGES } from "./sim-case.js";
 import { clockAt, replay } from "./sim-engine.js";
 import {
-  KEY_STATUS, LEVELS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, THEME_LIMIT, actText, addContinuation, applyAct, boardQuestions,
-  baseSetting, checkAiSetting, contCount, debrief, doctorQuestions, isEmergencyFlow, memoLines, needsFill, orderNeeds, parseSetting, simKase, simReadings, takeRows,
-  trayRows,
+  KEY_STATUS, LEVELS, PLAN_KIND_LABELS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, THEME_LIMIT, actText, addContinuation, applyAct,
+  boardQuestions, baseSetting, checkAiSetting, checkSoapDraft, contCount, debrief, doctorQuestions, isEmergencyFlow, memoLines, needsFill, orderNeeds,
+  parseSetting, simKase, simReadings, soapChoices, soapItems, takeRows, toldLines, trayRows, usableSuggestions,
 } from "./sim-model.js";
 import { JUDGMENT_IDS } from "./extract-model.js";
 import { assemble, toText } from "./note-assemble.js";
-import { byPhase, isAnswered, setAnswer } from "./intake.js";
+import { byPhase, isAnswered, renderStructured, setAnswer } from "./intake.js";
 import { scan } from "./id-guard.js";
 
 const plain = (s) => String(s ?? "").replace(/^★\d+\s*/, "").trim();
@@ -116,7 +116,7 @@ export function initSim({ el, $, openDialog, copyText, api }) {
           c = checkAiSetting(j, flow, readings);
         }
         if (!c.ok) return renderLoad("AI の設定が検査を通りませんでした。もう一度作るか、テーマを変えてください。", c.errors);
-        S = fresh(c.setting, flow, Number(seg.value), []);
+        S = fresh(c.setting, flow, Number(seg.value), [], j.suggest ?? []);
         renderPlay();
       } catch (e) {
         say(e.message);
@@ -163,7 +163,13 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     body.append(paste);
   }
 
-  const fresh = (setting, flow, minutes, missing) => ({ setting, flow, log: [], answers: {}, own: "", minutes, taken: new Set(), filter: "", ended: false, missing, busy: false, aiMsg: "", failed: null });
+  const fresh = (setting, flow, minutes, missing, suggest = []) => ({
+    setting, flow, log: [], answers: {}, own: "", minutes, taken: new Set(), filter: "", ended: false, missing, busy: false, aiMsg: "", failed: null,
+    // the AI's next acts (D10: always shown, taken only when the doctor picks one), as of the act count they were written at
+    suggest: { at: 0, list: suggest }, adoptedActs: 0,
+    // the AI's S/O/A/P draft (D12) and the parts the doctor ticked (memory only)
+    soap: null, soapPicks: new Set(),
+  });
 
   // ---------------------------------------------------------------- playing
   /** One act of the doctor.  With an AI setting, the AI first fills what the act needs, or writes what happens at a boundary. */
@@ -207,6 +213,47 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     if (!r.ok) throw new Error(`AI の続きが検査を通りませんでした（${r.errors.slice(0, 3).map((e) => e.msg).join("・")}）。使いません。`);
     S.setting = r.setting;
     S.log = log;
+    if (Array.isArray(j.suggest)) S.suggest = { at: log.length, list: j.suggest };
+  }
+
+  /** The AI writes the next acts again, for where the case is now. */
+  async function refreshSuggest() {
+    if (S.busy) return;
+    S.busy = true;
+    S.aiMsg = "";
+    renderPlay();
+    try {
+      const now = replay(S.setting, S.flow, S.log, { readings });
+      const j = await callSim({ op: "suggest", flow: S.flow.id, setting: S.setting, log: S.log, state: now.internal.state, t: now.t, stage: now.stage });
+      S.suggest = { at: S.log.length, list: j.suggest ?? [] };
+    } catch (e) {
+      S.aiMsg = e.message;
+    } finally {
+      S.busy = false;
+      renderPlay();
+    }
+  }
+
+  /** The AI writes an S/O/A/P draft from what the screen showed the doctor and what the doctor wrote (never the hidden setting). */
+  async function writeSoap() {
+    if (S.busy) return;
+    S.busy = true;
+    S.aiMsg = "";
+    renderPlay();
+    try {
+      const r = replay(S.setting, S.flow, S.log, { readings });
+      const told = toldLines(S.setting, S.flow, r.records, S.minutes).slice(-300);
+      if (!told.length) throw new Error("まだ症例から聞いたことがありません。");
+      const answers = renderStructured(S.flow, S.answers, simKase(S.setting, S.flow, {}, "")).slice(0, 6000);
+      const j = await callSim({ op: "soap", flow: S.flow.id, told, answers, own: S.own.slice(0, 2000) });
+      S.soap = checkSoapDraft(j.soap ?? {}, [...told, answers, S.own]);
+      S.soapPicks = new Set();
+    } catch (e) {
+      S.aiMsg = e.message;
+    } finally {
+      S.busy = false;
+      renderPlay();
+    }
   }
 
   /** The AI gives values for items the state has none for yet (before the ask or the order that needs them). */
@@ -277,6 +324,7 @@ export function initSim({ el, $, openDialog, copyText, api }) {
       row.append(nb);
     }
     body.append(row);
+    if (isAi()) body.append(suggestPanel(hm));
     if (r.pending.length) body.append(el("p", "help", `結果待ち: ${r.pending.map((k) => actText(flow, k)).join("、")}（次の区切りで返ります）`));
 
     // ask / examine / measure: only what the doctor's knowledge and acts make visible
@@ -430,6 +478,8 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     memo.append(ol);
     body.append(memo);
 
+    if (isAi()) body.append(soapPanel());
+
     // the note: A04 from the answers, read only
     const noteSec = section("記載（救急外来初療 A04。読み取り専用）", false);
     const text = noteText();
@@ -496,8 +546,79 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     return wrap;
   }
 
+  /** The AI's next acts: always shown (D10); a pick records the act like the doctor's own, nothing is taken without one. */
+  function suggestPanel(hm) {
+    const sec = section("AI の次の一手（見本・採用は任意）");
+    sec.id = "sim-suggest";
+    const list = usableSuggestions(S.suggest.list, S.setting, S.flow, S.log, readings);
+    const behind = S.log.length - S.suggest.at;
+    sec.append(el("p", "help", `AI が、この症例の想定を知ったうえで挙げた見本です。採用するかは先生が決めます（採用しても点数はありません）。${behind > 0 ? `いまより ${behind} 手前の時点の提案です。` : ""}`));
+    if (!list.length) sec.append(el("p", "help", "いま採れる提案はありません。"));
+    for (const x of list) {
+      const line = el("div", "sim-row");
+      const b = btn(x.label, "chip", () => {
+        S.adoptedActs++;
+        if (x.act === "do") S.answers = applyAct(S.flow, S.answers, x.key, hm);
+        act(x.act === "ask" ? { act: "ask", q: x.q } : { act: "do", key: x.key });
+      });
+      b.dataset.suggest = x.q ?? x.key;
+      line.append(b);
+      if (x.why) line.append(el("span", "help", x.why));
+      sec.append(line);
+    }
+    const more = btn("次の一手を書き直させる（AI を1回使う）", "btn small", refreshSuggest);
+    more.id = "sim-suggest-refresh";
+    sec.append(el("div", "btn-row"));
+    sec.lastChild.append(more);
+    return sec;
+  }
+
+  /** The AI's S/O/A/P draft: shown with its marks; only the ticked A and P items go in the note (as AI items). */
+  function soapPanel() {
+    const sec = section("AI の S/O/A/P 草案（〔AI草案〕・採用は任意）", !!S.soap);
+    sec.id = "sim-soap";
+    sec.append(el("p", "help", "症例から聞いたこと・先生が入れた答え・自分の A/P だけから書かせます（隠れた設定は渡しません）。自分の A/P を先に書くかは任意です。採用した A と P だけが記載に入ります。"));
+    const go = btn(S.soap ? "草案を書き直させる（AI を1回使う）" : "草案を書かせる（AI を1回使う）", "btn", writeSoap);
+    go.id = "sim-soap-write";
+    sec.append(el("div", "btn-row"));
+    sec.lastChild.append(go);
+    const d = S.soap;
+    if (!d) return sec;
+    const left = Object.values(d.left).reduce((a, b) => a + b, 0);
+    if (left || d.flagged) sec.append(el("p", "notice", `${left ? `識別情報・日付・用量・閾値らしき文字のある ${left} 項目を除きました。` : ""}${d.flagged ? `入力にない数値のある ${d.flagged} 項目に印を付けました。` : ""}`));
+    const part = (title, lines) => {
+      if (!lines.length) return;
+      sec.append(el("p", "sim-phase", title));
+      const ul = el("ul");
+      for (const t of lines) ul.append(el("li", null, t));
+      sec.append(ul);
+    };
+    part("S（他者から得た情報）", d.S);
+    part("O（病院で確かめたこと）", d.O);
+    const choices = soapChoices(d);
+    const pick = (c) => {
+      const lab = el("label", "check");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = S.soapPicks.has(c.id);
+      cb.dataset.soap = c.id;
+      cb.addEventListener("change", () => (cb.checked ? S.soapPicks.add(c.id) : S.soapPicks.delete(c.id), renderPlay()));
+      lab.append(cb, el("span", null, c.text));
+      return lab;
+    };
+    const a = choices.filter((c) => c.part === "A");
+    if (a.length) sec.append(el("p", "sim-phase", "A（評価。採用すると記載の Assessment に〔AI草案〕で入ります）"), ...a.map(pick));
+    for (const k of Object.keys(PLAN_KIND_LABELS)) {
+      const p = choices.filter((c) => c.part === k);
+      if (p.length) sec.append(el("p", "sim-phase", `P: ${PLAN_KIND_LABELS[k]}（予定・検討。採用すると記載に〔AI草案〕で入ります）`), ...p.map(pick));
+    }
+    if (d.disposition) sec.append(el("p", "sim-phase", "Disposition（見るだけ）"), el("p", null, d.disposition));
+    return sec;
+  }
+
   function noteText() {
-    const note = assemble("A04", { kase: simKase(S.setting, S.flow, S.answers, S.own), flow: S.flow });
+    const items = S.soap ? soapItems(S.soap, S.soapPicks) : [];
+    const note = assemble("A04", { kase: simKase(S.setting, S.flow, S.answers, S.own), flow: S.flow, items });
     return `${SIM_HEADER}\n${toText(note)}`;
   }
 
@@ -518,6 +639,7 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     if (isAi()) {
       pair("設定の出どころ", "AI（書籍を根拠に作成・医師未確認）");
       pair("AI が書いた続き", `${contCount(S.setting)}件`);
+      pair("AI の次の一手を採用した回数", `${S.adoptedActs}回`);
       pair("根拠にした書籍の節", (S.setting.origin.sources ?? []).map((x) => `${x.title} ${x.page}`).join("、") || "—");
     }
     a.append(dl);

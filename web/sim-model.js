@@ -4,9 +4,10 @@
 //
 // The tray: what the case told is not an answer until the doctor takes it in (like a proposal of the memo import).  Nothing is preselected; a
 // negative / unknown / not assessable / waiting answer and a time are taken one at a time; an answer the doctor already has is never overwritten.
-import { FACT_ENTS, STAGES, effectiveFacts, isReading, optionIds, questionOf, resultIds, validateSimCase } from "./sim-case.js";
+import { EVAL_RE, FACT_ENTS, STAGES, effectiveFacts, isReading, optionIds, questionOf, resultIds, validateSimCase } from "./sim-case.js";
 import { NO_DATA, SAY_TYPES, clockAt, replay } from "./sim-engine.js";
 import { byPhase, contextOf, isAnswered, isVisible, renderStructured, setAnswer, valueText } from "./intake.js";
+import { scanCreated } from "./case-create.js";
 
 /** Put above every copy of the simulation's note: it cannot be taken off. */
 export const SIM_HEADER = "【架空症例（模擬）・実在の患者ではありません】";
@@ -256,4 +257,99 @@ export function baseSetting(setting) {
   const made = new Set((setting?.cont ?? []).map((c) => c?.to).filter(Boolean));
   const { cont: _cont, ...rest } = setting;
   return { ...rest, states: (setting.states ?? []).filter((s) => !made.has(s.id)) };
+}
+
+// ---------------------------------------------------------------- the next acts as an example (step 3; the doctor's decision D10)
+/**
+ * The AI's suggested next acts that can be taken now: an ask of an item the doctor can ask and has not been told, an act of the flow not yet
+ * recorded.  [{ act, q?, key?, label, why }].  A reason that names the assumed diagnosis, or holds an evaluation word, a dose, a threshold, a date
+ * or something like an identifier, is left out (the act stays).  Never preselected: the doctor takes one or none.
+ */
+export function usableSuggestions(list, setting, flow, log, readings) {
+  const r = replay(setting, flow, log, { readings });
+  const told = new Set(r.records.filter((x) => x.kind === "answer").map((x) => x.q));
+  const done = new Set(r.records.filter((x) => x.kind === "do").map((x) => x.key));
+  const dx = (setting.assumed?.dx ?? []).filter((w) => typeof w === "string" && w.trim().length >= 2);
+  const out = [];
+  for (const s of Array.isArray(list) ? list : []) {
+    const why0 = typeof s?.why === "string" ? s.why.trim().slice(0, 200) : "";
+    const hit = scanCreated(why0);
+    const why = why0 && !hit.ids.length && !hit.dates.length && !hit.doses.length && !hit.thresholds.length && !EVAL_RE.test(why0) && !dx.some((w) => why0.includes(w)) ? why0 : "";
+    if (s?.act === "ask" && r.askable.includes(s.target) && !told.has(s.target)) out.push({ act: "ask", q: s.target, label: `聞く・診る・測る: ${plain(questionOf(flow, s.target)?.label ?? s.target)}`, why });
+    else if (s?.act === "do" && /^[A-Za-z0-9_]+=[A-Za-z0-9_]+$/.test(String(s.target)) && !done.has(s.target)) {
+      const [qid, oid] = s.target.split("=");
+      const q = questionOf(flow, qid);
+      if (q?.br?.ent === "action" && optionIds(q).includes(oid)) out.push({ act: "do", key: s.target, label: `行為を記録: ${actText(flow, s.target)}`, why });
+    }
+  }
+  return out.slice(0, 5);
+}
+
+// ---------------------------------------------------------------- the S/O/A/P draft (step 3; the doctor's decision D12)
+/** What the screen showed the doctor, as lines for the draft (the memo without refusals): never the hidden setting. */
+export const toldLines = (setting, flow, records, minutes) =>
+  memoLines(setting, flow, records, minutes)
+    .filter((m) => m.kind !== "refused")
+    .map((m) => `${m.clock} ${m.who ? `${m.who}: ` : ""}${m.text}`.slice(0, 400));
+
+/** The numbers written in a text ("1,200" is 1200). */
+const numbersIn = (t) => (String(t ?? "").normalize("NFKC").replace(/(?<=\d),(?=\d{3}(?!\d))/g, "").match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+export const NUMBER_FLAG = "【入力にない数値・要確認】";
+export const PLAN_KIND_LABELS = { Dx: "Dx（診断・確認）", Tx: "Tx（治療・処置・依頼）", Ex: "Ex（説明・教育）" };
+
+/**
+ * Checks the AI's S/O/A/P draft against what the doctor was told and wrote.  An item with something like an identifier or a date, a dose or a
+ * threshold is left out (counted); a number that is in none of the told lines, the answers or the doctor's own A/P is marked NUMBER_FLAG (a
+ * warning, not a verdict).  Returns { S, O, A, P, disposition, left: {identifier, date, dose, threshold}, flagged }.
+ */
+export function checkSoapDraft(soap, sources) {
+  const have = new Set(numbersIn((sources ?? []).join("\n")));
+  const left = { identifier: 0, date: 0, dose: 0, threshold: 0 };
+  let flagged = 0;
+  const keep = (t) => {
+    const h = scanCreated(t);
+    if (h.ids.length) return left.identifier++, null;
+    if (h.dates.length) return left.date++, null;
+    if (h.doses.length) return left.dose++, null;
+    if (h.thresholds.length) return left.threshold++, null;
+    const odd = numbersIn(t.replace(/#\d+/g, "")).some((n) => !have.has(n)); // a problem's number (#1) is not a value
+    if (odd) flagged++;
+    return odd ? `${t} ${NUMBER_FLAG}` : t;
+  };
+  const texts = (xs) => (Array.isArray(xs) ? xs : []).map((x) => keep(String(x))).filter((x) => x !== null);
+  const A = [];
+  for (const a of Array.isArray(soap?.A) ? soap.A : []) {
+    const problem = keep(String(a?.problem ?? ""));
+    const assessment = keep(String(a?.assessment ?? ""));
+    if (problem !== null && assessment !== null && problem.trim()) A.push({ problem, assessment });
+  }
+  const P = [];
+  for (const p of Array.isArray(soap?.P) ? soap.P : []) {
+    const text = keep(String(p?.text ?? ""));
+    if (text !== null && Object.hasOwn(PLAN_KIND_LABELS, p?.kind)) P.push({ kind: p.kind, text });
+  }
+  const d = soap?.disposition ? keep(String(soap.disposition)) : "";
+  return { S: texts(soap?.S), O: texts(soap?.O), A, P, disposition: d ?? "", left, flagged };
+}
+
+/** The adoptable parts of a checked draft: each A item (its problem and its assessment), each P item.  [{ id, part, text }] */
+export function soapChoices(draft) {
+  return [
+    ...draft.A.map((a, i) => ({ id: `A${i}`, part: "A", text: `${a.problem}${a.assessment ? ` — ${a.assessment}` : ""}` })),
+    ...draft.P.map((p, i) => ({ id: `P${i}`, part: p.kind, text: p.text })),
+  ];
+}
+
+/** The items the note takes for the parts the doctor ticked (web/note-assemble.js roles: problems, assessment, plan).  Nothing ticked, nothing. */
+export function soapItems(draft, picked) {
+  const items = [];
+  draft.A.forEach((a, i) => {
+    if (!picked?.has(`A${i}`)) return;
+    items.push({ role: "problems", heading: "問題リスト", text: a.problem, cites: [] });
+    if (a.assessment) items.push({ role: "assessment", heading: "各問題の評価", text: `${a.problem}: ${a.assessment}`, cites: [] });
+  });
+  draft.P.forEach((p, i) => {
+    if (picked?.has(`P${i}`)) items.push({ role: "plan", heading: "初期プラン", text: `${p.kind}: ${p.text}`, cites: [] });
+  });
+  return items;
 }

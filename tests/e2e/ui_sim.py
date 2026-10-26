@@ -283,6 +283,40 @@ with sync_playwright() as pw:
     ask("rr")
     check("呼吸数は、22 回/分。" in memo_text(), "the doctor's act changes what happens next")
     check("AI が書いた続き: 2件" in dlg.inner_text(), "the screen counts the continuations")
+    # the AI's next acts (D10): always shown, nothing taken until the doctor picks one
+    sug = page.locator("#sim-suggest")
+    check(sug.is_visible() and "採用するかは先生が決めます" in sug.inner_text(), "the next acts are shown as an example to take or not")
+    shown = sug.locator("[data-suggest]").evaluate_all("bs => bs.map(b => b.dataset.suggest)")
+    check("first" not in shown, f"a reading is never suggested ({shown})")
+    check("limbs" in shown, f"an item not yet asked is suggested ({shown})")
+    n_ask = memo_text().count("四肢の温度は")
+    sug.locator("[data-suggest='limbs']").click()
+    expect(memo).to_contain_text("四肢の温度は", timeout=10000)
+    check(memo_text().count("四肢の温度は") == n_ask + 1, "taking a suggestion records the act like the doctor's own")
+    n0 = len(sim_posts)
+    page.click("#sim-suggest-refresh")
+    for _ in range(50):
+        if len(sim_posts) > n0 and not page.locator("#sim .notice", has_text="AI が続きを書いています").count():
+            break
+        page.wait_for_timeout(100)
+    check(len(sim_posts) == n0 + 1 and sim_posts[-1]["op"] == "suggest", "the next acts can be written again (one AI call)")
+    # the S/O/A/P draft (D12): from what the screen showed, never the hidden setting; only ticked A and P go in the note
+    open_sec("#sim-soap")
+    note_before = note_text()
+    page.click("#sim-soap-write")
+    expect(page.locator("#sim-soap input[data-soap]").first).to_be_visible(timeout=10000)
+    sent = sim_posts[-1]
+    check(sent["op"] == "soap" and "setting" not in sent and "log" not in sent, f"the draft is asked with what the screen showed only ({sorted(sent)})")
+    check(any("呼吸数は" in line for line in sent["told"]) and not any("試験用の想定診断" in line for line in sent["told"]), "the told lines are the memo, without the assumption")
+    soap_text = page.locator("#sim-soap").inner_text()
+    check("【入力にない数値・要確認】" in soap_text, "a number the doctor was not told is marked")
+    check("Dx（診断・確認）" in soap_text and "Tx（治療・処置・依頼）" in soap_text and "Ex（説明・教育）" in soap_text, "the plan is split into Dx / Tx / Ex")
+    check(page.locator("#sim-soap input[data-soap]:checked").count() == 0 and note_text() == note_before, "nothing of the draft is in the note until ticked")
+    page.check("#sim-soap input[data-soap='A0']")
+    page.check("#sim-soap input[data-soap='P1']")
+    n2 = note_text()
+    check("〔AI草案〕" in n2 and "#1 試験の問題" in n2 and "Tx: 試験の処置" in n2, "the ticked A and P go in the note with the AI mark")
+    check("血液ガスの再検" not in n2, "an item not ticked stays out")
     # a failure: the time does not pass until the doctor tries again or goes on without the AI
     page.route("**/api/sim", lambda route: route.fulfill(status=502, content_type="application/json", body=json.dumps({"error": "試験の失敗です", "code": "upstream"})))
     clock0 = dlg.locator(".sim-clock").inner_text()

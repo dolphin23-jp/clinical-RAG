@@ -49,7 +49,7 @@ export const FACT_ENTS = ["observation", "context", "condition"];
 export const READING_ENTS = ["assessment", "reason", "none", "action"];
 
 const TOP_KEYS = ["v", "flow", "schema", "patient", "clock", "opening", "states", "orders", "moves", "assumed", "cont", "origin"];
-const EVAL_RE = /適切|不適切|正解|誤り|間違い|べき|見逃し|遅れ|遅い|不十分|妥当|望ましい|良い対応|悪い対応/;
+export const EVAL_RE = /適切|不適切|正解|誤り|間違い|べき|見逃し|遅れ|遅い|不十分|妥当|望ましい|良い対応|悪い対応/;
 const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const str = (x) => typeof x === "string" && x.trim() !== "";
 

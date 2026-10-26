@@ -21,7 +21,29 @@ export function fakeSim(body: any): Response {
   const fact = (q: any, v = val(q)) => ({ q: q.id, v, who: who(q)[0], how: who(q)[1] });
   const sources: string[] = [...user.matchAll(/^\[([^\]]+)\] /gm)].map((m) => m[1]);
   let out: any;
-  if (props.assumed) {
+  // the next acts as an example: an item and an order of the flow when it has them
+  const has = (id: string) => qs.some((q: any) => q.id === id);
+  const suggest = [
+    ...(has("limbs") ? [{ act: "ask", target: "limbs", why: "末梢の冷感から循環の状態を確かめる" }] : []),
+    ...(has("tests") ? [{ act: "do", target: "tests=vbg", why: "乳酸と酸塩基を確かめる" }] : []),
+    ...(has("first") ? [{ act: "ask", target: "first", why: "読みの質問は挙げない（画面が捨てる）" }] : []),
+  ];
+  if (props.S) {
+    // the S/O/A/P draft: one number that is not in what the doctor was told (9.9), so the screen's mark can be seen
+    out = {
+      S: ["救急隊: 試験用の報告（呼吸が速い）"],
+      O: ["呼吸数 30 回/分", "乳酸 9.9 mmol/L"],
+      A: [{ problem: "#1 試験の問題", assessment: "試験の評価の文 [推論]" }],
+      P: [
+        { kind: "Dx", text: "血液ガスの再検（予定・検討）" },
+        { kind: "Tx", text: "試験の処置（予定・検討）" },
+        { kind: "Ex", text: "家族へ経過を説明（予定・検討）" },
+      ],
+      disposition: "未決定（試験の行き先）",
+    };
+  } else if (props.suggest && !props.assumed && !props.event_text) {
+    out = { suggest };
+  } else if (props.assumed) {
     const leak = /__leak__/.test(user) && !/<repair>/.test(user);
     const copy = /__copy__/.test(user) ? (/\] [^\n]*\n([^\n]{40,})/.exec(user)?.[1].slice(0, 45) ?? "") : "";
     const facts = qs.filter((q: any) => q.kind === "fact" && !q.afterAct).map((q: any) => fact(q));
@@ -35,6 +57,7 @@ export function fakeSim(body: any): Response {
       orders,
       assumed: { dx: ["試験用の想定診断"], ddx: ["試験用の鑑別"], key: facts.slice(0, 1).map((f: any) => f.q), pitfall: "試験用の落とし穴。", lesson: "試験用の教訓。" },
       used: sources.slice(0, 2),
+      suggest,
     };
   } else if (props.event_text) {
     const fluids = /細胞外液の負荷[^\n]*：/.test(user);
@@ -44,6 +67,7 @@ export function fakeSim(body: any): Response {
       event_who: "看護師",
       event_text: fluids ? "試験用の出来事: 呼吸が落ち着いてきました。" : "試験用の出来事: 呼びかけへの反応が鈍くなりました。",
       basis: sources.slice(0, 1),
+      suggest,
     };
   } else {
     const want: string[] = props.facts.items.properties.q.enum;

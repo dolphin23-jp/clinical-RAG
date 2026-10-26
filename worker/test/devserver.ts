@@ -77,7 +77,7 @@ export const fakeAnthropic = (async (_url: any, init: any) => {
   if (body.output_config?.format?.type === "json_schema") {
     if (/__apierror__/.test(body.messages[0].content)) return new Response(JSON.stringify({ error: { type: "overloaded_error", message: "overloaded (fake)" } }), { status: 529 });
     const props = body.output_config.format.schema.properties;
-    if (props.assumed || props.event_text || (props.facts && !props.proposals)) return fakeSim(body);
+    if (props.assumed || props.event_text || props.suggest || props.S || (props.facts && !props.proposals)) return fakeSim(body);
     return fakeExtract(body);
   }
   const web = (body.tools ?? []).some((t: any) => t.name === "web_search");
