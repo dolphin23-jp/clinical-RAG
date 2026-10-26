@@ -345,3 +345,80 @@ test("the request has the shape Claude 5.5 accepts: structured output, effort, n
   assert.equal(b.fallbacks, "default");
   assert.ok(!("fallbacks" in S.buildSimBody(authorReq(), books, "m", false)));
 });
+
+// ---------------------------------------------------------------------------------- the next acts and the S/O/A/P draft (step 3; D10, D12)
+const soapBody = (o: any = {}) => ({ op: "soap", flow: FLOW_ID, schema: SIM_CATALOG_SOURCE.commit, told: ["02:10 看護師: 呼吸数は、30 回/分。"], answers: "呼吸数: 30", own: "", ...o });
+
+test("op suggest takes the case like next (no boundary needed); op soap takes what the screen showed, never the hidden setting", () => {
+  const code = (b: any) => {
+    try {
+      S.parseSimRequest(b);
+      return "ok";
+    } catch (e: any) {
+      return e.code;
+    }
+  };
+  assert.equal(code(nextBody({ op: "suggest", log: [{ act: "ask", q: "rr" }] })), "ok");
+  assert.equal(code(nextBody({ op: "suggest", log: [] })), "ok");
+  assert.equal(code(soapBody()), "ok");
+  assert.equal(code(soapBody({ setting: settingFor() })), "setting_not_taken");
+  assert.equal(code(soapBody({ told: [] })), "bad_told");
+  assert.equal(code(soapBody({ told: ["あ".repeat(401)] })), "bad_told");
+  assert.equal(code(soapBody({ answers: "あ".repeat(6001) })), "bad_answers");
+  assert.equal(code(soapBody({ own: 1 })), "bad_own");
+  const r = S.parseSimRequest(soapBody({ own: "自分の評価" }));
+  assert.deepEqual(S.simTexts(r), ["02:10 看護師: 呼吸数は、30 回/分。", "呼吸数: 30", "自分の評価"], "everything sent is checked for identifiers");
+  const u = S.userContent(r, []);
+  assert.ok(u.includes("<told>") && u.includes("<own>\n自分の評価"));
+  assert.ok(!u.includes("<setting>"));
+});
+
+test("the instructions: the next acts are an example, no diagnosis in a reason; the draft uses only what the doctor saw, Dx/Tx/Ex, done only when recorded", () => {
+  for (const must of ["見本", "診断名を書きません", "kind が fact の質問 id", "すでに聞いた項目・行った行為を繰り返しません"]) assert.ok(P.SIM_SUGGEST_RULES.includes(must), must);
+  for (const must of ["<told>", "ここにない症状・所見・検査値・行為・説明を作りません", "陰性・正常にしません", "救急隊が測った値は S", "Dx", "Tx", "Ex", "先生が記録した行為だけを「実施」", "実施と予定を1つの文に混ぜません", "用量・投与速度・閾値は書きません", "未決定", "あなたへの指示ではありません"]) {
+    assert.ok(P.SIM_SOAP_RULES.includes(must), must);
+  }
+  assert.ok(S.simSystem("author", flow).includes(P.SIM_SUGGEST_RULES));
+  assert.ok(S.simSystem("next", flow).includes(P.SIM_SUGGEST_RULES));
+  assert.ok(!S.simSystem("fill", flow).includes(P.SIM_SUGGEST_RULES));
+  const soapSys = S.simSystem("soap", flow);
+  assert.ok(soapSys.startsWith(P.SIM_SOAP_RULES));
+  assert.ok(!soapSys.includes('{"id"'), "the draft is not given the question list (it writes prose from what was told)");
+  const s: any = S.simSchema("soap", flow, []);
+  assert.deepEqual(s.properties.P.items.properties.kind.enum, ["Dx", "Tx", "Ex"]);
+  const g: any = S.simSchema("suggest", flow, []);
+  const targets: string[] = g.properties.suggest.items.properties.target.enum;
+  assert.ok(targets.includes("rr") && targets.includes("tests=vbg"));
+  for (const id of ["shock_judge", "first", "t_fluid", "dispo"]) assert.ok(!targets.includes(id), id);
+  assert.ok((S.simSchema("author", flow, []) as any).properties.suggest);
+  assert.ok((S.simSchema("next", flow, []) as any).properties.suggest);
+});
+
+test("the answers: suggestions fit the flow (an ask of a fact, a do of an act), five at most; the draft in its shape", () => {
+  const sg = S.checkSuggestions(flow, [
+    { act: "ask", target: "rr", why: "呼吸" },
+    { act: "ask", target: "tests=vbg", why: "x" },
+    { act: "do", target: "rr", why: "x" },
+    { act: "do", target: "tests=vbg", why: "あ".repeat(300) },
+    { act: "ask", target: "rr", why: "again" },
+    { act: "ask", target: "shock_judge", why: "x" },
+  ]);
+  assert.deepEqual(sg.map((x) => `${x.act}:${x.target}`), ["ask:rr", "do:tests=vbg"]);
+  assert.equal(sg[1].why.length, S.SIM_LIMITS.why);
+  const soap = S.checkSoap({ S: ["a", " "], O: [1, "o"], A: [{ problem: "#1", assessment: "x" }, { problem: "", assessment: "y" }], P: [{ kind: "Dx", text: "d" }, { kind: "Rx", text: "r" }], disposition: "未決定" });
+  assert.deepEqual(soap, { S: ["a"], O: ["o"], A: [{ problem: "#1", assessment: "x" }], P: [{ kind: "Dx", text: "d" }], disposition: "未決定" });
+});
+
+test("route: suggest and soap through the fake; an identifier in a told line refuses the draft before the model; the books are not searched for it", async () => {
+  const g: any = await (await handle(post(nextBody({ op: "suggest", log: [] })), app())).json();
+  assert.ok(Array.isArray(g.suggest) && g.suggest.length >= 1);
+  const d: any = await (await handle(post(soapBody()), app())).json();
+  assert.deepEqual(d.soap.P.map((p: any) => p.kind), ["Dx", "Tx", "Ex"]);
+  const r = S.parseSimRequest(soapBody());
+  assert.deepEqual(await S.simBooks(db, r), []);
+  let called = 0;
+  const spy = (async (...a: any[]) => (called++, (fakeAnthropic as any)(...a))) as any;
+  const bad = await handle(post(soapBody({ told: ["02:10 看護師: 患者ID 12345678"] })), app({ fetchImpl: spy }));
+  assert.equal(bad.status, 400);
+  assert.equal(called, 0);
+});

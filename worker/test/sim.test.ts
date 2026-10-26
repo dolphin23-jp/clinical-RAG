@@ -363,7 +363,7 @@ test("screen model: a pasted setting is read, checked, and only an emergency flo
 
 test("the simulation's screen modules send nothing, keep nothing in the browser and write no HTML", () => {
   for (const [file, imports] of [
-    ["sim-model.js", ["./sim-case.js", "./sim-engine.js", "./intake.js"]],
+    ["sim-model.js", ["./sim-case.js", "./sim-engine.js", "./intake.js", "./case-create.js"]],
     ["sim-ui.js", ["./sim-case.js", "./sim-engine.js", "./sim-model.js", "./extract-model.js", "./note-assemble.js", "./intake.js", "./id-guard.js"]],
   ] as const) {
     const src = readFileSync(web(file), "utf-8");
@@ -512,4 +512,65 @@ test("the check of continuations: shape, sections of the setting only, one per a
   assert.equal(b.cont, undefined);
   assert.deepEqual(b.states.map((x: any) => x.id), ["s0", "s1", "s2"]);
   assert.deepEqual(play(log, b), play(log, aiSetting()));
+});
+
+// ---------------------------------------------------------------------------------- the next acts and the S/O/A/P draft (step 3; D10, D12)
+test("the AI's next acts: only what can be taken now; a reason that names the diagnosis or holds a dose is left out, the act stays", () => {
+  const s = aiSetting();
+  const list = [
+    { act: "ask", target: "rr", why: "呼吸の状態を確かめる" },
+    { act: "ask", target: "shock_judge", why: "読みは挙げない" },
+    { act: "ask", target: "vbg_lactate", why: "結果は返ってから" },
+    { act: "do", target: "tests=vbg", why: "敗血症性ショックを確かめる" },
+    { act: "do", target: "fluid=given", why: "輸液 500 mL を入れる" },
+    { act: "do", target: "nope=x", why: "" },
+    { act: "ask", target: "limbs", why: "対応が遅れないように" },
+  ];
+  const u = SM.usableSuggestions(list, s, V.flow, [], readings);
+  assert.deepEqual(u.map((x: any) => x.q ?? x.key), ["rr", "tests=vbg", "fluid=given", "limbs"]);
+  assert.equal(u[0].why, "呼吸の状態を確かめる");
+  assert.equal(u[1].why, "", "the assumed diagnosis is not shown");
+  assert.equal(u[2].why, "", "a dose is not shown");
+  assert.equal(u[3].why, "", "an evaluation word is not shown");
+  // what was already asked or recorded is not offered again
+  const after = SM.usableSuggestions(list, s, V.flow, [{ act: "ask", q: "rr" }, { act: "do", key: "tests=vbg" }], readings);
+  assert.deepEqual(after.map((x: any) => x.q ?? x.key), ["fluid=given", "limbs"]);
+});
+
+test("the S/O/A/P draft is checked against what the doctor was told: identifiers, dates, doses and thresholds out; a new number marked", () => {
+  const draft = SM.checkSoapDraft(
+    {
+      S: ["救急隊: 呼吸が速い", "患者ID 12345678 の報告"],
+      O: ["呼吸数 30 回/分", "乳酸 9.9 mmol/L", "2026年10月1日の採血"],
+      A: [{ problem: "#1 ショック", assessment: "末梢冷感と呼吸数 30 から循環不全を考える [推論]" }, { problem: "#2 試験", assessment: "ノルアドレナリン 0.1 μg/kg/分 で開始" }],
+      P: [{ kind: "Dx", text: "血液ガスの再検（予定・検討）" }, { kind: "Tx", text: "輸液（予定・検討）" }, { kind: "Zz", text: "x" }],
+      disposition: "未決定",
+    },
+    ["02:10 看護師: 呼吸数は、30 回/分。"],
+  );
+  assert.deepEqual(draft.S, ["救急隊: 呼吸が速い"]);
+  assert.deepEqual(draft.O, ["呼吸数 30 回/分", `乳酸 9.9 mmol/L ${SM.NUMBER_FLAG}`]);
+  assert.equal(draft.A.length, 1, "an item with a dose is left out");
+  assert.deepEqual(draft.P.map((p: any) => p.kind), ["Dx", "Tx"]);
+  assert.deepEqual(draft.left, { identifier: 1, date: 1, dose: 1, threshold: 0 });
+  assert.equal(draft.flagged, 1);
+  // only the ticked parts become note items, as the note's roles
+  assert.deepEqual(SM.soapItems(draft, new Set()), []);
+  const items = SM.soapItems(draft, new Set(["A0", "P1"]));
+  assert.deepEqual(items.map((i: any) => [i.role, i.text]), [
+    ["problems", "#1 ショック"],
+    ["assessment", "#1 ショック: 末梢冷感と呼吸数 30 から循環不全を考える [推論]"],
+    ["plan", "Tx: 輸液（予定・検討）"],
+  ]);
+  assert.deepEqual(SM.soapChoices(draft).map((c: any) => c.id), ["A0", "P0", "P1"]);
+});
+
+test("the told lines for the draft are what the screen showed (no refusal, no hidden value, no state id)", () => {
+  const s = aiSetting();
+  const r = play([{ act: "ask", q: "rr" }, { act: "ask", q: "shock_judge" }, { act: "wait" }], s);
+  const lines = SM.toldLines(s, V.flow, r.records, 10);
+  assert.ok(lines.some((l: string) => l.includes("呼吸数")));
+  assert.ok(!lines.some((l: string) => l.includes("先生が選ぶ項目")), "a refusal is not sent");
+  const json = JSON.stringify(lines);
+  assert.ok(!json.includes("s1") && !json.includes(s.assumed.dx[0]));
 });
