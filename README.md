@@ -57,7 +57,7 @@ ingest/      Markdown → 検証 → SQLite（Python 3.11+、PyYAML のみ）
 schema.sql   テーブルと FTS5 定義
 worker/      Cloudflare Worker（TypeScript）と Node 製テスト
   src/       handler / anthropic(ツールループ) / search / format / prompt(システムプロンプト) / db / tokenize
-  test/      node:test（440件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
+  test/      node:test（449件）、devserver.ts（偽 Anthropic でのローカル画面確認用）
 web/         PWA（ビルド不要、外部ライブラリ無し）
 eval/        評価（run_eval.ts 検索・run_ask_eval.ts 回答・lib.ts、clinical.template.jsonl、smoke 22問）。手順は docs/evaluation.md
 scripts/     prepare_pages.py（PDF → 頁 WebP）、import_ebooktextstudio.py（OCR 本の一括取り込み）、sample_numeric.py（数値の転写誤り率の作業表と集計）
@@ -144,7 +144,7 @@ cd worker && sh ../upload.sh
 ### 5. ローカル確認
 
 ```bash
-cd worker && node --test test/*.test.ts            # TS テスト（440件）
+cd worker && node --test test/*.test.ts            # TS テスト（449件）
 python3 -m unittest discover -s tests -p 'test_ingest.py'
 npx tsc --noEmit
 # 画面確認（偽の Anthropic で動く。課金なし）
@@ -162,6 +162,7 @@ python3 tests/e2e/ui_casebook.py http://localhost:8787 /tmp/ucasebook # Casebook
 python3 tests/e2e/ui_record.py http://localhost:8787 /tmp/urecord # 症例の記録（時間軸・引き継ぎ・問題の板・A05・経過・A06〜A08・自動保存・版の競合・終える）
 python3 tests/e2e/ui_scene.py http://localhost:8787 /tmp/uscene   # 場面別の草案・記録の要約・問題ごとの書籍の根拠（要約は送る前に見える・会話に残らない・頁は先生が残す）
 python3 tests/e2e/ui_outpatient.py http://localhost:8787 /tmp/uoutpatient # 外来の記録（初診／再診から・前回の方針を貼る・基準日からの日数・再診の記載 A02・Casebook には出ない）
+python3 tests/e2e/ui_sim.py http://localhost:8787 /tmp/usim         # 架空症例の模擬（試験用の設定・聞く／行為／待つ／段・受け皿は入れるまで入らない・A04・振り返りは並べるだけ・何も送らず保存しない）
 # 記載の型と、その欄への振り分け表 ROUTES を取り込み直す（clinical-modules のチェックアウトから。--check で差があれば終了コード1）
 python3 scripts/import_note_types.py --modules ../clinical-modules
 # 場面・症候の質問の構造と、各質問のカテゴリ cat を取り込み直す（同上。規則・鑑別は取り込まない）
@@ -184,7 +185,7 @@ npx wrangler dev --local
 
 **確認したこと**
 - 実際の1章（67頁・約9.9万字・254チャンク）の取り込み: 頁帰属（頁なし0件）、節と著者の対応（13/13）、参照文献 82 件（PMID 40）、図・表・転写者補助の分離。
-- Python 94 件・TypeScript 440 件のテスト、型チェック（2026-10-26 に手元で再実行）。`wrangler deploy --dry-run`（設定とバンドル）は 2026-10-24 時点。
+- Python 94 件・TypeScript 449 件のテスト、型チェック（2026-10-26 に手元で再実行）。`wrangler deploy --dry-run`（設定とバンドル）は 2026-10-24 時点。
 - 入力ガード・常時表示の帯・縮退の画面（`tests/e2e/ui_clinical.py` の 27 項目。合成の書籍と偽の API。Chromium の iPhone 幅）。
 - 偽の Anthropic API を相手にしたツールループ（分割到着する SSE、引用→頁の対応づけ、検索回数上限、API エラーの伝播と鍵の非漏洩）。
 - Chromium（iPhone 幅・ダーク）での画面操作 29 項目（認証、ストリーミング、表・太字・箇条書き、引用チップ、根拠シート、節全文、頁画像、Web 引用、エラー、中止、CSP 違反なし）。

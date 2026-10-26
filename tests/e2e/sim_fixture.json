@@ -1,0 +1,164 @@
+{
+ "_note": "e2e 用の試験の設定。実在の患者でも臨床の中身でもない（値は動作を確かめるための例）。訓練には使わない（docs/clinical-use.md の 1h の6）。",
+ "setting": {
+  "v": 1,
+  "flow": "emergency-department.shock",
+  "schema": "e2e",
+  "patient": {
+   "age": 68,
+   "sex": "男性"
+  },
+  "clock": {
+   "start": "02:10"
+  },
+  "opening": [
+   {
+    "who": "救急隊",
+    "text": "試験用の導入文です（実在の患者ではありません）。"
+   }
+  ],
+  "states": [
+   {
+    "id": "s0",
+    "facts": [
+     {
+      "q": "ems_cc",
+      "v": "shock",
+      "who": "救急隊",
+      "how": "問診"
+     },
+     {
+      "q": "rr",
+      "v": 30,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "spo2",
+      "v": 92,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "limbs",
+      "v": "cold",
+      "who": "患者",
+      "how": "診察"
+     },
+     {
+      "q": "consc",
+      "v": "restless",
+      "who": "患者",
+      "how": "診察"
+     },
+     {
+      "q": "skin",
+      "v": [
+       "pale"
+      ],
+      "who": "患者",
+      "how": "診察"
+     },
+     {
+      "q": "mods",
+      "v": [
+       "none"
+      ],
+      "who": "家族",
+      "how": "問診"
+     },
+     {
+      "q": "vbg_res",
+      "v": [
+       "lactate_high"
+      ],
+      "who": "検査",
+      "how": "検査"
+     },
+     {
+      "q": "lactate",
+      "v": 4.2,
+      "who": "検査",
+      "how": "検査"
+     }
+    ]
+   },
+   {
+    "id": "s1",
+    "facts": [
+     {
+      "q": "rr",
+      "v": 24,
+      "who": "看護師",
+      "how": "測定"
+     }
+    ],
+    "event": {
+     "who": "看護師",
+     "text": "試験用の出来事: 呼吸が落ち着いてきました。"
+    }
+   },
+   {
+    "id": "s2",
+    "facts": [
+     {
+      "q": "rr",
+      "v": 34,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "lactate",
+      "v": 5.1,
+      "who": "検査",
+      "how": "検査"
+     }
+    ],
+    "event": {
+     "who": "看護師",
+     "text": "試験用の出来事: 呼びかけへの反応が鈍くなりました。"
+    }
+   }
+  ],
+  "orders": [
+   {
+    "order": "tests=vbg",
+    "results": [
+     "vbg_res",
+     "lactate"
+    ]
+   }
+  ],
+  "moves": [
+   {
+    "from": "s0",
+    "to": "s1",
+    "if_done": "fluid=given",
+    "at": "next",
+    "basis": [
+     "e2e:ch01:A"
+    ]
+   },
+   {
+    "from": "s0",
+    "to": "s2",
+    "if_not_done": "fluid=given",
+    "at": "enter:reassess",
+    "basis": []
+   }
+  ],
+  "assumed": {
+   "dx": [
+    "試験用の想定診断"
+   ],
+   "ddx": [
+    "試験用の鑑別"
+   ],
+   "key": [
+    "limbs"
+   ],
+   "pitfall": "試験用の落とし穴。",
+   "lesson": "試験用の教訓。"
+  }
+ }
+}

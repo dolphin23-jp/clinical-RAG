@@ -158,6 +158,7 @@
       <button type="button" id="case-pin" class="btn primary">この症例を固定する</button>
       <button type="button" id="case-clear" class="btn">症例を外す</button>
       <button type="button" id="case-create" class="btn">書籍から架空症例を作る…</button>
+      <button type="button" id="case-sim" class="btn">架空症例の模擬（試作）…</button>
     </div>
   </div>
 </dialog>
@@ -201,6 +202,17 @@
       <button type="button" class="btn" data-close>閉じる</button>
     </div>
   </div>
+</dialog>
+
+<dialog id="sim" aria-labelledby="sim-title">
+  <p class="band" role="note">参考情報・患者を特定する情報は入れない・最終判断は医師</p>
+  <div class="sheet-head">
+    <h2 id="sim-title">架空症例の模擬（試作）</h2>
+    <button type="button" class="icon-btn" data-close aria-label="閉じる">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sheet-body" id="sim-body"></div>
 </dialog>
 
 <dialog id="note" aria-labelledby="note-title">
