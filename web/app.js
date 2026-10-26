@@ -1,9 +1,10 @@
 import { buildAnswerMarkdown } from "./answer-marks.js";
 import { initCase } from "./case.js";
 import { initCreate } from "./create-ui.js";
+import { maskStreaming } from "./case-create.js";
 import { initNotes } from "./note-ui.js";
 import { initRecords } from "./record-ui.js";
-import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseSummary, caseTexts, cleanCase, cleanCreate, createRows } from "./case-model.js";
+import { CREATE_LABEL, MODES, caseForServer, caseKey, caseRows, caseSummary, caseTexts, cleanCase, cleanCreate, createRows, recentHistory } from "./case-model.js";
 import { SCENE_LABELS, briefNeed, isScene } from "./draft-scenes.js";
 import { scan as scanIdentifiers } from "./id-guard.js";
 import { CITE_CLOSE, CITE_OPEN, renderMarkdown, stripCiteMarks } from "./md.js";
@@ -67,7 +68,7 @@ const S = {
     }
   })(),
   books: [],
-  history: [], // [{q, a, ack}] plain text sent back to the model as context
+  history: [], // [{q, a, ack, mode}] plain text sent back to the model as context (not the turns that made a fictional case: recentHistory)
   convId: null, // id of the conversation being saved to the server (set at the first saved turn)
   caseAckKey: "", // the case whose identifier-like words the doctor already confirmed in this tab (caseKey)
   busy: false,
@@ -475,7 +476,7 @@ function renderStreaming(turn) {
     turn.queued = false;
     if (turn.done) return; // the final (citation-annotated) render must never be overwritten by a late streaming tick
     turn.last = performance.now();
-    turn.body.replaceChildren(renderMarkdown(turn.raw));
+    turn.body.replaceChildren(renderMarkdown(turn.mode === "create" ? maskStreaming(turn.raw) : turn.raw));
   }, wait);
 }
 
@@ -599,7 +600,7 @@ function finish(turn, ev) {
       .join("");
     creator.decorate(turn, ev);
   }
-  S.history.push({ q: turn.question, a: turn.answer, ack: turn.ack });
+  S.history.push({ q: turn.question, a: turn.answer, ack: turn.ack, mode: turn.mode ?? "" });
   conv.saveTurn(turn, { kind: "final", blocks: ev.blocks, sources: [...turn.sources.values()], numbers: ev.numbers || [], usage: ev.usage, stop_reason: ev.stop_reason, searched_books: ev.searched_books, turns: ev.turns, ...(ev.overlap ? { overlap: ev.overlap } : {}), ...casePayload(turn) });
 }
 
@@ -673,7 +674,7 @@ function degrade(turn, ev) {
   for (const s of ev.items) if (!turn.sources.has(s.source)) turn.sources.set(s.source, s);
   renderHits(turn, new Set(), true);
   turn.foot.append(turn.saveNote);
-  if (turn.raw) S.history.push({ q: turn.question, a: turn.raw, ack: turn.ack });
+  if (turn.raw) S.history.push({ q: turn.question, a: turn.raw, ack: turn.ack, mode: turn.mode ?? "" });
   conv.saveTurn(turn, { kind: "degraded", message: ev.message, items: ev.items, raw: turn.raw, ...casePayload(turn) });
 }
 
@@ -750,7 +751,7 @@ async function ask(question, ack = false, mode = null, create = null, extra = {}
   S.ctrl = new AbortController();
 
   const history = [];
-  const recent = S.history.slice(-4);
+  const recent = recentHistory(S.history); // a created case's own answer is not sent back as history (it holds the solution)
   for (const h of recent) history.push({ role: "user", text: h.q }, { role: "assistant", text: h.a.slice(0, 6000) });
   // an earlier question the doctor confirmed is re-sent as history, so the confirmation travels with it
   const acked = ack || recent.some((h) => h.ack);

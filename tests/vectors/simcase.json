@@ -1,0 +1,899 @@
+{
+ "_note": "試験用の仮のフローと設定。臨床の中身ではない（値は動作を確かめるための例）。web/sim-case.js・web/sim-engine.js が通す。Worker の双子（段2）も同じベクトルを通す。",
+ "flow": {
+  "id": "fixture.sim",
+  "title": "試験用の仮のフロー（実在のフローではない）",
+  "phases": [],
+  "defs": {},
+  "origin": {
+   "q": "t_arrival",
+   "label": "病着"
+  },
+  "questions": [
+   {
+    "id": "t_arrival",
+    "slot": 1,
+    "label": "病着時刻",
+    "type": "time",
+    "br": {
+     "ent": "time"
+    }
+   },
+   {
+    "id": "cc",
+    "slot": 1,
+    "label": "主訴",
+    "type": "text",
+    "br": {
+     "ent": "context"
+    }
+   },
+   {
+    "id": "pmh",
+    "slot": 1,
+    "label": "既往",
+    "type": "multi",
+    "br": {
+     "ent": "context"
+    },
+    "options": [
+     {
+      "id": "htn",
+      "label": "htn"
+     },
+     {
+      "id": "dm",
+      "label": "dm"
+     },
+     {
+      "id": "none",
+      "label": "none"
+     }
+    ],
+    "exclusive": [
+     "none"
+    ]
+   },
+   {
+    "id": "allergy",
+    "slot": 1,
+    "label": "アレルギー",
+    "type": "choice",
+    "br": {
+     "ent": "context"
+    },
+    "options": [
+     {
+      "id": "none",
+      "label": "none"
+     },
+     {
+      "id": "drug",
+      "label": "drug"
+     }
+    ]
+   },
+   {
+    "id": "rr",
+    "slot": 1,
+    "label": "呼吸数",
+    "type": "number",
+    "br": {
+     "ent": "observation"
+    },
+    "unit": "回/分"
+   },
+   {
+    "id": "spo2",
+    "slot": 1,
+    "label": "SpO2",
+    "type": "number",
+    "br": {
+     "ent": "observation"
+    },
+    "unit": "%"
+   },
+   {
+    "id": "limbs",
+    "slot": 1,
+    "label": "四肢の所見",
+    "type": "choice",
+    "br": {
+     "ent": "observation"
+    },
+    "options": [
+     {
+      "id": "warm",
+      "label": "warm"
+     },
+     {
+      "id": "cold",
+      "label": "cold"
+     }
+    ]
+   },
+   {
+    "id": "consc",
+    "slot": 1,
+    "label": "意識",
+    "type": "choice",
+    "br": {
+     "ent": "observation"
+    },
+    "options": [
+     {
+      "id": "alert",
+      "label": "alert"
+     },
+     {
+      "id": "drowsy",
+      "label": "drowsy"
+     }
+    ]
+   },
+   {
+    "id": "tests",
+    "slot": 1,
+    "label": "出した検査",
+    "type": "multi",
+    "br": {
+     "ent": "action"
+    },
+    "options": [
+     {
+      "id": "vbg",
+      "label": "vbg"
+     },
+     {
+      "id": "ecg",
+      "label": "ecg"
+     },
+     {
+      "id": "none",
+      "label": "none"
+     }
+    ],
+    "exclusive": [
+     "none"
+    ]
+   },
+   {
+    "id": "fluid",
+    "slot": 1,
+    "label": "輸液",
+    "type": "choice",
+    "br": {
+     "ent": "action"
+    },
+    "options": [
+     {
+      "id": "given",
+      "label": "given"
+     },
+     {
+      "id": "held",
+      "label": "held"
+     }
+    ]
+   },
+   {
+    "id": "vbg_lactate",
+    "slot": 1,
+    "label": "乳酸",
+    "type": "number",
+    "br": {
+     "ent": "observation"
+    },
+    "when": "tests=vbg"
+   },
+   {
+    "id": "rr_after",
+    "slot": 1,
+    "label": "輸液後の呼吸数",
+    "type": "number",
+    "br": {
+     "ent": "observation"
+    },
+    "when": "fluid=given"
+   },
+   {
+    "id": "fluid_resp",
+    "slot": 1,
+    "label": "輸液への反応",
+    "type": "choice",
+    "br": {
+     "ent": "observation"
+    },
+    "options": [
+     {
+      "id": "better",
+      "label": "better"
+     },
+     {
+      "id": "same",
+      "label": "same"
+     },
+     {
+      "id": "worse",
+      "label": "worse"
+     }
+    ],
+    "when": "fluid=given"
+   },
+   {
+    "id": "shock_judge",
+    "slot": 1,
+    "label": "ショックの判断",
+    "type": "choice",
+    "br": {
+     "ent": "assessment"
+    },
+    "options": [
+     {
+      "id": "shock",
+      "label": "shock"
+     },
+     {
+      "id": "noshock",
+      "label": "noshock"
+     }
+    ]
+   },
+   {
+    "id": "dispo",
+    "slot": 1,
+    "label": "行き先",
+    "type": "choice",
+    "br": {
+     "ent": "none"
+    },
+    "options": [
+     {
+      "id": "home",
+      "label": "home"
+     },
+     {
+      "id": "admit",
+      "label": "admit"
+     }
+    ]
+   }
+  ]
+ },
+ "readings": [
+  "fluid_resp"
+ ],
+ "valid": {
+  "v": 1,
+  "flow": "fixture.sim",
+  "schema": "fixture",
+  "patient": {
+   "age": 70,
+   "sex": "男性"
+  },
+  "clock": {
+   "start": "02:10"
+  },
+  "opening": [
+   {
+    "who": "救急隊",
+    "text": "高熱とぐったりした様子で搬送されました。"
+   }
+  ],
+  "states": [
+   {
+    "id": "s0",
+    "facts": [
+     {
+      "q": "cc",
+      "v": "発熱とだるさ",
+      "who": "家族",
+      "how": "問診"
+     },
+     {
+      "q": "pmh",
+      "v": [
+       "htn"
+      ],
+      "who": "患者",
+      "how": "問診"
+     },
+     {
+      "q": "allergy",
+      "v": "none",
+      "who": "患者",
+      "how": "問診"
+     },
+     {
+      "q": "rr",
+      "v": 28,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "spo2",
+      "v": 93,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "limbs",
+      "v": "warm",
+      "who": "患者",
+      "how": "診察"
+     },
+     {
+      "q": "consc",
+      "v": "alert",
+      "who": "患者",
+      "how": "診察"
+     },
+     {
+      "q": "vbg_lactate",
+      "v": 3.9,
+      "who": "検査",
+      "how": "検査"
+     }
+    ]
+   },
+   {
+    "id": "s1",
+    "facts": [
+     {
+      "q": "rr",
+      "v": 22,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "rr_after",
+      "v": 20,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "vbg_lactate",
+      "v": 2.1,
+      "who": "検査",
+      "how": "検査"
+     }
+    ],
+    "event": {
+     "who": "看護師",
+     "text": "呼吸が少し楽になった様子です。"
+    }
+   },
+   {
+    "id": "s2",
+    "facts": [
+     {
+      "q": "rr",
+      "v": 32,
+      "who": "看護師",
+      "how": "測定"
+     },
+     {
+      "q": "limbs",
+      "v": "cold",
+      "who": "患者",
+      "how": "診察"
+     },
+     {
+      "q": "consc",
+      "v": "drowsy",
+      "who": "患者",
+      "how": "診察"
+     }
+    ],
+    "event": {
+     "who": "看護師",
+     "text": "呼びかけへの反応が鈍くなっています。"
+    }
+   }
+  ],
+  "orders": [
+   {
+    "order": "tests=vbg",
+    "results": [
+     "vbg_lactate"
+    ]
+   }
+  ],
+  "moves": [
+   {
+    "from": "s0",
+    "to": "s1",
+    "if_done": "fluid=given",
+    "at": "next",
+    "basis": [
+     "fx:ch01:A"
+    ]
+   },
+   {
+    "from": "s0",
+    "to": "s2",
+    "if_not_done": "fluid=given",
+    "at": "enter:reassess",
+    "basis": []
+   }
+  ],
+  "assumed": {
+   "dx": [
+    "敗血症性ショック"
+   ],
+   "ddx": [
+    "出血性ショック"
+   ],
+   "key": [
+    "limbs"
+   ],
+   "pitfall": "最初の印象で落ち着いて見える。",
+   "lesson": "所見の変化を、時間を追って確かめる。"
+  }
+ },
+ "mutations": [
+  {
+   "name": "a reading (the shock judgment) has no value",
+   "code": "reading_value",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts"
+     ],
+     "push": {
+      "q": "shock_judge",
+      "v": "shock",
+      "who": "患者",
+      "how": "問診"
+     }
+    }
+   ]
+  },
+  {
+   "name": "a reading named by the caller has no value",
+   "code": "reading_value",
+   "ops": [
+    {
+     "path": [
+      "states",
+      1,
+      "facts"
+     ],
+     "push": {
+      "q": "fluid_resp",
+      "v": "better",
+      "who": "患者",
+      "how": "問診"
+     }
+    }
+   ]
+  },
+  {
+   "name": "an act has no value",
+   "code": "reading_value",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts"
+     ],
+     "push": {
+      "q": "tests",
+      "v": [
+       "vbg"
+      ],
+      "who": "患者",
+      "how": "問診"
+     }
+    }
+   ]
+  },
+  {
+   "name": "the background does not change after s0",
+   "code": "background_changes",
+   "ops": [
+    {
+     "path": [
+      "states",
+      1,
+      "facts"
+     ],
+     "push": {
+      "q": "allergy",
+      "v": "drug",
+      "who": "患者",
+      "how": "問診"
+     }
+    }
+   ]
+  },
+  {
+   "name": "the setting holds no time question",
+   "code": "time_fact",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts"
+     ],
+     "push": {
+      "q": "t_arrival",
+      "v": "02:10",
+      "who": "患者",
+      "how": "問診"
+     }
+    }
+   ]
+  },
+  {
+   "name": "a value the question does not take (number)",
+   "code": "bad_value",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts",
+      3,
+      "v"
+     ],
+     "set": "abc"
+    }
+   ]
+  },
+  {
+   "name": "a value the question does not take (option)",
+   "code": "bad_value",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts",
+      5,
+      "v"
+     ],
+     "set": "hot"
+    }
+   ]
+  },
+  {
+   "name": "a value that only makes sense after an act is not in s0",
+   "code": "after_action_in_s0",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts"
+     ],
+     "push": {
+      "q": "rr_after",
+      "v": 20,
+      "who": "看護師",
+      "how": "測定"
+     }
+    }
+   ]
+  },
+  {
+   "name": "the diagnosis is not in the opening",
+   "code": "leak_dx",
+   "ops": [
+    {
+     "path": [
+      "opening",
+      0,
+      "text"
+     ],
+     "set": "敗血症性ショックの疑いで搬送されました。"
+    }
+   ]
+  },
+  {
+   "name": "an evaluation word is not in an event",
+   "code": "eval_word",
+   "ops": [
+    {
+     "path": [
+      "states",
+      1,
+      "event",
+      "text"
+     ],
+     "set": "対応が遅れています。"
+    }
+   ]
+  },
+  {
+   "name": "a date is not in a text",
+   "code": "date",
+   "ops": [
+    {
+     "path": [
+      "opening",
+      0,
+      "text"
+     ],
+     "set": "2026年10月3日から発熱しています。"
+    }
+   ]
+  },
+  {
+   "name": "a dose is not in a text",
+   "code": "dose",
+   "ops": [
+    {
+     "path": [
+      "states",
+      1,
+      "event",
+      "text"
+     ],
+     "set": "輸液500mLを開始しました。"
+    }
+   ]
+  },
+  {
+   "name": "a threshold is not in a text",
+   "code": "threshold",
+   "ops": [
+    {
+     "path": [
+      "states",
+      2,
+      "event",
+      "text"
+     ],
+     "set": "収縮期が90以下です。"
+    }
+   ]
+  },
+  {
+   "name": "an identifier is not in a text",
+   "code": "identifier",
+   "ops": [
+    {
+     "path": [
+      "opening",
+      0,
+      "text"
+     ],
+     "set": "患者ID 12345678 の方です。"
+    }
+   ]
+  },
+  {
+   "name": "a state nothing leads to",
+   "code": "unreachable",
+   "ops": [
+    {
+     "path": [
+      "states"
+     ],
+     "push": {
+      "id": "s3",
+      "facts": []
+     }
+    }
+   ]
+  },
+  {
+   "name": "a state that waits for an act has a natural way out",
+   "code": "no_natural_move",
+   "ops": [
+    {
+     "path": [
+      "moves",
+      1,
+      "if_not_done"
+     ],
+     "delete": true
+    },
+    {
+     "path": [
+      "moves",
+      1,
+      "if_done"
+     ],
+     "set": "fluid=held"
+    },
+    {
+     "path": [
+      "moves",
+      1,
+      "basis"
+     ],
+     "set": [
+      "fx:ch01:A"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "a move after an act needs a book section",
+   "code": "basis_missing",
+   "ops": [
+    {
+     "path": [
+      "moves",
+      0,
+      "basis"
+     ],
+     "set": []
+    }
+   ]
+  },
+  {
+   "name": "an unknown question",
+   "code": "unknown_q",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts"
+     ],
+     "push": {
+      "q": "nope",
+      "v": 1,
+      "who": "患者",
+      "how": "問診"
+     }
+    }
+   ]
+  },
+  {
+   "name": "a question without a value (coverage)",
+   "code": "coverage",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts",
+      5
+     ],
+     "delete": true
+    }
+   ],
+   "strict": true
+  },
+  {
+   "name": "too many states",
+   "code": "limit",
+   "ops": [
+    {
+     "path": [
+      "states"
+     ],
+     "push": {
+      "id": "s3",
+      "facts": []
+     }
+    },
+    {
+     "path": [
+      "states"
+     ],
+     "push": {
+      "id": "s4",
+      "facts": []
+     }
+    },
+    {
+     "path": [
+      "states"
+     ],
+     "push": {
+      "id": "s5",
+      "facts": []
+     }
+    },
+    {
+     "path": [
+      "states"
+     ],
+     "push": {
+      "id": "s6",
+      "facts": []
+     }
+    },
+    {
+     "path": [
+      "states"
+     ],
+     "push": {
+      "id": "s7",
+      "facts": []
+     }
+    }
+   ]
+  },
+  {
+   "name": "a setting without orders",
+   "code": "shape",
+   "ops": [
+    {
+     "path": [
+      "orders"
+     ],
+     "delete": true
+    }
+   ]
+  },
+  {
+   "name": "who is one of the known roles",
+   "code": "who",
+   "ops": [
+    {
+     "path": [
+      "states",
+      0,
+      "facts",
+      0,
+      "who"
+     ],
+     "set": "医師"
+    }
+   ]
+  },
+  {
+   "name": "an order is an act of the flow",
+   "code": "order",
+   "ops": [
+    {
+     "path": [
+      "orders",
+      0,
+      "order"
+     ],
+     "set": "fluid=nothing"
+    }
+   ]
+  },
+  {
+   "name": "a move enters a stage of the course",
+   "code": "move",
+   "ops": [
+    {
+     "path": [
+      "moves",
+      1,
+      "at"
+     ],
+     "set": "enter:nope"
+    }
+   ]
+  },
+  {
+   "name": "an unknown top key",
+   "code": "unknown_key",
+   "ops": [
+    {
+     "path": [
+      "extra"
+     ],
+     "set": 1
+    }
+   ]
+  },
+  {
+   "name": "the assumption is there",
+   "code": "assumed",
+   "ops": [
+    {
+     "path": [
+      "assumed"
+     ],
+     "delete": true
+    }
+   ]
+  }
+ ],
+ "logs": []
+}
