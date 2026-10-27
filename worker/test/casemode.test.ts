@@ -438,3 +438,30 @@ test("web/case-model.js: structured and intake — kept when well-formed, droppe
   // the same case with and without the form's answers is not the same case for the identifier acknowledgement
   assert.notEqual(web.caseKey(raw), web.caseKey({ ...raw, structured: `${STRUCTURED}\n追加` }));
 });
+
+// ---------------------------------------------------------------------------------- the fictional mark (enhancement-plan 8.21 stage 4)
+test("synthetic: a case may carry the fictional mark (true only); the model never sees it; web and Worker keep it alike", () => {
+  assert.equal(parseCase({ ...CASE, synthetic: true }).synthetic, true);
+  assert.ok(!("synthetic" in parseCase(CASE)));
+  assert.ok(!("synthetic" in parseCase({ ...CASE, synthetic: null })));
+  assert.throws(() => parseCase({ ...CASE, synthetic: "yes" }), CaseInputError);
+  assert.throws(() => parseCase({ ...CASE, synthetic: false }), CaseInputError);
+  assert.equal(renderCase(parseCase({ ...CASE, synthetic: true })), renderCase(parseCase(CASE)));
+  assert.equal(web.cleanCase({ ...CASE, synthetic: true }).synthetic, true);
+  assert.ok(!("synthetic" in web.cleanCase({ ...CASE, synthetic: "yes" })));
+  assert.equal(web.SYNTHETIC_MARK, "〔架空症例〕");
+  assert.notEqual(web.caseKey({ ...CASE, synthetic: true }), web.caseKey(CASE)); // a fictional case is not the same case as a real one
+});
+
+test("synthetic: an ask about a fictional case is counted in the daily cap but not in the answer counts (F4)", async () => {
+  let asks = 0;
+  const notes: any[] = [];
+  const counter = { increment: async () => ++asks, note: async (day: string, kinds: readonly string[]) => void notes.push([day, [...kinds]]) };
+  const run = async (kase: object) => (await handle(post("/api/ask", { mode: "ddx", case: kase }), app({ fetchImpl: fakeModel().fetchImpl, dailyAskLimit: 5, counter: counter as any }))).text();
+  await run(CASE);
+  assert.equal(asks, 1);
+  assert.equal(notes.length, 1);
+  await run({ ...CASE, synthetic: true });
+  assert.equal(asks, 2);
+  assert.equal(notes.length, 1);
+});

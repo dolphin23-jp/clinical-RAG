@@ -378,7 +378,8 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
           },
           emit,
         );
-        if (final && !create) await noteUsage(deps, final, found);
+        // a made-up case is not an answer about a patient: neither a created case nor a fictional one (the simulation's, D7) is counted
+        if (final && !create && !kase?.synthetic) await noteUsage(deps, final, found);
       });
     }
     return json({ error: "not found" }, 404);

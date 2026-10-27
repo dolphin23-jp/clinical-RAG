@@ -55,6 +55,8 @@ export interface CaseInput {
   own: string;
   /** the answers to a scene x symptom flow's questions as text (web/intake.js); "" when the structured intake is not used */
   structured: string;
+  /** a fictional case (from the simulation or from a created case: the doctor's decision D7, 2026-10-26): not counted in the daily answer counts */
+  synthetic?: true;
 }
 
 export class CaseInputError extends Error {
@@ -102,6 +104,10 @@ export function parseCase(raw: unknown): CaseInput {
     const s = st.replace(/\r\n?/g, "\n").trim();
     if (s.length > STRUCTURED_LIMIT) throw new CaseInputError(`case.structured is longer than ${STRUCTURED_LIMIT} characters`);
     out.structured = s;
+  }
+  if (o.synthetic !== undefined && o.synthetic !== null) {
+    if (o.synthetic !== true) throw new CaseInputError("case.synthetic must be true when given");
+    out.synthetic = true;
   }
   if (!isEmptyCase(out)) return out;
   throw new CaseInputError("症例が空です。主訴と経過・バイタル・所見・既往・場面ごとの入力のどれかを入力してください。", "empty_case");

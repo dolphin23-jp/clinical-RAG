@@ -9,7 +9,7 @@
 // Memory only: nothing is saved or put in the browser's storage; the note is copied as text with a header that cannot be taken off.  The hidden
 // setting stays in this tab's memory and is shown only in the debrief, after a confirmation.  Every string reaches the DOM through textContent /
 // .value.
-import { STAGES } from "./sim-case.js";
+import { STAGES, validateSimCase } from "./sim-case.js";
 import { clockAt, replay } from "./sim-engine.js";
 import {
   KEY_STATUS, LEVELS, PLAN_KIND_LABELS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, THEME_LIMIT, actText, addContinuation, applyAct,
@@ -23,7 +23,7 @@ import { scan } from "./id-guard.js";
 
 const plain = (s) => String(s ?? "").replace(/^★\d+\s*/, "").trim();
 
-export function initSim({ el, $, openDialog, copyText, api }) {
+export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
   const dlg = $("#sim");
   const body = $("#sim-body");
   const readings = simReadings(JUDGMENT_IDS);
@@ -117,6 +117,7 @@ export function initSim({ el, $, openDialog, copyText, api }) {
         }
         if (!c.ok) return renderLoad("AI の設定が検査を通りませんでした。もう一度作るか、テーマを変えてください。", c.errors);
         S = fresh(c.setting, flow, Number(seg.value), [], j.suggest ?? []);
+        S.theme = t;
         renderPlay();
       } catch (e) {
         say(e.message);
@@ -514,6 +515,25 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     deb.id = "sim-debrief";
     end.append(deb, btn("別の設定にする", "btn", () => ((S = null), renderLoad())));
     body.append(end);
+
+    // keeping it (step 4; the doctor's decision D6 b): a turn of a saved conversation, gone 30 days after the last save; carrying it to case mode with the mark
+    const keep = el("div", "btn-row");
+    const save = btn("この模擬を保存する（会話として。最後の保存から30日で消えます）", "btn", () => saveSim());
+    save.id = "sim-save";
+    const toCase = btn("症例モードに入れる（〔架空症例〕の印つき）", "btn", () => {
+      const kase = { ...simKase(S.setting, S.flow, S.answers, S.own), complaint: (S.setting.opening ?? []).map((o) => `${o.who}: ${o.text}`).join("\n").slice(0, 2000), synthetic: true };
+      pinCase?.(kase);
+      S.keepMsg = "症例モードに入れました（〔架空症例〕の印つき。隠れた設定・想定は入れていません）。ヘッダーの「症例」で確認できます。";
+      renderPlay();
+    });
+    toCase.id = "sim-to-case";
+    keep.append(save, toCase);
+    body.append(keep);
+    if (S.keepMsg) {
+      const km = el("p", "help", S.keepMsg);
+      km.id = "sim-keep-msg";
+      body.append(km);
+    }
   }
 
   /** A control for one of the doctor's own questions (choice / multi / text / number), writing the answers in memory. */
@@ -627,6 +647,81 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     return sec;
   }
 
+  /** What a saved simulation keeps: everything the screen needs to play it on from where it was. */
+  const simPayload = () => ({
+    v: 1,
+    theme: S.theme ?? "",
+    setting: S.setting,
+    log: S.log,
+    answers: S.answers,
+    own: S.own,
+    minutes: S.minutes,
+    taken: [...S.taken],
+    soap: S.soap,
+    picks: [...S.soapPicks],
+    adoptedActs: S.adoptedActs,
+    suggest: S.suggest,
+  });
+
+  /** Saves the simulation as a turn of a conversation (the same conversation each time: the last save is the one that opens again). */
+  async function saveSim() {
+    if (S.busy) return;
+    const payload = { kind: "sim", sim: simPayload() };
+    if (JSON.stringify(payload).length > 290_000) {
+      S.keepMsg = "この模擬は大きすぎて保存できません。";
+      return renderPlay();
+    }
+    if (!globalThis.crypto?.randomUUID && !S.convId) {
+      S.keepMsg = "この端末では保存の番号を作れないため、保存できません。";
+      return renderPlay();
+    }
+    S.convId ||= globalThis.crypto.randomUUID();
+    try {
+      const res = await api(`/api/conversations/${encodeURIComponent(S.convId)}/turns`, {
+        method: "POST",
+        body: JSON.stringify({ question: `【模擬】${S.theme || "貼った設定"}（${S.flow.title}）`, answer: noteText(), payload }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `エラー（${res.status}）`);
+      S.saves = (S.saves ?? 0) + 1;
+      S.keepMsg = `保存しました（この模擬の ${S.saves} 回目の保存）。ヘッダーの「会話」の保存した会話から再開できます。最後の保存から30日で消えます。`;
+    } catch (e) {
+      S.keepMsg = `保存できませんでした（${String(e.message).slice(0, 80)}）`;
+    }
+    renderPlay();
+  }
+
+  /** Opens a saved simulation (the last saved turn of the conversation) and plays on from there. */
+  async function restore(data) {
+    const turn = [...(data.turns ?? [])].reverse().find((t) => t.payload?.kind === "sim");
+    const sim = turn?.payload?.sim;
+    const F = await loadFlows();
+    const flow = F[sim?.setting?.flow];
+    const report = flow ? validateSimCase(sim.setting, flow, { strict: false, readings }) : null;
+    if (!sim || !flow || !report?.ok || !Array.isArray(sim.log)) {
+      S = null;
+      renderLoad("保存した模擬を開けませんでした（質問の定義が変わったか、保存が読めません）。", report?.errors ?? []);
+      return openDialog(dlg);
+    }
+    S = fresh(sim.setting, flow, SEGMENT_CHOICES.includes(sim.minutes) ? sim.minutes : 10, [], []);
+    Object.assign(S, {
+      theme: typeof sim.theme === "string" ? sim.theme : "",
+      log: sim.log,
+      answers: sim.answers && typeof sim.answers === "object" ? sim.answers : {},
+      own: typeof sim.own === "string" ? sim.own : "",
+      taken: new Set(Array.isArray(sim.taken) ? sim.taken : []),
+      soap: sim.soap ?? null,
+      soapPicks: new Set(Array.isArray(sim.picks) ? sim.picks : []),
+      adoptedActs: Number.isInteger(sim.adoptedActs) ? sim.adoptedActs : 0,
+      suggest: sim.suggest && Array.isArray(sim.suggest.list) ? sim.suggest : { at: 0, list: [] },
+      convId: data.id,
+      saves: (data.turns ?? []).filter((t) => t.payload?.kind === "sim").length,
+      keepMsg: "保存した模擬を開きました。続けて進められます。",
+    });
+    renderPlay();
+    openDialog(dlg);
+  }
+
   function noteText() {
     const items = S.soap ? soapItems(S.soap, S.soapPicks) : [];
     const note = assemble("A04", { kase: simKase(S.setting, S.flow, S.answers, S.own), flow: S.flow, items });
@@ -678,5 +773,6 @@ export function initSim({ el, $, openDialog, copyText, api }) {
       if (!S) renderLoad();
       openDialog(dlg);
     },
+    restore,
   };
 }

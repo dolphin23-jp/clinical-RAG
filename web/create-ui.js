@@ -77,7 +77,7 @@ export function initCreate(ctx) {
     pin.disabled = !ok;
     const pinMsg = el("p", "help");
     pin.addEventListener("click", () => {
-      pinCase(kase);
+      pinCase({ ...kase, synthetic: true }); // a created case is fictional: the mark goes with it (the doctor's decision D7)
       pinMsg.textContent = `症例モードに入れました（見立ては入れていません）。ヘッダーの「症例」で確認できます。${notes.length ? ` ${notes.join("。")}。` : ""}`;
     });
     const draftBtn = el("button", "btn", "Modules 用の下書き（TOML）を見る");

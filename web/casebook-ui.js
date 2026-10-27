@@ -137,12 +137,17 @@ export function initCasebook(ctx) {
     );
     newBlock.append(who);
     const synth = el("fieldset", "cb-synth");
-    synth.append(el("legend", null, "この症例は（必ず選びます）"));
+    // a record of a fictional case (the simulation or a created case carries the mark: the doctor's decision D15 b) is always sent as fictional
+    const fixed = rec.ed.case.synthetic === true;
+    if (fixed) M.synthetic = true;
+    synth.append(el("legend", null, fixed ? "この症例は（架空症例の印があるため、架空症例に固定）" : "この症例は（必ず選びます）"));
     const real = radio("cb-syn", "real", "実症例", M.synthetic === false, () => (M.synthetic = false));
     real.querySelector("input").id = "cb-syn-real";
+    real.querySelector("input").disabled = fixed;
     const fiction = radio("cb-syn", "fiction", "架空症例", M.synthetic === true, () => (M.synthetic = true));
     fiction.querySelector("input").id = "cb-syn-fiction";
     synth.append(real, fiction, el("p", "help", "「架空症例」を選ぶと、Casebook では架空症例として作られ、J-OSLER の登録の候補と集計から外れます。取り込んだあとに、実症例へ変えることはできません。「実症例」を選ぶと、ふつうの症例として作られます。"));
+    if (fixed) synth.append(el("p", "help", "この記録の症例は、架空症例の模擬・作成から来た架空の症例です。実症例としては送れません。"));
     newBlock.append(synth);
 
     // existing case: its code
@@ -271,7 +276,7 @@ export function initCasebook(ctx) {
         mode: m,
         code: typedCode,
         patient,
-        synthetic: M.synthetic,
+        synthetic: seeded.ed?.case?.synthetic === true ? true : M.synthetic, // a fictional case's record is never sent as a real one (D15 b)
         keys,
         resend: keys.filter((k) => current.find((c) => c.key === k && stateOf(seeded, c) === "changed")),
         packetId: ulidFrom(Date.now(), randomBytes(10)),

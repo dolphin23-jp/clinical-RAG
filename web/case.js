@@ -2,7 +2,7 @@
 // thread, and the four mode buttons over the composer.  The case lives in the tab's memory only; it is saved on the server
 // together with each turn asked with it (conv.js, payload.case) and comes back when that conversation is reopened.
 // Every string reaches the DOM through textContent / .value.
-import { AGE_MAX, FIELDS, MODES, SETTINGS, SEXES, TEXT_KEYS, caseSummary, caseTexts, cleanCase, emptyCase, isEmptyCase, readAge } from "./case-model.js";
+import { AGE_MAX, FIELDS, MODES, SETTINGS, SEXES, SYNTHETIC_MARK, TEXT_KEYS, caseSummary, caseTexts, cleanCase, emptyCase, isEmptyCase, readAge } from "./case-model.js";
 import { relativizeDates } from "./date-relative.js";
 import { SCENES, SCENE_LABELS, briefNeed } from "./draft-scenes.js";
 import { scan } from "./id-guard.js";
@@ -25,7 +25,28 @@ export function initCase(ctx) {
   const briefPre = $("#scene-brief-text");
   const record = { linked: () => false, brief: () => null }; // set by app.js (the open record's summary for a scene, or null)
   let current = null; // the pinned case (cleaned) or null
+  let synthetic = false; // the case in the editor is a fictional one (it came from the simulation or a created case): kept through edits until cleared
   let attach = true; // free questions carry the pinned case while this is on (the mode buttons always do)
+
+  // ---------------------------------------------------------------- the fictional mark (D7): shown, and the doctor can take it off
+  const synRow = el("div", "notice case-synthetic");
+  synRow.id = "case-synthetic";
+  synRow.hidden = true;
+  const synOff = el("button", "btn small", "架空の印を外す");
+  synOff.type = "button";
+  synOff.id = "case-synthetic-off";
+  synOff.addEventListener("click", () => {
+    synthetic = false;
+    synRow.hidden = true;
+    if (current?.synthetic) {
+      const { synthetic: _off, ...rest } = current;
+      current = rest;
+      refresh();
+    }
+  });
+  synRow.append(el("span", null, `${SYNTHETIC_MARK} この症例は、架空症例の模擬・作成から来た架空の症例です（回答の様子の数には入れず、症例の記録・Casebook でも架空として扱います）。実在の患者の入力に書き換えるときは、印を外してください。`), synOff);
+  host.before(synRow);
+  const showSynthetic = () => (synRow.hidden = !synthetic);
 
   // ---------------------------------------------------------------- the dialog's fields
   const inputs = {};
@@ -88,6 +109,7 @@ export function initCase(ctx) {
     const c = emptyCase();
     for (const k of Object.keys(inputs)) c[k] = inputs[k].value;
     Object.assign(c, intake.value());
+    if (synthetic) c.synthetic = true;
     return cleanCase(c);
   };
   const fill = (c) => {
@@ -151,6 +173,7 @@ export function initCase(ctx) {
   function openEditor() {
     msg.hidden = true;
     if (current) fill(current);
+    showSynthetic();
     openDialog(dlg);
   }
 
@@ -195,13 +218,15 @@ export function initCase(ctx) {
     modes.hidden = !current;
     document.body.classList.toggle("has-case", !!current);
     attachBox.checked = attach;
-    $("#casebar-text").textContent = current ? caseSummary(current) : "";
+    $("#casebar-text").textContent = current ? `${current.synthetic ? SYNTHETIC_MARK : ""}${caseSummary(current)}` : "";
     bar.classList.toggle("detached", !!current && !attach);
   }
 
   function clear() {
     const had = !!current;
     current = null;
+    synthetic = false;
+    showSynthetic();
     attach = true;
     fill(emptyCase());
     refresh();
@@ -219,6 +244,8 @@ export function initCase(ctx) {
       const cleaned = cleanCase(c);
       if (isEmptyCase(cleaned)) return clear();
       if (!keepLink) hooks.cleared?.(); // a case that comes from somewhere else (a conversation, a created case) is not the open record's
+      synthetic = cleaned.synthetic === true;
+      showSynthetic();
       current = cleaned;
       attach = true;
       fill(cleaned);

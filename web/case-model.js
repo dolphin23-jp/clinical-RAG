@@ -86,8 +86,13 @@ export function cleanCase(raw) {
   for (const k of TEXT_KEYS) if (typeof raw[k] === "string") out[k] = raw[k].trim().slice(0, LIMITS[k]);
   if (typeof raw.structured === "string") out.structured = raw.structured.trim().slice(0, STRUCTURED_LIMIT);
   out.intake = out.structured ? cleanIntake(raw.intake) : null;
+  // a fictional case (from the simulation or a created case: the doctor's decision D7, 2026-10-26) keeps its mark wherever it goes; only `true`
+  if (raw.synthetic === true) out.synthetic = true;
   return out;
 }
+
+/** The mark shown with a fictional case. */
+export const SYNTHETIC_MARK = "〔架空症例〕";
 
 /** The case as the Worker takes it: without `intake` (the form's own answers stay on this screen and in the saved conversation). */
 export const caseForServer = (c) => {
