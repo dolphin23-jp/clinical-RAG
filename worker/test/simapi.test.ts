@@ -431,3 +431,80 @@ test("the disposition is the doctor's decision (ent decision, 2026-10-26): the d
   assert.ok(mine.includes("dispo") && mine.includes("dispo_why"), JSON.stringify(mine));
   assert.equal(flow.questions.find((x) => x.id === "dispo")?.kind, "reading");
 });
+
+// ---------------------------------------------------------------------------------- after the admission (step 5a; D14)
+const courseBody = (o: any = {}) => ({ ...nextBody({ log: [{ act: "ask", q: "rr" }] }), op: "course", days: 3, admit: "icu", ...o });
+
+test("op course: the days are the created case's choices (not 0); only an admitting disposition of the flow; no boundary needed", () => {
+  assert.deepEqual(S.WARD_DAYS, [3, 5, 7, 10, 14]);
+  assert.deepEqual(SM.WARD_DAYS, S.WARD_DAYS);
+  assert.equal(String(SM.ADMIT_RE), String(S.ADMIT_RE));
+  for (const id of Object.keys(SIM_CATALOG)) {
+    const w = S.admitOptions(SIM_CATALOG[id]).map(([o]) => o);
+    assert.deepEqual(SM.admitOptions(SCHEMA.FLOWS[id]).map((o: any) => o.id), w, id);
+    assert.ok(w.includes("ward") && !w.includes("home") && !w.includes("transfer"), id);
+  }
+  const r = S.parseSimRequest(courseBody());
+  assert.equal(r.op, "course");
+  assert.equal(r.days, 3);
+  assert.equal(r.admit, "入院（HCU・ICU）");
+  const code = (o: any) => {
+    try {
+      S.parseSimRequest(courseBody(o));
+      return "";
+    } catch (e: any) {
+      return e.code;
+    }
+  };
+  assert.equal(code({ days: 0 }), "bad_days");
+  assert.equal(code({ days: 4 }), "bad_days");
+  assert.equal(code({ admit: "home" }), "not_admitted");
+  assert.equal(code({ admit: "transfer" }), "not_admitted");
+  assert.equal(code({ admit: undefined }), "not_admitted");
+  assert.equal(code({ admit: "op" }), "", "an emergency procedure is admitted after it");
+});
+
+test("op course: the instructions (one frozen course, day by day, facts only, no dose, no diagnosis, no future) and what the AI is told", () => {
+  for (const must of ["入院N日目", "年月日は書きません", "その日までに起きたこと", "用量・投与速度は書かない", "診断名も書きません", "評価", "1回だけ", "最後の日だけ outcome", "典型的な経過"]) {
+    assert.ok(P.SIM_COURSE_RULES.includes(must), must);
+  }
+  const sys = S.simSystem("course", flow);
+  assert.ok(sys.startsWith(P.SIM_RULES) && sys.includes(P.SIM_COURSE_RULES) && !sys.includes(P.SIM_NEXT_RULES) && !sys.includes(P.SIM_SUGGEST_RULES));
+  const r = S.parseSimRequest(courseBody());
+  const u = S.userContent(r, books);
+  assert.match(u, /<admit>\n先生が選んだ行き先: 入院（HCU・ICU）\n<\/admit>/);
+  assert.match(u, /入院1日目から入院3日目まで（3日分）/);
+  assert.match(u, /<setting>/);
+  const body: any = S.buildSimBody(r, books, "m");
+  assert.equal(body.output_config.effort, "medium");
+  assert.deepEqual(body.output_config.format.schema.required, ["days", "basis"]);
+  assert.deepEqual(body.output_config.format.schema.properties.basis.items.enum, ["sec1"]);
+});
+
+test("checkWard: day 1..N once each (out of range and twice dropped), texts cut, the outcome only on the last day, missing days listed", () => {
+  const day = (n: number, o: any = {}) => ({ day: n, events: `e${n}`, symptoms: "s", findings: "f", treatment: "なし", outcome: "入院継続", ...o });
+  const w = S.checkWard([day(1), day(2), day(2, { events: "x" }), day(4), day(0), day(3, { findings: "あ".repeat(900) }), "junk"], 3);
+  assert.deepEqual(w.days.map((d) => d.day), [1, 3]);
+  assert.deepEqual(w.missing, [2]);
+  assert.equal(w.days[0].outcome, undefined);
+  assert.equal(w.days[1].outcome, "入院継続");
+  assert.equal(w.days[1].findings.length, S.WARD_TEXT);
+  assert.deepEqual(S.checkWard(null, 3), { days: [], missing: [1, 2, 3] });
+  const out = S.parseSimOutput(JSON.stringify({ days: [day(1, { events: books[0].text })], basis: ["sec1", "nope"] }), S.parseSimRequest(courseBody()), books);
+  assert.deepEqual(out.ward!.basis, ["sec1"]);
+  assert.ok(out.overlap.length >= 1, "a day copied from a book is reported");
+});
+
+test("route: course through the fake gives the days asked; it counts against the daily cap and is not noted in F4", async () => {
+  const { counter, days, notes } = memCounter();
+  const setting = settingFor();
+  const r = await handle(post({ ...courseBody({ days: 5 }), setting }), app({ counter, dailyAskLimit: 5 }));
+  assert.equal(r.status, 200);
+  const j: any = await r.json();
+  assert.deepEqual(j.ward.days.map((d: any) => d.day), [1, 2, 3, 4, 5]);
+  assert.equal(j.ward.days[4].outcome, "入院継続。");
+  assert.equal([...days.values()][0], 1);
+  assert.deepEqual(notes, []);
+  assert.equal((await handle(post({ ...courseBody({ admit: "home" }), setting }), app({ counter, dailyAskLimit: 5 }))).status, 400);
+  assert.equal([...days.values()][0], 1, "a refused request is not counted");
+});

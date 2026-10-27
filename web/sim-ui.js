@@ -12,9 +12,10 @@
 import { STAGES, validateSimCase } from "./sim-case.js";
 import { clockAt, replay } from "./sim-engine.js";
 import {
-  KEY_STATUS, LEVELS, PLAN_KIND_LABELS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, THEME_LIMIT, actText, addContinuation, applyAct,
-  boardQuestions, baseSetting, checkAiSetting, checkSoapDraft, contCount, debrief, doctorQuestions, isEmergencyFlow, memoLines, needsFill, orderNeeds,
-  parseSetting, simKase, simReadings, soapChoices, soapItems, takeRows, toldLines, trayRows, usableSuggestions,
+  KEY_STATUS, LEVELS, PLAN_KIND_LABELS, SAY_LABELS, SAY_TYPES, SEGMENT_CHOICES, SIM_HEADER, SIM_MARK, THEME_LIMIT, WARD_DAYS, WARD_HIDDEN, actText,
+  addContinuation, admittedBy, applyAct, boardQuestions, baseSetting, checkAiSetting, checkSoapDraft, checkWardDays, contCount, debrief, doctorQuestions,
+  isEmergencyFlow, memoLines, needsFill, orderNeeds, parseSetting, simKase, simReadings, soapChoices, soapItems, takeRows, toldLines, trayRows,
+  usableSuggestions, wardNoteLines,
 } from "./sim-model.js";
 import { JUDGMENT_IDS } from "./extract-model.js";
 import { assemble, toText } from "./note-assemble.js";
@@ -170,6 +171,8 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
     suggest: { at: 0, list: suggest }, adoptedActs: 0,
     // the AI's S/O/A/P draft (D12) and the parts the doctor ticked (memory only)
     soap: null, soapPicks: new Set(),
+    // after the admission (step 5a): the course the AI wrote once, opened one day at a time, and the doctor's own writing per day
+    ward: null, wardDays: 5,
   });
 
   // ---------------------------------------------------------------- playing
@@ -249,6 +252,25 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
       const j = await callSim({ op: "soap", flow: S.flow.id, told, answers, own: S.own.slice(0, 2000) });
       S.soap = checkSoapDraft(j.soap ?? {}, [...told, answers, S.own]);
       S.soapPicks = new Set();
+    } catch (e) {
+      S.aiMsg = e.message;
+    } finally {
+      S.busy = false;
+      renderPlay();
+    }
+  }
+
+  /** The AI writes the course after the admission once (step 5a: frozen; the doctor's later writing does not change it). */
+  async function makeWard(admit) {
+    if (S.busy || S.ward) return;
+    S.busy = true;
+    S.aiMsg = "";
+    renderPlay();
+    try {
+      const now = replay(S.setting, S.flow, S.log, { readings });
+      const j = await callSim({ op: "course", flow: S.flow.id, setting: S.setting, log: S.log, state: now.internal.state, t: now.t, stage: now.stage, days: S.wardDays, admit: admit.id });
+      if (!Array.isArray(j.ward?.days) || !j.ward.days.length) throw new Error("AI が入院後の経過を書きませんでした。もう一度試してください。");
+      S.ward = { days: S.wardDays, admit, raw: { days: j.ward.days, missing: j.ward.missing ?? [] }, overlap: j.overlap ?? [], opened: 1, own: {} };
     } catch (e) {
       S.aiMsg = e.message;
     } finally {
@@ -479,7 +501,7 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
     memo.append(ol);
     body.append(memo);
 
-    if (isAi()) body.append(soapPanel());
+    if (isAi()) body.append(soapPanel(), wardPanel());
 
     // the note: A04 from the answers, read only
     const noteSec = section("記載（救急外来初療 A04。読み取り専用）", false);
@@ -647,6 +669,78 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
     return sec;
   }
 
+  /** After the admission (step 5a): the course the AI wrote, one day at a time; the days not yet opened are not on the screen. */
+  function wardPanel() {
+    const sec = section("入院後（AI が作る経過を1日ずつ開く・試作）", !!S.ward);
+    sec.id = "sim-ward";
+    const W = S.ward;
+    if (!W) {
+      const admit = admittedBy(S.flow, S.answers);
+      if (!admit) {
+        sec.append(el("p", "help", "「先生が選ぶ項目」の行き先に入院（または入院する緊急の処置）を選ぶと、入院後の経過を作れます。"));
+        return sec;
+      }
+      sec.append(el("p", "help", `行き先: ${admit.label}。入院後の日ごとの経過を、AI が書籍の典型的な経過に沿って1回だけ作り、1日ずつ開きます。入院後の先生の判断では変わりません（いまの段階の作り）。各日の評価と計画は、先生が書きます。`));
+      const days = el("select");
+      days.id = "sim-ward-days";
+      days.setAttribute("aria-label", "入院後の日数");
+      for (const d of WARD_DAYS) days.append(new Option(`${d}日分`, String(d)));
+      days.value = String(S.wardDays);
+      days.addEventListener("change", () => (S.wardDays = Number(days.value)));
+      const make = btn("入院後の経過を作る（AI を1回使う）", "btn", () => makeWard(admit));
+      make.id = "sim-ward-make";
+      make.disabled = !!S.busy;
+      sec.append(el("div", "btn-row"));
+      sec.lastChild.append(days, make);
+      return sec;
+    }
+    sec.append(el("p", "help", `行き先: ${W.admit.label}。この経過は、入院を決めた時点で AI が1回だけ作ったもので、実在の患者の経過ではありません（数値は例示）。見立て・評価は書かせていません。記載に入るのは、先生が各日に書いたものだけです。`));
+    const c = checkWardDays(W.raw, { dx: S.setting.assumed?.dx, overlap: W.overlap });
+    const hid = Object.entries(c.hidden).filter(([, n]) => n);
+    if (hid.length) sec.append(el("p", "notice", `表示しない項目があります（${hid.map(([k, n]) => `${WARD_HIDDEN[k]} ${n}`).join("・")}）。`));
+    for (let n = 1; n <= W.opened; n++) {
+      const box = el("div", "sim-ward-day");
+      box.dataset.day = String(n);
+      box.append(el("p", "sim-phase", `入院${n}日目`));
+      const day = c.days.find((d) => d.day === n);
+      if (!day || !day.parts.length) box.append(el("p", "help", "この日は作られませんでした。"));
+      else {
+        const ul = el("ul");
+        for (const p of day.parts) ul.append(el("li", p.hidden ? "help" : null, `${p.label}: ${p.hidden ? `（表示しません: ${WARD_HIDDEN[p.hidden]}）` : p.text}`));
+        box.append(ul);
+      }
+      const own = el("textarea", "case-text");
+      own.rows = 2;
+      own.dataset.wardOwn = String(n);
+      own.placeholder = `入院${n}日目の先生の記載（任意。評価と計画）`;
+      own.setAttribute("aria-label", `入院${n}日目の先生の記載`);
+      own.value = W.own[n] ?? "";
+      const msg = el("p", "msg err");
+      msg.hidden = true;
+      own.addEventListener("change", () => {
+        const hits = scan(own.value);
+        msg.hidden = !hits.length;
+        msg.textContent = hits.length ? `識別情報らしき文字があります（${hits.map((h) => h.label).join("、")}）。架空症例に入れません。` : "";
+        if (!hits.length) {
+          W.own[n] = own.value;
+          renderPlay();
+        }
+      });
+      box.append(own, msg);
+      sec.append(box);
+    }
+    if (W.opened < W.days) {
+      const next = btn(`入院${W.opened + 1}日目を開く`, "btn", () => {
+        W.opened++;
+        renderPlay();
+      });
+      next.id = "sim-ward-next";
+      sec.append(el("div", "btn-row"));
+      sec.lastChild.append(next);
+    } else sec.append(el("p", "help", `入院${W.days}日目まで開きました。`));
+    return sec;
+  }
+
   /** What a saved simulation keeps: everything the screen needs to play it on from where it was. */
   const simPayload = () => ({
     v: 1,
@@ -661,6 +755,7 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
     picks: [...S.soapPicks],
     adoptedActs: S.adoptedActs,
     suggest: S.suggest,
+    ward: S.ward,
   });
 
   /** Saves the simulation as a turn of a conversation (the same conversation each time: the last save is the one that opens again). */
@@ -714,6 +809,7 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
       soapPicks: new Set(Array.isArray(sim.picks) ? sim.picks : []),
       adoptedActs: Number.isInteger(sim.adoptedActs) ? sim.adoptedActs : 0,
       suggest: sim.suggest && Array.isArray(sim.suggest.list) ? sim.suggest : { at: 0, list: [] },
+      ward: restoreWard(sim.ward),
       convId: data.id,
       saves: (data.turns ?? []).filter((t) => t.payload?.kind === "sim").length,
       keepMsg: "保存した模擬を開きました。続けて進められます。",
@@ -725,7 +821,17 @@ export function initSim({ el, $, openDialog, copyText, api, pinCase }) {
   function noteText() {
     const items = S.soap ? soapItems(S.soap, S.soapPicks) : [];
     const note = assemble("A04", { kase: simKase(S.setting, S.flow, S.answers, S.own), flow: S.flow, items });
-    return `${SIM_HEADER}\n${toText(note, { soap: !!S.noteSoap })}`;
+    const ward = wardNoteLines(S.ward?.own, S.ward?.opened);
+    return `${SIM_HEADER}\n${toText(note, { soap: !!S.noteSoap })}${ward.length ? `\n\n${ward.join("\n")}` : ""}`;
+  }
+
+  /** A saved course after the admission, if it has the shape the screen made (otherwise none: the doctor can make it again). */
+  function restoreWard(w) {
+    if (!w || typeof w !== "object" || !WARD_DAYS.includes(w.days) || !Array.isArray(w.raw?.days) || typeof w.admit?.id !== "string") return null;
+    const opened = Number.isInteger(w.opened) ? Math.min(Math.max(w.opened, 1), w.days) : 1;
+    const own = {};
+    for (const [k, v] of Object.entries(w.own && typeof w.own === "object" ? w.own : {})) if (/^\d{1,2}$/.test(k) && typeof v === "string") own[k] = v;
+    return { days: w.days, admit: { id: w.admit.id, label: String(w.admit.label ?? "") }, raw: { days: w.raw.days, missing: Array.isArray(w.raw.missing) ? w.raw.missing : [] }, overlap: Array.isArray(w.overlap) ? w.overlap : [], opened, own };
   }
 
   // ---------------------------------------------------------------- the debrief: side by side, nothing judged
