@@ -681,6 +681,8 @@ function degrade(turn, ev) {
 
 /** Rebuilds a saved conversation on screen (docs/clinical-use.md 1d); its turns are not saved again. */
 function openConversation(data) {
+  // a saved simulation (payload.kind "sim": docs/enhancement-plan.md 8.21, step 4) opens in its own screen, not in the thread
+  if (data.turns?.some((t) => t.payload?.kind === "sim")) return sim.restore(data);
   if (S.busy) S.ctrl?.abort();
   S.history = [];
   for (const t of document.querySelectorAll(".turn")) t.remove();
@@ -969,7 +971,7 @@ $("#case-create").addEventListener("click", () => {
   creator.open();
 });
 // the simulated fictional case (docs/enhancement-plan.md 8.21): its own screen, memory only, no AI, nothing sent or saved
-const sim = initSim({ el, $, openDialog, copyText, api });
+const sim = initSim({ el, $, openDialog, copyText, api, pinCase: (c) => caseCtl.set(c) });
 $("#case-sim").addEventListener("click", () => {
   $("#case").close();
   sim.open();

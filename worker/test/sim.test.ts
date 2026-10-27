@@ -370,9 +370,9 @@ test("the simulation's screen modules send nothing, keep nothing in the browser 
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     assert.deepEqual([...src.matchAll(/^import [\s\S]*? from "(.+)";$/gm)].map((m) => m[1]), imports, file);
     assert.ok(!/\b(fetch|XMLHttpRequest|localStorage|sessionStorage|indexedDB|innerHTML|outerHTML|insertAdjacentHTML|sendBeacon|print\(|navigator\.share|Math\.random|Date\.now)\b/.test(code), `${file} touches something it must not`);
-    // the only network use: /api/sim, through the app's own api() (sim-model.js has none)
-    assert.deepEqual([...code.matchAll(/\/api\/[a-z/]*/g)].map((m) => m[0]), file === "sim-ui.js" ? ["/api/sim"] : [], file);
-    assert.equal([...code.matchAll(/\bapi\(/g)].length, file === "sim-ui.js" ? 1 : 0, file);
+    // the only network use: /api/sim, and saving the simulation as a conversation turn (step 4, D6 b), through the app's own api() (sim-model.js has none)
+    assert.deepEqual([...code.matchAll(/\/api\/[a-z/]*/g)].map((m) => m[0]), file === "sim-ui.js" ? ["/api/sim", "/api/conversations/"] : [], file);
+    assert.equal([...code.matchAll(/\bapi\(/g)].length, file === "sim-ui.js" ? 2 : 0, file);
   }
   // the only lazy import of the screen is the imported flows
   assert.deepEqual([...readFileSync(web("sim-ui.js"), "utf-8").matchAll(/import\("(.+?)"\)/g)].map((m) => m[1]), ["./flow-schema.js"]);

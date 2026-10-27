@@ -10,7 +10,7 @@
 //  4. A problem has a stable id (p1, p2 ...) that is never used again, even after the problem is removed.
 //  8. No date: the time axis is minutes from the arrival (or the clock time of the encounter); "入院N日目" comes with the later encounters.
 // Checks (checks()) count what is blank or undecided; they are notes, not judgements.
-import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase } from "./case-model.js";
+import { TEXT_KEYS, caseKey, cleanCase, caseSummary, isEmptyCase, SYNTHETIC_MARK } from "./case-model.js";
 import { ALL_DAY_FIELDS, DISCHARGE_FIELDS, SUMMARY_FIELDS, asOf, cleanCourse, cleanLog, courseChecks, dayNo, dropEmptyDays, emptyCourse, stampLog } from "./case-course.js";
 import { cleanCasebook } from "./casebook-state.js";
 import { relativizeDates } from "./date-relative.js";
@@ -207,7 +207,8 @@ export function cleanRecord(raw) {
 
 /** The title shown in the list: the case's one-line summary (no date). */
 export function recordTitle(kase, kind = "inpatient") {
-  return `${kind === "outpatient" ? "外来: " : ""}${caseSummary(kase) || "症例"}`.slice(0, LIMITS.title);
+  // a fictional case's record says so in its title (the simulation or a created case: the doctor's decision D7)
+  return `${kase?.synthetic === true ? SYNTHETIC_MARK : ""}${kind === "outpatient" ? "外来: " : ""}${caseSummary(kase) || "症例"}`.slice(0, LIMITS.title);
 }
 
 /** A short fingerprint of a case (the hash of its text): stored instead of the text, to tell whether a turn was asked with this record's case. */

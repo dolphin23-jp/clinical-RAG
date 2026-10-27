@@ -144,3 +144,34 @@ test("writes: no logging of questions or answers (only the two known console.war
   assert.match(code("handler.ts"), /console\.warn\(`daily ask counter unavailable[^`]*\$\{\(e as Error\)\.message\}`\)/);
   assert.match(code("search.ts"), /console\.warn\(`trigram index unavailable[^`]*\$\{\(e as Error\)\.message\}`\)/);
 });
+
+// ---------------------------------------------------------------------------------- a saved simulation (enhancement-plan 8.21 stage 4; D6 b)
+test("store: a simulation of a fictional case is saved as payload.sim and comes back; an identifier anywhere in it (keys too) is refused; the books' list is not scanned", async () => {
+  const sim = (extra: object = {}) => ({
+    kind: "sim",
+    sim: {
+      v: 1,
+      theme: "肺炎",
+      setting: { v: 1, flow: "ed-dyspnea", patient: { age: 72 }, opening: "息が苦しい", origin: { by: "ai", sources: [{ id: "bk1:12", title: "架空の書籍 第12版", page: 123456 }] } },
+      log: [{ k: "ask", q: "rr" }],
+      ...extra,
+    },
+  });
+  const s = convStore(openRw(), { retentionDays: 30 });
+  assert.equal(await s.append(ID(1), { question: "【模擬】肺炎（救急）", answer: "【架空症例（模擬）・実在の患者ではありません】", payload: sim() }, t(1)), 1);
+  const got = await s.get(ID(1));
+  assert.equal((got!.turns[0].payload as any).sim.setting.opening, "息が苦しい");
+  assert.equal((got!.turns[0].payload as any).kind, "sim");
+
+  const rw = openRw();
+  const s2 = convStore(rw, { retentionDays: 30 });
+  const refuse = (p: object) =>
+    assert.rejects(s2.append(ID(2), { question: "【模擬】肺炎", answer: "a", payload: p }, t(1)), (e: any) => e instanceof ConvInputError && e.code === "possible_identifier" && !e.message.includes("12345678"));
+  await refuse(sim({ own: "カルテ番号 12345678 の患者" }));
+  await refuse(sim({ log: [{ k: "say", text: "患者ID 12345678" }] }));
+  await refuse(sim({ notes: { "患者ID 12345678": 1 } }));
+  for (const bad of [{ kind: "sim" }, { kind: "sim", sim: { v: 2, setting: {}, log: [] } }, { kind: "sim", sim: { v: 1, setting: {}, log: {} } }, { kind: "sim", sim: { v: 1, setting: [], log: [] } }]) {
+    await assert.rejects(s2.append(ID(2), { question: "q", answer: "a", payload: bad }, t(1)), /payload\.sim must be/);
+  }
+  assert.deepEqual(await s2.list(t(1)), []); // nothing was written
+});

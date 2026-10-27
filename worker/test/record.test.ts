@@ -499,3 +499,12 @@ test("case-record.js is pure: no DOM, no network, no storage, no AI", () => {
   const src = readFileSync(web("case-record.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
   for (const bad of [/\bfetch\(/, /localStorage|sessionStorage|indexedDB/, /\bdocument\./, /\bwindow\./, /XMLHttpRequest|WebSocket/, /anthropic|api\/ask|\/api\//i]) assert.doesNotMatch(src, bad);
 });
+
+test("the fictional mark: a record of a fictional case keeps the mark through cleaning and says so in its title", () => {
+  const r = R.newRecord({ ...CASE, synthetic: true });
+  assert.equal(r.ed.case.synthetic, true);
+  assert.ok(r.title.startsWith("〔架空症例〕"));
+  assert.equal(R.cleanRecord(JSON.parse(JSON.stringify(r))).ed.case.synthetic, true);
+  assert.ok(!R.newRecord(CASE).title.includes("架空"));
+  assert.ok(R.newRecord({ ...CASE, synthetic: true }, { kind: "outpatient" }).title.startsWith("〔架空症例〕外来: "));
+});

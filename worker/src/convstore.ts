@@ -112,7 +112,17 @@ export function convStore(d1: D1Rw, opts: { retentionDays?: number } = {}) {
       const hits = scanAll([t.question]);
       if (hits.length) throw new ConvInputError(`患者を特定できる情報の可能性があるため、この質問は保存しません（${hits.map((h) => h.label).join("、")}）`, "possible_identifier");
       const p = t.payload as any;
-      if (!p || typeof p !== "object" || Array.isArray(p) || (p.kind !== "final" && p.kind !== "degraded")) throw new ConvInputError('payload must be an object with kind "final" or "degraded"');
+      if (!p || typeof p !== "object" || Array.isArray(p) || !["final", "degraded", "sim"].includes(p.kind)) throw new ConvInputError('payload must be an object with kind "final", "degraded" or "sim"');
+      // a saved simulation of a fictional case (docs/enhancement-plan.md 8.21, step 4; the doctor's decision D6 b): its setting, the doctor's
+      // acts, answers and own assessment.  Every string in it is checked like the question, however deep (the books' section ids and titles under
+      // `origin` are the app's own and are left out)
+      if (p.kind === "sim") {
+        if (!p.sim || typeof p.sim !== "object" || Array.isArray(p.sim) || p.sim.v !== 1 || !p.sim.setting || typeof p.sim.setting !== "object" || Array.isArray(p.sim.setting) || !Array.isArray(p.sim.log)) {
+          throw new ConvInputError("payload.sim must be { v: 1, setting, log, ... }");
+        }
+        const simHits = scanAll(simStrings(p.sim));
+        if (simHits.length) throw new ConvInputError(`患者を特定できる情報の可能性があるため、この模擬は保存しません（${simHits.map((h) => h.label).join("、")}）`, "possible_identifier");
+      }
       // a turn made in case mode carries the case it was asked with (payload.case), and one that created a fictional case the
       // request (payload.create): their text is checked like the question
       const caseHits = scanAll([...caseStrings(p.case), ...caseStrings(p.create)]);
@@ -163,6 +173,14 @@ function caseStrings(c: unknown, depth = 0): string[] {
   if (typeof c === "string") return [c];
   if (!c || typeof c !== "object" || depth > 4) return [];
   return Object.values(c as Record<string, unknown>).flatMap((v) => caseStrings(v, depth + 1));
+}
+
+/** Every string in a saved simulation, at any depth, except the books' section ids and titles under `origin` (keys are checked too). */
+export function simStrings(x: unknown, depth = 0): string[] {
+  if (typeof x === "string") return [x];
+  if (!x || typeof x !== "object" || depth > 16) return [];
+  if (Array.isArray(x)) return x.flatMap((v) => simStrings(v, depth + 1));
+  return Object.entries(x as Record<string, unknown>).flatMap(([k, v]) => (k === "origin" ? [] : [k, ...simStrings(v, depth + 1)]));
 }
 
 function safeParse(s: unknown): unknown {
