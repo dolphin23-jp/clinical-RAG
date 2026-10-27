@@ -139,7 +139,7 @@ export function doctorQuestions(flow, answers, sex, readings) {
   return byPhase(flow)
     .map(({ phase, questions }) => ({
       phase,
-      questions: questions.filter((q) => (["assessment", "reason", "none"].includes(q.br?.ent) || readings?.has(q.id)) && q.type !== "time" && isVisible(flow, q, ctx)),
+      questions: questions.filter((q) => (["assessment", "reason", "none", "decision"].includes(q.br?.ent) || readings?.has(q.id)) && q.type !== "time" && isVisible(flow, q, ctx)),
     }))
     .filter((g) => g.questions.length);
 }

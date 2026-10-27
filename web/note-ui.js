@@ -3,7 +3,7 @@
 // case and the ticked items (web/note-assemble.js) and copies it as plain text.  Everything is read-only and in the tab's memory:
 // nothing is sent, saved, exported, printed or shared, and a ticked item enters the note only because the doctor ticked it.
 // Every string reaches the DOM through textContent.
-import { AI_MARK, ENABLED, assemble, headingRole, isNoneLine, toText } from "./note-assemble.js";
+import { AI_MARK, ENABLED, assemble, hasSoapView, headingRole, isNoneLine, toText } from "./note-assemble.js";
 import { routingSummary } from "./note-route.js";
 import { NOTE_TYPES } from "./note-types.js";
 
@@ -34,6 +34,7 @@ export function initNotes(ctx) {
   const pick = $("#note-type");
   const optAi = $("#note-opt-ai");
   const optSrc = $("#note-opt-src");
+  const optSoap = $("#note-opt-soap");
   const pre = $("#note-text");
   const info = $("#note-info");
   const copyBtn = $("#note-copy");
@@ -135,7 +136,9 @@ export function initNotes(ctx) {
   function render() {
     if (!current) return;
     const note = assemble(pick.value, { kase: current.kase, items: current.items(), flow: current.flow });
-    pre.textContent = toText(note, { aiMark: optAi.checked, sourceMarks: optSrc.checked });
+    // the S/O/A/P view is offered for the encounter notes only (a summary, a consult and a handover are not SOAP notes)
+    optSoap.disabled = !hasSoapView(pick.value);
+    pre.textContent = toText(note, { aiMark: optAi.checked, sourceMarks: optSrc.checked, soap: optSoap.checked && !optSoap.disabled });
     const t = NOTE_TYPES[pick.value];
     const lines = [`${current.label}。採用した草案の項目だけが入ります（採用していない項目は入りません）。`];
     if (note.unfilled.length) lines.push(`未入力の必須欄 ${note.unfilled.length} 個は「（未入力）」のままです。`);
@@ -162,7 +165,7 @@ export function initNotes(ctx) {
     render();
     openDialog(dlg);
   }
-  for (const x of [pick, optAi, optSrc]) x.addEventListener("change", render);
+  for (const x of [pick, optAi, optSrc, optSoap]) x.addEventListener("change", render);
   copyBtn.addEventListener("click", async () => {
     await copyText(pre.textContent);
     copyBtn.textContent = "コピーしました";

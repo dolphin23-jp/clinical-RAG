@@ -145,6 +145,19 @@ with sync_playwright() as pw:
     t3 = page.locator("#note-text").inner_text()
     check("［書籍" not in t3 and "[推論]" not in t3 and "AI草案の出典" not in t3 and "〔AI草案〕" in t3, "without the source marks: no tags, pages or list; the AI mark stays")
     page.check("#note-opt-src")
+    # the S/O/A/P view (D11 b): the same lines, grouped; off by default
+    t_fields = page.locator("#note-text").inner_text()
+    check("S)（" not in t_fields and page.locator("#note-opt-soap").is_checked() is False, "the field view is the default")
+    page.check("#note-opt-soap")
+    t_soap = page.locator("#note-text").inner_text()
+    heads = [l[:2] for l in t_soap.split("\n") if l[:2] in ("S)", "O)", "A)", "P)")]
+    check(heads == ["S)", "O)", "A)", "P)"], f"the S/O/A/P view groups the fields S, O, A, P ({heads})")
+    same = sorted(l for l in t_soap.split("\n") if l.strip() and l[:2] not in ("S)", "O)", "A)", "P)")) == sorted(l for l in t_fields.split("\n") if l.strip())
+    check(same, "the S/O/A/P view has the same lines (only the order and the part headings differ)")
+    page.select_option("#note-type", "A08")
+    check(page.locator("#note-opt-soap").is_disabled() and "S)（" not in page.locator("#note-text").inner_text(), "a summary has no S/O/A/P view")
+    page.select_option("#note-type", "A04")
+    page.uncheck("#note-opt-soap")
 
     # 5. other types
     page.select_option("#note-type", "B06")

@@ -514,3 +514,50 @@ test("pins: the Worker has no endpoint for notes (the note is made in the browse
   const ui = readFileSync(web("note-ui.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
   assert.doesNotMatch(ui, /\bfetch\(|\bapi\(|XMLHttpRequest|localStorage|sessionStorage/);
 });
+
+// ---------------------------------------------------------------------------------- the S/O/A/P view (the doctor's decision D11 b, 2026-10-26)
+test("the S/O/A/P view: the same lines, grouped S / O / A / P by the chart skill; only the encounter notes have it", () => {
+  const note = A.assemble("A04", { kase: withFlow(), flow: FLOW, items: [item("problems", "#1 試験の問題"), item("plan", "試験の計画")] });
+  const plain = A.toText(note);
+  const soap = A.toText(note, { soap: true });
+  const heads = [...soap.matchAll(/^(S|O|A|A\/P|P)\)/gm)].map((m) => m[1]);
+  assert.deepEqual(heads, ["S", "O", "A", "P"]);
+  // every line of the field view is in the S/O/A/P view, and the S/O/A/P view adds only the part headings
+  const lines = (t: string) => t.split("\n").filter((l) => l.trim());
+  const extra = lines(soap).filter((l) => !lines(plain).includes(l));
+  assert.ok(extra.every((l) => /^(S|O|A|A\/P|P)\)|^その他$/.test(l)), JSON.stringify(extra));
+  assert.equal(lines(soap).length, lines(plain).length + heads.length);
+  // the fields keep their own order inside a part
+  const order = [...soap.matchAll(/^■(.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(order.slice(0, 3), ["来院情報", "現病歴", "患者背景"]);
+  assert.ok(order.indexOf("重症度・第一仮説・鑑別") < order.indexOf("帰宅・入院・転院と根拠"));
+  // a summary, a consult and a handover have no S/O/A/P view: the option leaves them as they are
+  for (const t of ["A08", "B02", "B06"]) {
+    assert.equal(A.hasSoapView(t), false, t);
+    const n = A.assemble(t, { kase: KASE });
+    assert.equal(A.toText(n, { soap: true }), A.toText(n));
+  }
+  for (const t of ["A04", "A01", "A05", "A06", "A02"]) assert.ok(A.hasSoapView(t), t);
+  // every field of the mapped types has a part (nothing falls to "その他")
+  for (const [t, map] of Object.entries(A.SOAP_MAP) as [string, any][]) assert.deepEqual(T.NOTE_TYPES[t].sections.map((s: any) => s.key).filter((k: string) => !map[k]), [], t);
+});
+
+test("the S/O/A/P view splits the plan's answers into Dx / Tx / Ex by their question's category; an uncategorised line is not guessed", () => {
+  const SCHEMA_FLOWS: any = S.FLOWS;
+  const flow = SCHEMA_FLOWS["emergency-department.shock"];
+  const answers = { tests: ["vbg", "labs"], fluid: "given", t_fluid: "02:30", consult: ["icu"] };
+  const kase = { ...KASE, structured: I.renderStructured(flow, answers, KASE), intake: { flow: flow.id, answers } };
+  const note = A.assemble("A04", { kase, flow });
+  const mgmt = note.sections.find((s: any) => s.key === "management");
+  const routed = mgmt.blocks.find((b: any) => b.source === "routed");
+  assert.equal(routed.lines.length, routed.cats.length);
+  const soap = A.toText(note, { soap: true });
+  const part = soap.slice(soap.indexOf("■治療・処置・コンサルト"));
+  const dx = part.indexOf("Dx（診断・確認）:");
+  const tx = part.indexOf("Tx（治療・処置・依頼）:");
+  assert.ok(dx >= 0 && tx > dx, part.slice(0, 300));
+  assert.ok(part.slice(dx, tx).includes("オーダーした検査"), "an order of tests is Dx");
+  assert.ok(part.slice(tx).includes("細胞外液"), "a treatment is Tx");
+  // the field view is unchanged: one block of lines, no Dx/Tx/Ex headings
+  assert.ok(!A.toText(note).includes("Dx（診断・確認）:"));
+});

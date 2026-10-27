@@ -485,13 +485,24 @@ export function initSim({ el, $, openDialog, copyText, api }) {
     const text = noteText();
     const pre = el("pre", "sim-note", text);
     pre.id = "sim-note";
+    const soapBox = el("input");
+    soapBox.type = "checkbox";
+    soapBox.id = "sim-note-soap";
+    soapBox.checked = !!S.noteSoap;
+    soapBox.addEventListener("change", () => ((S.noteSoap = soapBox.checked), renderPlay()));
+    const soapLab = el("label", "check");
+    soapLab.append(soapBox, el("span", null, "S/O/A/P で表示する（中身は同じで、並べ方だけを変えます）"));
+    noteSec.append(soapLab);
     const copyBtn = btn("記載をコピー（架空の見出しつき）", "btn", async () => {
       const ok = await copyText(text);
       copyMsg.textContent = ok ? "コピーしました。" : "コピーできませんでした。";
     });
     const copyMsg = el("p", "help", "");
-    noteSec.append(pre, el("div", "btn-row"), copyMsg);
-    noteSec.children[2].append(copyBtn);
+    const copyRow = el("div", "btn-row");
+    copyRow.append(copyBtn);
+    noteSec.append(pre, copyRow, copyMsg);
+    noteSec.open = !!S.noteOpen;
+    noteSec.addEventListener("toggle", () => (S.noteOpen = noteSec.open));
     body.append(noteSec);
 
     const end = el("div", "btn-row");
@@ -619,7 +630,7 @@ export function initSim({ el, $, openDialog, copyText, api }) {
   function noteText() {
     const items = S.soap ? soapItems(S.soap, S.soapPicks) : [];
     const note = assemble("A04", { kase: simKase(S.setting, S.flow, S.answers, S.own), flow: S.flow, items });
-    return `${SIM_HEADER}\n${toText(note)}`;
+    return `${SIM_HEADER}\n${toText(note, { soap: !!S.noteSoap })}`;
   }
 
   // ---------------------------------------------------------------- the debrief: side by side, nothing judged

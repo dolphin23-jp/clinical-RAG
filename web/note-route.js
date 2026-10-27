@@ -67,7 +67,9 @@ export function placeOf(flow, q, typeId, index = indexOf(typeId)) {
 /**
  * The answers of a flow, routed.  kase: the typed case with `structured` (what was sent) and `intake` ({flow, answers}, kept by the screen).
  * Returns null when the type does not route (ROUTED) or there are no answers.  Otherwise
- *   { routed: { [field]: [line] }, rest: [{ phase, line, why }], answered, placed, reasons: { [why]: n }, fromText }
+ *   { routed: { [field]: [line] }, cats: { [field]: [category] }, rest: [{ phase, line, why }], answered, placed, reasons: { [why]: n }, fromText }
+ * `cats`: the question category of each routed line, in the same order (a time or condition line has the category of the question it follows):
+ * the S/O/A/P view uses it to put the plan's lines under Dx / Tx / Ex (web/note-assemble.js).
  * `fromText`: the answers could not be read question by question; `rest` is then the answered lines of the text, in order.
  */
 export function routeAnswers(typeId, { flow = null, kase = {} } = {}) {
@@ -80,6 +82,7 @@ export function routeAnswers(typeId, { flow = null, kase = {} } = {}) {
   if (!readable) return fromText(text);
   const index = indexOf(typeId);
   const routed = {};
+  const cats = {};
   const rest = [];
   const reasons = {};
   const ctx = contextOf(answers, kase);
@@ -105,8 +108,11 @@ export function routeAnswers(typeId, { flow = null, kase = {} } = {}) {
       }
     }
   }
-  const put = (r, p, phase) => {
-    if (p.field) (routed[p.field] ??= []).push(r.line);
+  const put = (r, p, phase, cat) => {
+    if (p.field) {
+      (routed[p.field] ??= []).push(r.line);
+      (cats[p.field] ??= []).push(cat ?? "");
+    }
     else {
       rest.push({ phase, line: r.line, why: p.why });
       reasons[p.why] = (reasons[p.why] ?? 0) + 1;
@@ -115,11 +121,11 @@ export function routeAnswers(typeId, { flow = null, kase = {} } = {}) {
   for (const r of rows) {
     if (taken.has(r.q.id)) continue; // written with its question
     const p = isAux(r.q) ? { why: "aux" } : placeOf(flow, r.q, typeId, index);
-    put(r, p, r.phase);
-    for (const a of followers.get(r) ?? []) put(a, p, r.phase);
+    put(r, p, r.phase, r.q.br?.cat);
+    for (const a of followers.get(r) ?? []) put(a, p, r.phase, r.q.br?.cat);
   }
   const placed = Object.values(routed).reduce((n, l) => n + l.length, 0);
-  return { routed, rest, answered: placed + rest.length, placed, reasons, fromText: false, scene: text.split("\n")[0] };
+  return { routed, cats, rest, answered: placed + rest.length, placed, reasons, fromText: false, scene: text.split("\n")[0] };
 }
 
 function fromText(text) {
@@ -127,7 +133,7 @@ function fromText(text) {
     .split("\n")
     .filter((l) => l.trim() && !/^【.*】$/.test(l) && !/^［.*］$/.test(l))
     .map((line) => ({ phase: "", line, why: "text" }));
-  return { routed: {}, rest, answered: rest.length, placed: 0, reasons: rest.length ? { text: rest.length } : {}, fromText: true, scene: text.split("\n")[0] };
+  return { routed: {}, cats: {}, rest, answered: rest.length, placed: 0, reasons: rest.length ? { text: rest.length } : {}, fromText: true, scene: text.split("\n")[0] };
 }
 
 /** The unplaced answers as one block of text: the scene line, then each phase's answers under its heading (a text that could not be split is kept as it was). */

@@ -40,6 +40,36 @@ export const SOURCE_LABELS = {
   own: "先生のアセスメント（入力）",
 };
 
+// ---------------------------------------------------------------- the S/O/A/P view (the doctor's decision D11 b, 2026-10-26)
+/**
+ * The same note, shown as S / O / A / P (the chart skill clinical-chart-pos-soap v2.0: §1.2, §2.1–2.4, §2.7.3).  A view only: the fields, their
+ * order inside a part, and every line are the note's own (nothing is added, dropped or rewritten).  Only the encounter notes have it; a summary
+ * (A07, A08), a consult (B02) and a handover (B06) are not SOAP notes.
+ */
+export const SOAP_MAP = {
+  A04: { arrival: "S", hpi: "S", background: "S", initial: "O", exam: "O", tests: "O", assessment: "A", management: "P", reassessment: "P", disposition: "P" },
+  A01: { visit: "S", hpi: "S", background: "S", initial: "O", exam: "O", tests: "O", reasoning: "A", plan: "P", recheck: "P", followup: "P" },
+  A02: { context: "S", previous_plan: "S", interval: "S", subjective: "S", objective: "O", problem_ap: "AP", followup: "P" },
+  A05: { admission: "S", hpi: "S", background: "S", baseline: "S", initial: "O", summary: "A", problem_list: "A", problem_ap: "AP", general: "P", outlook: "P" },
+  A06: { context: "S", interval: "S", subjective: "S", objective: "O", overall: "O", problem_ap: "AP", general: "P", handover: "P" },
+};
+export const SOAP_PARTS = [
+  ["S", "S)（本人・家族・救急隊・紹介元から得た情報）"],
+  ["O", "O)（確かめた所見・検査）"],
+  ["A", "A)（評価）"],
+  ["AP", "A/P)（Problem 別）"],
+  ["P", "P)（計画・経過・行き先）"],
+];
+/**
+ * The plan's kinds (the skill §1.5): the category of a routed answer -> Dx (to diagnose, rule out, follow), Tx (treatment, procedure, consult),
+ * Ex (explanation).  Only the plan fields of the routed types are split (A04 management, A01 plan); a line whose category is not listed stays
+ * under "区分なし" (never guessed).
+ */
+export const PLAN_KIND_OF = { test_order: "Dx", test_result: "Dx", management: "Tx", procedure: "Tx", consult_request: "Tx", explanation: "Ex" };
+export const PLAN_KIND_HEADINGS = { Dx: "Dx（診断・確認）", Tx: "Tx（治療・処置・依頼）", Ex: "Ex（説明・教育）", "": "区分なし" };
+const PLAN_FIELDS = { A04: ["management"], A01: ["plan"] };
+export const hasSoapView = (typeId) => Object.hasOwn(SOAP_MAP, typeId);
+
 /** The adoptable parts of the assessment/plan draft (the `##` headings of worker/src/prompt.ts MODE_HEADINGS.assess). */
 export const ROLES = {
   problems: { heading: "問題リスト", label: "問題リスト（草案）" },
@@ -160,7 +190,7 @@ export function assemble(typeId, { kase = {}, items = [], board = null, fill: fi
     }
     // the flow's answers whose question category ROUTES sends to this field (web/note-route.js), after what was typed
     const routedHere = routing?.routed[s.key];
-    if (routedHere?.length) blocks.push({ kind: "case", source: "routed", label: ROUTED_LABEL, text: routedHere.join("\n") });
+    if (routedHere?.length) blocks.push({ kind: "case", source: "routed", label: ROUTED_LABEL, text: routedHere.join("\n"), lines: routedHere, cats: routing.cats?.[s.key] ?? [] });
     const empty = blocks.length === 0;
     if (empty && s.requirement !== "required") {
       omitted.push(s.key);
@@ -221,7 +251,7 @@ const citeLine = (c) => (c.kind === "web" ? `Web: ${c.title || c.url || ""}`.tri
  * opts.sourceMarks: keep where each item comes from ([推論] etc., the cited book pages and the list of sources).
  * 【出典未確認・要確認】 on a number is always kept: it is a warning about the number, not a mark of origin.
  */
-export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
+export function toText(note, { aiMark = true, sourceMarks = true, soap = false } = {}) {
   // a day is "入院N日目" in an admission's notes and "基準日からN日後" in an outpatient record's (case-course.js dayLabelFor)
   const dl = (n) => dayLabelFor({ kind: note.outpatient ? "outpatient" : "inpatient" }, n);
   const out = [`【${note.type.title}】下書き`, BLANK_HEADER];
@@ -258,7 +288,18 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
     }
     return `${withMarks && p.ai && aiMark ? AI_MARK : ""}${label}${certainty ? `（${certainty}）` : ""}${marks.length ? ` ${[...new Set(marks)].join("")}` : ""}${sourceMarks && withMarks && p.from === "ed" ? ` ${CARRIED_MARK}` : ""}`;
   };
-  for (const s of note.sections) {
+  // the S/O/A/P view: the same sections, grouped by part (the order inside a part is the type's); a section the map does not name stays at the end
+  const map = soap ? SOAP_MAP[note.type.id] : null;
+  const order = map ? [...SOAP_PARTS.map(([p]) => p), ""] : [""];
+  const partOf = (s) => (map ? map[s.key] ?? "" : "");
+  const sections = order.flatMap((p) => note.sections.filter((s) => partOf(s) === p));
+  let part = null;
+  const planSplit = map ? new Set(PLAN_FIELDS[note.type.id] ?? []) : new Set();
+  for (const s of sections) {
+    if (map && partOf(s) !== part) {
+      part = partOf(s);
+      out.push(part ? SOAP_PARTS.find(([p]) => p === part)[1] : "その他");
+    }
     out.push(`■${s.label}`);
     if (s.empty) out.push(UNFILLED);
     const several = s.blocks.length > 1;
@@ -324,6 +365,15 @@ export function toText(note, { aiMark = true, sourceMarks = true } = {}) {
             for (const e of mine) out.push(withReason(e, itemLine(e, e.from === "ai")));
           }
         });
+      } else if (b.source === "routed" && planSplit.has(s.key) && Array.isArray(b.lines)) {
+        // the plan's answers under Dx / Tx / Ex by their question's category (the S/O/A/P view only)
+        out.push(`［${b.label}］`);
+        for (const k of ["Dx", "Tx", "Ex", ""]) {
+          const mine = b.lines.filter((_, i) => (PLAN_KIND_OF[b.cats?.[i]] ?? "") === k);
+          if (!mine.length) continue;
+          out.push(`${PLAN_KIND_HEADINGS[k]}:`);
+          for (const l of mine) out.push(l);
+        }
       } else {
         if (several || b.kind === "own" || b.source === "findings" || b.source === "routed") out.push(`［${b.label}］`);
         out.push(b.text);
