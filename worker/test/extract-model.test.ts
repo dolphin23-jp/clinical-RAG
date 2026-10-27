@@ -133,6 +133,8 @@ test("extractable: no option says it is the doctor's judgment, and the questions
     }
   }
   for (const id of M.JUDGMENT_IDS) assert.ok(present.has(id), `${id} is in no imported flow: a renamed question is to be looked at again`);
+  // the disposition is the doctor's decision (ent decision, 2026-10-26): neither it, its basis nor the time it was decided is offered
+  for (const fl of Object.values(SCHEMA.FLOWS) as any[]) for (const q of fl.questions) if (["dispo", "dispo_why", "dispo_basis", "t_dispo"].includes(q.id)) assert.ok(!M.extractable(q), `${fl.id} ${q.id}`);
   const f = SCHEMA.FLOWS;
   const by = (flow: string, id: string) => f[flow].questions.find((q: any) => q.id === id);
   for (const [flow, id] of [["emergency-department.gi-bleeding", "vbg_res"], ["emergency-department.nausea-vomiting", "vbg_res"], ["emergency-department.gi-bleeding", "labs_res"], ["emergency-department.shock", "skin"], ["emergency-department.consciousness", "ems_glu"], ["emergency-department.chest-pain", "circ"], ["emergency-department.dizziness", "re_change"], ["outpatient-first-visit.fever", "antipyretic_tx"]]) {

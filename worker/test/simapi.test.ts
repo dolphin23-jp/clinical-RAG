@@ -422,3 +422,12 @@ test("route: suggest and soap through the fake; an identifier in a told line ref
   assert.equal(bad.status, 400);
   assert.equal(called, 0);
 });
+
+test("the disposition is the doctor's decision (ent decision, 2026-10-26): the doctor chooses it in the simulation; the case never holds it", () => {
+  const q = FULL.questions.find((x: any) => x.id === "dispo");
+  assert.equal(q.br.ent, "decision");
+  assert.ok(SC.isReading(q, readings));
+  const mine = SM.doctorQuestions(FULL, {}, "男性", readings).flatMap((g: any) => g.questions.map((x: any) => x.id));
+  assert.ok(mine.includes("dispo") && mine.includes("dispo_why"), JSON.stringify(mine));
+  assert.equal(flow.questions.find((x) => x.id === "dispo")?.kind, "reading");
+});
