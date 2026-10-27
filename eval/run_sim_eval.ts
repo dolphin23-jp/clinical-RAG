@@ -5,7 +5,7 @@
 // under work/, which git ignores).  The themes are invented names of diseases and symptoms (eval/sim.invented.jsonl), not patients.
 //
 //   against the deployed Worker (the whole path, with its books; each call counts in the daily cap):
-//     MEDBOOK_TOKEN=... node --no-warnings eval/run_sim_eval.ts --api https://<worker> eval/sim.invented.jsonl [--verbose] [--out work/sim_eval.json]
+//     MEDBOOK_TOKEN=... node --no-warnings eval/run_sim_eval.ts --api https://<worker> eval/sim.invented.jsonl [--verbose] [--course 3] [--out work/sim_eval.json]
 //   --local: straight to the Anthropic API from this machine (a key in ANTHROPIC_API_KEY, or the variable named by --key-env), running the same code
 //     as the Worker (worker/src/sim.ts).  The books come from a local database built by `python3 -m ingest build` (--db library.sqlite); without
 //     one the AI writes from no book section.  [--model <id>] (default: claude-opus-5-5)
@@ -25,7 +25,7 @@ import type { Db } from "../worker/src/db.ts";
 
 const args: string[] = process.argv.slice(2);
 const opt = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
-const WITH_VALUE = ["--api", "--out", "--key-env", "--model", "--db", "--anthropic-base"];
+const WITH_VALUE = ["--api", "--out", "--key-env", "--model", "--db", "--anthropic-base", "--course"];
 const positional = args.filter((a, i) => !a.startsWith("--") && !WITH_VALUE.includes(args[i - 1] ?? ""));
 const local = args.includes("--local");
 const apiBase = opt("--api");
@@ -54,6 +54,11 @@ const SM = (await import("../web/sim-model.js")) as any;
 const { JUDGMENT_IDS } = (await import("../web/extract-model.js")) as any;
 const readings = SM.simReadings(JUDGMENT_IDS);
 const verbose = args.includes("--verbose");
+const courseDays = Number(opt("--course") ?? 0);
+if (courseDays && !SM.WARD_DAYS.includes(courseDays)) {
+  console.error(`--course は ${SM.WARD_DAYS.join("・")} のどれか`);
+  process.exit(2);
+}
 const emptyDb: Db = { all: async () => [] } as unknown as Db;
 const db: Db = local && opt("--db") ? openDb(opt("--db") as string) : emptyDb;
 const model = opt("--model") ?? "claude-opus-5-5";
@@ -134,6 +139,14 @@ for (const t of themes) {
         }
       }
       out.continuations = conts;
+      // the course after the admission (step 5a), with --course N: made once from the opening state, checked as the screen checks it
+      if (courseDays) {
+        const admit = SM.admitOptions(flow)[0];
+        const start = (await import("../web/sim-engine.js" as string)).replay(setting, flow, [], { readings });
+        const w = await sim({ op: "course", flow: t.flow, setting, log: [], state: "s0", t: start.t, stage: start.stage, days: courseDays, admit: admit.id });
+        const c = SM.checkWardDays(w.ward, { dx: setting.assumed?.dx, overlap: w.overlap });
+        out.course = { days: c.days.length, missing: c.missing, hidden: c.hidden, copied: (w.overlap ?? []).length, ...(verbose ? { text: c.days } : {}) };
+      }
     }
   } catch (e) {
     out.error = (e as Error).message;
@@ -154,6 +167,16 @@ const summary = {
   author_ok_after_repair: `${ok}/${n}`,
   errors_by_code: allCodes,
   continuations_ok: `${contAll.filter((c) => c.ok).length}/${contAll.length}`,
+  ...(courseDays
+    ? {
+        course_days_made: `${results.reduce((a, r) => a + (r.course?.days ?? 0), 0)}/${results.filter((r) => r.course).length * courseDays}`,
+        course_hidden: results.reduce((m: Record<string, number>, r) => {
+          for (const [k, v] of Object.entries(r.course?.hidden ?? {})) m[k] = (m[k] ?? 0) + (v as number);
+          return m;
+        }, {}),
+        course_copied: results.reduce((a, r) => a + (r.course?.copied ?? 0), 0),
+      }
+    : {}),
   calls,
   tokens,
   model: local ? model : "(the Worker's)",

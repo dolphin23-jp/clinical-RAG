@@ -28,7 +28,21 @@ export function fakeSim(body: any): Response {
     ...(has("tests") ? [{ act: "do", target: "tests=vbg", why: "乳酸と酸塩基を確かめる" }] : []),
     ...(has("first") ? [{ act: "ask", target: "first", why: "読みの質問は挙げない（画面が捨てる）" }] : []),
   ];
-  if (props.S) {
+  if (props.days) {
+    // the course after the admission (step 5a): day 2 names a dose and day 3 the assumed diagnosis, so the screen's hiding can be seen
+    const n = Number(/入院(\d+)日目まで/.exec(user)?.[1] ?? 3);
+    out = {
+      days: Array.from({ length: n }, (_, i) => ({
+        day: i + 1,
+        events: `試験用の入院${i + 1}日目のできごと。`,
+        symptoms: i === 0 ? "息苦しさが続く。" : "息苦しさが和らいだ。",
+        findings: i === 2 ? "試験用の想定診断に合う所見。" : `呼吸数 ${26 - i * 2} 回/分（例示）。`,
+        treatment: i === 1 ? "試験薬を 10 mg で開始した。" : "なし",
+        outcome: i === n - 1 ? "入院継続。" : "",
+      })),
+      basis: sources.slice(0, 1),
+    };
+  } else if (props.S) {
     // the S/O/A/P draft: one number that is not in what the doctor was told (9.9), so the screen's mark can be seen
     out = {
       S: ["救急隊: 試験用の報告（呼吸が速い）"],

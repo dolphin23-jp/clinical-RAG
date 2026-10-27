@@ -11,13 +11,14 @@
 // daily cap like /api/ask (D8 a) and is not counted in the daily answer counts (F4; D7).
 import { postMessages, messageText, ExtractUpstreamError, type ExtractDeps } from "./extract.ts";
 import { findOverlaps, type OverlapFinding } from "./overlap.ts";
-import { SIM_AUTHOR_RULES, SIM_FILL_RULES, SIM_NEXT_RULES, SIM_RULES, SIM_SOAP_RULES, SIM_SUGGEST_RULES } from "./prompt.ts";
+import { COURSE_DAYS } from "./casemode.ts";
+import { SIM_AUTHOR_RULES, SIM_COURSE_RULES, SIM_FILL_RULES, SIM_NEXT_RULES, SIM_RULES, SIM_SOAP_RULES, SIM_SUGGEST_RULES } from "./prompt.ts";
 import { SIM_CATALOG, SIM_CATALOG_SOURCE, type SimFlow, type SimQuestion } from "./sim-catalog.ts";
 import type { Db } from "./db.ts";
 import { getParent, searchParents, type ParentResult } from "./search.ts";
 import { pageLabel } from "./format.ts";
 
-export const SIM_OPS = ["author", "next", "fill", "suggest", "soap"] as const;
+export const SIM_OPS = ["author", "next", "fill", "suggest", "soap", "course"] as const;
 export type SimOp = (typeof SIM_OPS)[number];
 /** Twins of web/sim-model.js LEVELS / THEME_LIMIT and web/sim-case.js WHO / HOW / STAGES (pinned equal by worker/test/simapi.test.ts). */
 export const LEVELS = ["易", "標準", "難"];
@@ -36,6 +37,12 @@ const SAY_LABELS: Record<string, string> = { explain: "説明", consult: "相談
 export const SIM_LIMITS = { log: 400, setting: 300_000, fill: 20, sources: 12, errors: 40, text: 400, books: 6, bookChars: 1500, assumed: 6, suggest: 5, why: 200, told: 300, answers: 6000, own: 2000, soapItems: 20 };
 /** The kinds of a plan item of the S/O/A/P draft (the chart skill's P: Dx / Tx / Ex). */
 export const PLAN_KINDS = ["Dx", "Tx", "Ex"];
+/** The days of the course after the admission (step 5a): the created case's choices without 0.  Twin of web/sim-model.js WARD_DAYS. */
+export const WARD_DAYS = COURSE_DAYS.filter((d) => d > 0);
+/** A disposition that admits the patient: an admission, or an emergency procedure the patient is admitted after (twin of web/sim-model.js). */
+export const ADMIT_RE = /^入院|緊急/;
+export const WARD_PARTS = ["events", "symptoms", "findings", "treatment"] as const;
+export const WARD_TEXT = 600;
 
 export class SimInputError extends Error {
   code: string;
@@ -66,12 +73,17 @@ export interface SimRequest {
   told: string[];
   answers: string;
   own: string;
+  /** op course: how many days, and the label of the doctor's disposition that admits the patient */
+  days: number;
+  admit: string;
 }
 
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const str = (x: unknown, max: number): string => (typeof x === "string" ? x.trim().slice(0, max) : "");
 const factIds = (flow: SimFlow) => flow.questions.filter((q) => q.kind === "fact").map((q) => q.id);
 const qOf = (flow: SimFlow, id: string) => flow.questions.find((q) => q.id === id);
+/** The options of the flow's disposition question that admit the patient: [id, label]. */
+export const admitOptions = (flow: SimFlow): [string, string][] => (qOf(flow, "dispo")?.options ?? []).filter(([, label]) => ADMIT_RE.test(label));
 const actionKeys = (flow: SimFlow) => flow.questions.filter((q) => q.kind === "action").flatMap((q) => (q.options ?? []).map(([o]) => `${q.id}=${o}`));
 
 function parseAct(a: unknown, flow: SimFlow): SimAct {
@@ -89,12 +101,12 @@ function parseAct(a: unknown, flow: SimFlow): SimAct {
 export function parseSimRequest(body: unknown): SimRequest {
   const b = isObj(body) ? body : {};
   const op = SIM_OPS.find((o) => o === b.op);
-  if (!op) throw new SimInputError("op は author・next・fill のどれか", "bad_op");
+  if (!op) throw new SimInputError(`op は ${SIM_OPS.join("・")} のどれか`, "bad_op");
   const id = typeof b.flow === "string" ? b.flow : "";
   if (!Object.hasOwn(SIM_CATALOG, id)) throw new SimInputError("模擬できるのは救急外来のフローだけです", "unknown_flow");
   if (b.schema !== SIM_CATALOG_SOURCE.commit) throw new SimInputError("質問の定義の版が、画面とサーバーで違います。ページを読み込み直してください", "schema_changed", 409);
   const flow = SIM_CATALOG[id];
-  const req: SimRequest = { op, flow, theme: "", level: "標準", repair: null, setting: null, log: [], state: "s0", t: 0, stage: STAGES[0][0], qs: [], sources: [], told: [], answers: "", own: "" };
+  const req: SimRequest = { op, flow, theme: "", level: "標準", repair: null, setting: null, log: [], state: "s0", t: 0, stage: STAGES[0][0], qs: [], sources: [], told: [], answers: "", own: "", days: 0, admit: "" };
   if (op === "soap") {
     // the draft is written from what the doctor saw and wrote, never from the hidden setting
     if (b.setting !== undefined) throw new SimInputError("S/O/A/P の草案には、隠れた設定を送りません", "setting_not_taken");
@@ -134,6 +146,14 @@ export function parseSimRequest(body: unknown): SimRequest {
   const srcs = isObj(b.setting.origin) && Array.isArray(b.setting.origin.sources) ? b.setting.origin.sources : [];
   req.sources = srcs.map((x: any) => (typeof x?.id === "string" ? x.id.slice(0, 120) : "")).filter(Boolean).slice(0, SIM_LIMITS.sources);
   if (op === "suggest") return req;
+  if (op === "course") {
+    if (!WARD_DAYS.includes(b.days)) throw new SimInputError(`入院後の日数は ${WARD_DAYS.join("・")} のどれか`, "bad_days");
+    req.days = b.days;
+    const admit = admitOptions(flow).find(([o]) => o === b.admit);
+    if (!admit) throw new SimInputError("入院後の経過は、先生が入院（または入院する処置）を行き先に選んだときだけ作ります", "not_admitted");
+    req.admit = admit[1];
+    return req;
+  }
   if (op === "next") {
     const last = req.log[req.log.length - 1];
     if (!last || (last.act !== "wait" && last.act !== "stage")) throw new SimInputError("続きは、待つ・次の段への行為のあとにだけ書きます", "not_boundary");
@@ -162,7 +182,7 @@ const catalogLines = (flow: SimFlow) =>
 /** The instructions and the flow's questions: the same string for every request of an op and a flow (it is cached). */
 export function simSystem(op: SimOp, flow: SimFlow): string {
   if (op === "soap") return [SIM_SOAP_RULES, "", `場面・症候: ${flow.title}`].join("\n");
-  const rules = op === "author" ? [SIM_AUTHOR_RULES, SIM_SUGGEST_RULES] : op === "next" ? [SIM_NEXT_RULES, SIM_SUGGEST_RULES] : op === "suggest" ? [SIM_SUGGEST_RULES] : [SIM_FILL_RULES];
+  const rules = op === "author" ? [SIM_AUTHOR_RULES, SIM_SUGGEST_RULES] : op === "next" ? [SIM_NEXT_RULES, SIM_SUGGEST_RULES] : op === "suggest" ? [SIM_SUGGEST_RULES] : op === "course" ? [SIM_COURSE_RULES] : [SIM_FILL_RULES];
   return [SIM_RULES, ...rules, "", `質問の一覧（${flow.title}。1行に1問の JSON。kind: fact＝症例が値を持つ／reading＝先生の読み・判断／action＝先生の行為／time＝時刻）:`, ...catalogLines(flow)].join("\n");
 }
 
@@ -201,6 +221,10 @@ export function simSchema(op: SimOp, flow: SimFlow, sourceIds: string[], qs: str
         disposition: { type: "string" },
       },
     };
+  }
+  if (op === "course") {
+    const day = { type: "object", additionalProperties: false, required: ["day", ...WARD_PARTS, "outcome"], properties: { day: { type: "integer" }, ...Object.fromEntries(WARD_PARTS.map((k) => [k, { type: "string" }])), outcome: { type: "string" } } };
+    return { type: "object", additionalProperties: false, required: ["days", "basis"], properties: { days: { type: "array", items: day }, basis: idList(sourceIds) } };
   }
   if (op === "fill") return { type: "object", additionalProperties: false, required: ["facts"], properties: { facts: { type: "array", items: factItem(qs) } } };
   if (op === "next") {
@@ -285,15 +309,16 @@ export function userContent(r: SimRequest, books: BookSection[]): string {
   }
   const hidden = { patient: r.setting.patient, opening: r.setting.opening, states: r.setting.states, orders: r.setting.orders, assumed: r.setting.assumed };
   const stageLabel = STAGES.find(([id]) => id === r.stage)?.[1] ?? r.stage;
+  const ward = r.op === "course" ? `\n\n<admit>\n先生が選んだ行き先: ${r.admit}\n</admit>\n\n<days>\n入院1日目から入院${r.days}日目まで（${r.days}日分）\n</days>` : "";
   const fill = r.op === "fill" ? `\nfill（値を補う項目）: ${r.qs.map((q) => `${q}（${qOf(r.flow, q)?.label ?? q}）`).join("、")}` : "";
-  return `<setting>\n${fence(JSON.stringify(hidden))}\n</setting>\n\n<course>\n先生の行為（＊は前の区切りからの行為）:\n${renderCourse(r.flow, r.log).join("\n") || "（まだありません）"}\nいまの状態: ${r.state}\n区切り: ${r.t}\n段: ${stageLabel}${fill}\n</course>\n\n${booksBlock(books)}`;
+  return `<setting>\n${fence(JSON.stringify(hidden))}\n</setting>\n\n<course>\n先生の行為（＊は前の区切りからの行為）:\n${renderCourse(r.flow, r.log).join("\n") || "（まだありません）"}\nいまの状態: ${r.state}\n区切り: ${r.t}\n段: ${stageLabel}${fill}\n</course>${ward}\n\n${booksBlock(books)}`;
 }
 
 export function buildSimBody(r: SimRequest, books: BookSection[], model: string, fallback = true): Record<string, unknown> {
   return {
     model,
-    max_tokens: r.op === "author" ? 16000 : r.op === "soap" ? 8000 : 6000,
-    output_config: { effort: r.op === "author" || r.op === "soap" ? "medium" : "low", format: { type: "json_schema", schema: simSchema(r.op, r.flow, books.map((b) => b.id), r.qs) } },
+    max_tokens: r.op === "author" || r.op === "course" ? 16000 : r.op === "soap" ? 8000 : 6000,
+    output_config: { effort: r.op === "author" || r.op === "soap" || r.op === "course" ? "medium" : "low", format: { type: "json_schema", schema: simSchema(r.op, r.flow, books.map((b) => b.id), r.qs) } },
     system: [{ type: "text", text: simSystem(r.op, r.flow), cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: userContent(r, books) }],
     ...(fallback ? { fallbacks: "default" } : {}),
@@ -407,6 +432,35 @@ export function checkFacts(flow: SimFlow, list: unknown, opts: { only?: Set<stri
 
 const texts = (xs: unknown, max = SIM_LIMITS.assumed) => (Array.isArray(xs) ? xs.map((x) => str(x, SIM_LIMITS.text)).filter(Boolean).slice(0, max) : []);
 
+/** One day of the course after the admission (step 5a): facts in short sentences; the outcome only on the last day. */
+export interface WardDay {
+  day: number;
+  events: string;
+  symptoms: string;
+  findings: string;
+  treatment: string;
+  outcome?: string;
+}
+
+/** The days the model wrote, as the screen takes them: day 1..N once each (a day out of range or written twice is dropped), texts cut. */
+export function checkWard(list: unknown, days: number): { days: WardDay[]; missing: number[] } {
+  const seen = new Map<number, WardDay>();
+  const twice = new Set<number>();
+  for (const d of Array.isArray(list) ? list : []) {
+    const n = (d as any)?.day;
+    if (!Number.isInteger(n) || n < 1 || n > days) continue;
+    if (seen.has(n)) twice.add(n);
+    const w: WardDay = { day: n, events: str((d as any).events, WARD_TEXT), symptoms: str((d as any).symptoms, WARD_TEXT), findings: str((d as any).findings, WARD_TEXT), treatment: str((d as any).treatment, WARD_TEXT) };
+    const outcome = str((d as any).outcome, SIM_LIMITS.text);
+    if (n === days && outcome) w.outcome = outcome;
+    seen.set(n, w);
+  }
+  for (const n of twice) seen.delete(n);
+  const out = [...seen.values()].filter((w) => WARD_PARTS.some((k) => w[k]) || w.outcome).sort((a, b) => a.day - b.day);
+  const have = new Set(out.map((w) => w.day));
+  return { days: out, missing: Array.from({ length: days }, (_, i) => i + 1).filter((n) => !have.has(n)) };
+}
+
 export interface SimResult {
   model?: string;
   setting?: any;
@@ -415,6 +469,7 @@ export interface SimResult {
   basis?: string[];
   suggest?: SimSuggestion[];
   soap?: SimSoap;
+  ward?: { days: WardDay[]; basis: string[]; missing: number[] };
   dropped: Record<SimDrop, number>;
   overlap: OverlapFinding[];
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
@@ -433,6 +488,11 @@ export function parseSimOutput(raw: string, r: SimRequest, books: BookSection[])
   const none: Record<SimDrop, number> = { unknown: 0, not_fact: 0, value: 0, duplicate: 0, after_act: 0, shape: 0 };
   if (r.op === "suggest") return { suggest: checkSuggestions(r.flow, d?.suggest), dropped: none, overlap: [] };
   if (r.op === "soap") return { soap: checkSoap(d), dropped: none, overlap: [] };
+  if (r.op === "course") {
+    const ward = checkWard(d?.days, r.days);
+    const basis = (Array.isArray(d?.basis) ? d.basis : []).filter((b: unknown) => typeof b === "string" && sourceIds.has(b)).slice(0, 6);
+    return { ward: { ...ward, basis }, dropped: none, overlap: overlapOf(ward.days.flatMap((w) => [...WARD_PARTS.map((k) => w[k]), w.outcome ?? ""])) };
+  }
   if (r.op === "fill") {
     const { facts, dropped } = checkFacts(r.flow, d?.facts, { only: new Set(r.qs) });
     return { facts, dropped, overlap: overlapOf(facts.filter((f) => typeof f.v === "string" && qOf(r.flow, f.q)?.type === "text").map((f) => f.v as string)) };

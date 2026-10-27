@@ -378,7 +378,7 @@ test("the simulation's screen modules send nothing, keep nothing in the browser 
   assert.deepEqual([...readFileSync(web("sim-ui.js"), "utf-8").matchAll(/import\("(.+?)"\)/g)].map((m) => m[1]), ["./flow-schema.js"]);
   // the copy of the note carries the fictional header, and the screen never calls the assumption "the answer"
   const ui = readFileSync(web("sim-ui.js"), "utf-8");
-  assert.ok(ui.includes("`${SIM_HEADER}\\n${toText(note, { soap: !!S.noteSoap })}`"));
+  assert.ok(ui.includes("`${SIM_HEADER}\\n${toText(note, { soap: !!S.noteSoap })}${ward.length"));
   assert.ok(!/正解/.test(ui + readFileSync(web("sim-model.js"), "utf-8")));
 });
 
@@ -573,4 +573,46 @@ test("the told lines for the draft are what the screen showed (no refusal, no hi
   assert.ok(!lines.some((l: string) => l.includes("先生が選ぶ項目")), "a refusal is not sent");
   const json = JSON.stringify(lines);
   assert.ok(!json.includes("s1") && !json.includes(s.assumed.dx[0]));
+});
+
+// ---------------------------------------------------------------------------------- after the admission (step 5a; D14)
+test("checkWardDays: a part with an identifier, a date, a dose, a threshold, an evaluation word, the assumed diagnosis or a copied run is hidden, with its reason", () => {
+  const ward = {
+    days: [
+      { day: 2, events: "解熱した。", symptoms: "なし", findings: "想定診断Xに合う所見。", treatment: "試験薬を 10 mg で開始した。" },
+      { day: 1, events: "ID 12345678 の件", symptoms: "倦怠感が続く。", findings: "乳酸 4 以上。", treatment: "対応が遅れた。", outcome: "" },
+      { day: 3, events: "10月3日に転棟。", symptoms: "書籍の文そのままの長い一文です。", findings: "なし", treatment: "なし", outcome: "退院。" },
+    ],
+    missing: [4],
+  };
+  const c = SM.checkWardDays(ward, { dx: ["想定診断X", "x"], overlap: [{ text: "書籍の文そのままの長い一文です。" }] });
+  assert.deepEqual(c.days.map((d: any) => d.day), [1, 2, 3]);
+  const part = (n: number, k: string) => c.days.find((d: any) => d.day === n).parts.find((p: any) => p.key === k);
+  assert.equal(part(1, "events").hidden, "identifier");
+  assert.equal(part(1, "events").text, "", "the hidden text is not handed to the screen");
+  assert.equal(part(1, "findings").hidden, "threshold");
+  assert.equal(part(1, "treatment").hidden, "evaluation");
+  assert.equal(part(1, "symptoms").text, "倦怠感が続く。");
+  assert.equal(part(1, "outcome"), undefined, "an empty part is no row");
+  assert.equal(part(2, "findings").hidden, "diagnosis");
+  assert.equal(part(2, "treatment").hidden, "dose");
+  assert.equal(part(3, "events").hidden, "date");
+  assert.equal(part(3, "symptoms").hidden, "copy");
+  assert.equal(part(3, "outcome").text, "退院。");
+  assert.deepEqual(c.missing, [4]);
+  assert.deepEqual(c.hidden, { identifier: 1, date: 1, dose: 1, threshold: 1, evaluation: 1, diagnosis: 1, copy: 1 });
+  const short = SM.checkWardDays({ days: [{ day: 1, events: "なし", symptoms: "", findings: "", treatment: "" }] }, { overlap: [{ text: "所見はなしと書かれた長い写しの一文です。" }] });
+  assert.equal(short.days[0].parts[0].text, "なし", "a short part inside a copied run is not hidden");
+});
+
+test("the ward's note lines are the doctor's own writing of the opened days only; an admitting disposition is an admission or an emergency procedure", async () => {
+  assert.deepEqual(SM.wardNoteLines({ 1: " 評価1 ", 2: "", 3: "評価3" }, 2), [SM.WARD_HEADER, "入院1日目: 評価1"]);
+  assert.deepEqual(SM.wardNoteLines({ 1: "評価1", 3: "評価3" }, 3), [SM.WARD_HEADER, "入院1日目: 評価1", "入院3日目: 評価3"]);
+  assert.deepEqual(SM.wardNoteLines({}, 3), []);
+  assert.deepEqual(SM.wardNoteLines(undefined, undefined), []);
+  const shock = (await import(web("flow-schema.js"))).FLOWS["emergency-department.shock"];
+  assert.deepEqual(SM.admitOptions(shock).map((o: any) => o.id), ["ward", "icu", "op"]);
+  assert.equal(SM.admittedBy(shock, { dispo: "icu" }).label, "入院（HCU・ICU）");
+  assert.equal(SM.admittedBy(shock, { dispo: "home" }), null);
+  assert.equal(SM.admittedBy(shock, {}), null);
 });

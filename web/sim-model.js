@@ -353,3 +353,76 @@ export function soapItems(draft, picked) {
   });
   return items;
 }
+
+// ---------------------------------------------------------------- after the admission (step 5a; the doctor's decision D14)
+/** The days of the course after the admission: the created case's choices without 0.  Twin of worker/src/sim.ts WARD_DAYS. */
+export const WARD_DAYS = [3, 5, 7, 10, 14];
+/** A disposition that admits the patient: an admission, or an emergency procedure the patient is admitted after.  Twin of worker/src/sim.ts. */
+export const ADMIT_RE = /^入院|緊急/;
+export const WARD_PARTS = [
+  ["events", "できごと"],
+  ["symptoms", "症状"],
+  ["findings", "所見・検査（数値は例示）"],
+  ["treatment", "治療・処置（用量は書かない）"],
+  ["outcome", "転帰"],
+];
+export const WARD_HIDDEN = { identifier: "識別情報らしき文字", date: "日付らしき文字", dose: "用量らしい数値", threshold: "閾値らしい比較", evaluation: "評価の語", diagnosis: "想定の診断名", copy: "書籍の文の写し" };
+export const WARD_HEADER = "【入院後（先生の記載）】";
+
+/** The options of the flow's disposition question that admit the patient: [{ id, label }]. */
+export const admitOptions = (flow) => (questionOf(flow, "dispo")?.options ?? []).filter((o) => ADMIT_RE.test(o.label ?? ""));
+
+/** The admitting option the doctor chose as the disposition ({ id, label }), or null (not chosen, or not an admission). */
+export function admittedBy(flow, answers) {
+  const v = answers?.dispo;
+  const ids = Array.isArray(v) ? v : [v];
+  return admitOptions(flow).find((o) => ids.includes(o.id)) ?? null;
+}
+
+/**
+ * The course the AI wrote, as the screen shows it: day 1..N, each part kept or hidden with its reason (an identifier, a date, a dose, a
+ * threshold, an evaluation word, the assumed diagnosis, or a run copied from a book).  The text is not changed, only hidden.
+ * ward: { days: [{ day, events, symptoms, findings, treatment, outcome? }], missing }, opts: { dx: [string], overlap: [{ text }] }
+ * → { days: [{ day, parts: [{ key, label, text, hidden }] }], missing, hidden: { reason: count } }
+ */
+export function checkWardDays(ward, { dx = [], overlap = [] } = {}) {
+  const names = (dx ?? []).map((d) => String(d ?? "").trim()).filter((d) => d.length >= 2);
+  const runs = (overlap ?? []).map((o) => String(o?.text ?? "").trim()).filter((t) => t.length >= 10);
+  const hidden = Object.fromEntries(Object.keys(WARD_HIDDEN).map((k) => [k, 0]));
+  const why = (t) => {
+    const h = scanCreated(t);
+    if (h.ids.length) return "identifier";
+    if (h.dates.length) return "date";
+    if (h.doses.length) return "dose";
+    if (h.thresholds.length) return "threshold";
+    if (EVAL_RE.test(t)) return "evaluation";
+    if (names.some((d) => t.includes(d))) return "diagnosis";
+    if (runs.some((r) => t.includes(r) || (t.length >= 10 && r.includes(t)))) return "copy"; // a short part (なし) inside a copied run is not a copy
+    return null;
+  };
+  const days = [];
+  for (const d of Array.isArray(ward?.days) ? ward.days : []) {
+    if (!Number.isInteger(d?.day) || d.day < 1) continue;
+    const parts = [];
+    for (const [key, label] of WARD_PARTS) {
+      const text = typeof d[key] === "string" ? d[key].trim() : "";
+      if (!text) continue;
+      const reason = why(text);
+      if (reason) hidden[reason]++;
+      parts.push({ key, label, text: reason ? "" : text, hidden: reason });
+    }
+    days.push({ day: d.day, parts });
+  }
+  days.sort((a, b) => a.day - b.day);
+  return { days, missing: Array.isArray(ward?.missing) ? ward.missing.filter(Number.isInteger) : [], hidden };
+}
+
+/** The doctor's own writing for the opened days, for the note (only what the doctor wrote: the AI's course is not in the note). */
+export function wardNoteLines(own, opened) {
+  const lines = [];
+  for (let n = 1; n <= (opened ?? 0); n++) {
+    const t = typeof own?.[n] === "string" ? own[n].trim() : "";
+    if (t) lines.push(`入院${n}日目: ${t}`);
+  }
+  return lines.length ? [WARD_HEADER, ...lines] : [];
+}
