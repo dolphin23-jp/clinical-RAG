@@ -46,7 +46,7 @@ export const HOW = ["問診", "診察", "測定", "救急隊の測定", "検査"
 /** Entities of questions the case may hold a value for. */
 export const FACT_ENTS = ["observation", "context", "condition"];
 /** Entities of questions that are the doctor's own reading or act: no value, ever. */
-export const READING_ENTS = ["assessment", "reason", "none", "action"];
+export const READING_ENTS = ["assessment", "reason", "none", "action", "decision"];
 
 const TOP_KEYS = ["v", "flow", "schema", "patient", "clock", "opening", "states", "orders", "moves", "assumed", "cont", "origin"];
 export const EVAL_RE = /適切|不適切|正解|誤り|間違い|べき|見逃し|遅れ|遅い|不十分|妥当|望ましい|良い対応|悪い対応/;

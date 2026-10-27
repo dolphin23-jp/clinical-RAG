@@ -145,7 +145,9 @@ test("A04: each answer goes to the field ROUTES gives its question's category; t
   assert.equal(field("background").blocks[1].text, "既往：高血圧");
   // all other fields are exactly as without the flow's answers, and what was typed in hpi / background comes first, unchanged
   const plain = A.assemble("A04", { kase: KASE });
-  for (const k of ["arrival", "exam", "assessment", "disposition"]) assert.deepEqual(field(k), plain.sections.find((s: any) => s.key === k), k);
+  for (const k of ["arrival", "exam", "assessment"]) assert.deepEqual(field(k), plain.sections.find((s: any) => s.key === k), k);
+  // the disposition is the doctor's decision (ent decision, cat disposition: clinical-modules 2026-10-26, D11 b): it goes to the disposition field
+  assert.deepEqual(field("disposition").blocks.map((b: any) => [b.source, b.text]), [["routed", "Disposition：帰宅"]]);
   for (const k of ["hpi", "background"]) assert.deepEqual(field(k).blocks[0], plain.sections.find((s: any) => s.key === k).blocks[0], k);
   assert.deepEqual(note.sections.map((s: any) => s.key), ["arrival", "hpi", "background", "initial", "exam", "assessment", "reassessment", "disposition"]);
   const text = A.toText(note);
@@ -166,19 +168,19 @@ test("A04: the answers no field took are kept, after the fields, in the order th
   assert.equal(note.extras[0].label, R.REST_LABEL);
   assert.match(
     A.toText(note),
-    /■欄に結びつかなかった場面・症候の入力\n（フローの質問への答えのうち、記載の欄に振り分けられなかったものです。ここにない項目は未確認で、陰性・正常を意味しません）\n【救急外来 × 失神】\n［受け入れ］\n受け入れ準備：モニター・12誘導ECG・除細動器\n病着：21:40\n［病歴・診察］\n家族歴：家族歴あり\n内服：降圧薬・利尿薬・血管拡張薬、飲酒\n［方針・記録］\nDisposition：帰宅$/,
+    /■欄に結びつかなかった場面・症候の入力\n（フローの質問への答えのうち、記載の欄に振り分けられなかったものです。ここにない項目は未確認で、陰性・正常を意味しません）\n【救急外来 × 失神】\n［受け入れ］\n受け入れ準備：モニター・12誘導ECG・除細動器\n病着：21:40\n［病歴・診察］\n家族歴：家族歴あり\n内服：降圧薬・利尿薬・血管拡張薬、飲酒$/,
   );
-  // pending (left unclassified with a reason): 2; not a chart item: 2 (the preparation and the disposition); a time no question declares: 1 (the arrival time)
-  assert.deepEqual(note.routing.reasons, { pending: 2, none: 2, aux: 1 });
+  // pending (left unclassified with a reason): 2; not a chart item: 1 (the preparation; the disposition goes to its field since 2026-10-26); a time no question declares: 1 (the arrival time)
+  assert.deepEqual(note.routing.reasons, { pending: 2, none: 1, aux: 1 });
   assert.equal(note.routing.answered, 17);
-  assert.equal(note.routing.placed, 12);
-  assert.equal(note.routing.rest.length, 5);
+  assert.equal(note.routing.placed, 13);
+  assert.equal(note.routing.rest.length, 4);
   const summary = R.routingSummary(note.routing);
-  assert.match(summary, /17 件のうち、12 件を ROUTES の欄に振り分けました。5 件は欄に結びつかず（.*カテゴリ未分類 2.*）、末尾のブロックに残しています。/);
-  assert.match(summary, /記載の項目にしない質問 2/);
+  assert.match(summary, /17 件のうち、13 件を ROUTES の欄に振り分けました。4 件は欄に結びつかず（.*カテゴリ未分類 2.*）、末尾のブロックに残しています。/);
+  assert.match(summary, /記載の項目にしない質問 1/);
   assert.match(summary, /どの質問にも付かない時刻・測定条件・理由 1/);
-  // without those two answers nothing is left over but the preparation, the disposition and the arrival time
-  assert.deepEqual(A.assemble("A04", { kase: withFlow(), flow: FLOW }).routing.reasons, { none: 2, aux: 1 });
+  // without those two answers nothing is left over but the preparation and the arrival time
+  assert.deepEqual(A.assemble("A04", { kase: withFlow(), flow: FLOW }).routing.reasons, { none: 1, aux: 1 });
 });
 
 test("A04: the medicines and the family history are patient background (context, 2026-10-25): they go to the background field, in the order the flow asked, and none is left over for the structure", () => {
@@ -189,9 +191,9 @@ test("A04: the medicines and the family history are patient background (context,
   const bg = note.sections.find((s: any) => s.key === "background");
   assert.deepEqual(bg.blocks.map((b: any) => b.source), ["history", "routed"]);
   assert.equal(bg.blocks[1].text, "家族歴：家族歴あり\n既往：高血圧\n内服：降圧薬・利尿薬・血管拡張薬、飲酒");
-  assert.deepEqual(note.routing.reasons, { none: 2, aux: 1 }); // the preparation, the disposition and the arrival time only: nothing is "pending"
-  assert.equal(note.routing.placed, 14);
-  assert.equal(note.routing.rest.length, 3);
+  assert.deepEqual(note.routing.reasons, { none: 1, aux: 1 }); // the preparation and the arrival time only: nothing is "pending"
+  assert.equal(note.routing.placed, 15);
+  assert.equal(note.routing.rest.length, 2);
 });
 
 test("A04: a time or measurement condition follows the question that declares it, to the same place (the SpO2 and 'on room air' stay together)", () => {
@@ -222,7 +224,7 @@ test("A04: a time or measurement condition follows the question that declares it
 });
 
 test("ROUTES decides: every question of every flow with categories lands where its category and the table say, recomputed here", () => {
-  const ENT: any = { observation: "observation", context: "patient_context", assessment: "assessment", action: "action" };
+  const ENT: any = { observation: "observation", context: "patient_context", assessment: "assessment", action: "action", decision: "decision" };
   const counts: Record<string, { placed: number; pending: number }> = {};
   for (const flow of Object.values<any>(S.FLOWS)) {
     if (!flow.cat) continue;
@@ -240,8 +242,8 @@ test("ROUTES decides: every question of every flow with categories lands where i
   }
   // the shipped declarations place most questions; what is left carries a reason in clinical-modules (docs/flow-cat-pending.md there)
   assert.deepEqual(Object.keys(counts).sort(), ["A01", "A04"]);
-  assert.equal(counts.A04.placed + counts.A04.pending, 708);
-  assert.equal(counts.A01.placed + counts.A01.pending, 61);
+  assert.equal(counts.A04.placed + counts.A04.pending, 732); // 708 + the disposition and its basis of the 12 flows (ent decision, 2026-10-26)
+  assert.equal(counts.A01.placed + counts.A01.pending, 63); // 61 + the disposition and its basis (ent decision, 2026-10-26)
   for (const n of Object.values(counts)) assert.ok(n.placed > 10 * n.pending, JSON.stringify(n));
 });
 
@@ -513,4 +515,51 @@ test("pins: the Worker has no endpoint for notes (the note is made in the browse
   // the note screen itself reaches no server
   const ui = readFileSync(web("note-ui.js"), "utf-8").replace(/\/\/[^\n]*/g, "");
   assert.doesNotMatch(ui, /\bfetch\(|\bapi\(|XMLHttpRequest|localStorage|sessionStorage/);
+});
+
+// ---------------------------------------------------------------------------------- the S/O/A/P view (the doctor's decision D11 b, 2026-10-26)
+test("the S/O/A/P view: the same lines, grouped S / O / A / P by the chart skill; only the encounter notes have it", () => {
+  const note = A.assemble("A04", { kase: withFlow(), flow: FLOW, items: [item("problems", "#1 試験の問題"), item("plan", "試験の計画")] });
+  const plain = A.toText(note);
+  const soap = A.toText(note, { soap: true });
+  const heads = [...soap.matchAll(/^(S|O|A|A\/P|P)\)/gm)].map((m) => m[1]);
+  assert.deepEqual(heads, ["S", "O", "A", "P"]);
+  // every line of the field view is in the S/O/A/P view, and the S/O/A/P view adds only the part headings
+  const lines = (t: string) => t.split("\n").filter((l) => l.trim());
+  const extra = lines(soap).filter((l) => !lines(plain).includes(l));
+  assert.ok(extra.every((l) => /^(S|O|A|A\/P|P)\)|^その他$/.test(l)), JSON.stringify(extra));
+  assert.equal(lines(soap).length, lines(plain).length + heads.length);
+  // the fields keep their own order inside a part
+  const order = [...soap.matchAll(/^■(.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(order.slice(0, 3), ["来院情報", "現病歴", "患者背景"]);
+  assert.ok(order.indexOf("重症度・第一仮説・鑑別") < order.indexOf("帰宅・入院・転院と根拠"));
+  // a summary, a consult and a handover have no S/O/A/P view: the option leaves them as they are
+  for (const t of ["A08", "B02", "B06"]) {
+    assert.equal(A.hasSoapView(t), false, t);
+    const n = A.assemble(t, { kase: KASE });
+    assert.equal(A.toText(n, { soap: true }), A.toText(n));
+  }
+  for (const t of ["A04", "A01", "A05", "A06", "A02"]) assert.ok(A.hasSoapView(t), t);
+  // every field of the mapped types has a part (nothing falls to "その他")
+  for (const [t, map] of Object.entries(A.SOAP_MAP) as [string, any][]) assert.deepEqual(T.NOTE_TYPES[t].sections.map((s: any) => s.key).filter((k: string) => !map[k]), [], t);
+});
+
+test("the S/O/A/P view splits the plan's answers into Dx / Tx / Ex by their question's category; an uncategorised line is not guessed", () => {
+  const SCHEMA_FLOWS: any = S.FLOWS;
+  const flow = SCHEMA_FLOWS["emergency-department.shock"];
+  const answers = { tests: ["vbg", "labs"], fluid: "given", t_fluid: "02:30", consult: ["icu"] };
+  const kase = { ...KASE, structured: I.renderStructured(flow, answers, KASE), intake: { flow: flow.id, answers } };
+  const note = A.assemble("A04", { kase, flow });
+  const mgmt = note.sections.find((s: any) => s.key === "management");
+  const routed = mgmt.blocks.find((b: any) => b.source === "routed");
+  assert.equal(routed.lines.length, routed.cats.length);
+  const soap = A.toText(note, { soap: true });
+  const part = soap.slice(soap.indexOf("■治療・処置・コンサルト"));
+  const dx = part.indexOf("Dx（診断・確認）:");
+  const tx = part.indexOf("Tx（治療・処置・依頼）:");
+  assert.ok(dx >= 0 && tx > dx, part.slice(0, 300));
+  assert.ok(part.slice(dx, tx).includes("オーダーした検査"), "an order of tests is Dx");
+  assert.ok(part.slice(tx).includes("細胞外液"), "a treatment is Tx");
+  // the field view is unchanged: one block of lines, no Dx/Tx/Ex headings
+  assert.ok(!A.toText(note).includes("Dx（診断・確認）:"));
 });

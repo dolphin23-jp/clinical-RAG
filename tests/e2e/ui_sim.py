@@ -317,6 +317,11 @@ with sync_playwright() as pw:
     n2 = note_text()
     check("〔AI草案〕" in n2 and "#1 試験の問題" in n2 and "Tx: 試験の処置" in n2, "the ticked A and P go in the note with the AI mark")
     check("血液ガスの再検" not in n2, "an item not ticked stays out")
+    open_sec("#sim .sim-sec:has(#sim-note)")
+    page.check("#sim-note-soap")
+    n3 = note_text()
+    check(n3.startswith(HEADER) and "S)（" in n3 and "P)（" in n3 and "〔AI草案〕" in n3, "the simulation's note can be shown S/O/A/P, with the header and the adopted items")
+    page.uncheck("#sim-note-soap")
     # a failure: the time does not pass until the doctor tries again or goes on without the AI
     page.route("**/api/sim", lambda route: route.fulfill(status=502, content_type="application/json", body=json.dumps({"error": "試験の失敗です", "code": "upstream"})))
     clock0 = dlg.locator(".sim-clock").inner_text()

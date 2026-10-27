@@ -378,7 +378,7 @@ test("the simulation's screen modules send nothing, keep nothing in the browser 
   assert.deepEqual([...readFileSync(web("sim-ui.js"), "utf-8").matchAll(/import\("(.+?)"\)/g)].map((m) => m[1]), ["./flow-schema.js"]);
   // the copy of the note carries the fictional header, and the screen never calls the assumption "the answer"
   const ui = readFileSync(web("sim-ui.js"), "utf-8");
-  assert.ok(ui.includes("`${SIM_HEADER}\\n${toText(note)}`"));
+  assert.ok(ui.includes("`${SIM_HEADER}\\n${toText(note, { soap: !!S.noteSoap })}`"));
   assert.ok(!/正解/.test(ui + readFileSync(web("sim-model.js"), "utf-8")));
 });
 

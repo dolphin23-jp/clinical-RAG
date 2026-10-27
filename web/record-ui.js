@@ -49,7 +49,7 @@ export function initRecords(ctx) {
   let FLOWS = null;
   // gen: which opened record this is (a response for an earlier one is ignored); pending: the save in flight; unconfirmed: what was sent
   // since the last answer we read (a write whose answer was lost may have landed); unlinking: the pinned case was cleared and the record is being let go
-  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true }, noteDay: null, sumDay: null, open: {}, refSearch: {} };
+  const S = { list: null, retention: null, id: null, rev: 0, rec: null, save: "saved", version: 0, timer: null, gen: 0, pending: null, unconfirmed: [], unlinking: false, creating: false, msg: "", msgKind: "", opts: { ai: true, src: true, soap: false }, noteDay: null, sumDay: null, open: {}, refSearch: {} };
   const casebook = initCasebook({ el, copyText }); // the "Casebook へ送る" part: ticks, the packet and what was typed live in its own memory
   let derived = null; // { checks, preview, progress, interim, discharge } nodes that change while typing
   let dateNote = null;
@@ -668,7 +668,7 @@ export function initRecords(ctx) {
     d.append(el("h4", "rec-sub", "入院時の記載の下書き（病棟入院時 A05）"));
     d.append(el("p", "help", "固定中の症例と、この板と、先生の入力だけから組み立てます（AI は使いません）。持ってきていない採用項目は入りません。未入力の必須欄は「（未入力）」、日付・患者ID・氏名は空欄です。実際のカルテに貼る前に、先生が確認・修正してください。"));
     const opts = el("div", "note-opts");
-    for (const [key, text] of [["ai", `${AI_MARK}の印を残す`], ["src", "出どころの印（［推論］・書籍の頁・救急から）を残す"]]) {
+    for (const [key, text] of [["ai", `${AI_MARK}の印を残す`], ["src", "出どころの印（［推論］・書籍の頁・救急から）を残す"], ["soap", "S/O/A/P で表示する（入院時・経過・外来の記載。中身は同じで、並べ方だけを変えます）"]]) {
       const label = el("label", "check");
       const box = el("input");
       box.type = "checkbox";
@@ -1260,10 +1260,10 @@ export function initRecords(ctx) {
       derived.checks.append(box);
     }
     if (derived.preview) {
-      derived.preview.pre.textContent = toText(admissionNote(S.rec), { aiMark: S.opts.ai, sourceMarks: S.opts.src });
+      derived.preview.pre.textContent = toText(admissionNote(S.rec), { aiMark: S.opts.ai, sourceMarks: S.opts.src, soap: S.opts.soap });
       derived.preview.copy.textContent = "コピー";
     }
-    const marks = { aiMark: S.opts.ai, sourceMarks: S.opts.src };
+    const marks = { aiMark: S.opts.ai, sourceMarks: S.opts.src, soap: S.opts.soap }; // the summaries (A07, A08) have no S/O/A/P view: toText leaves them as they are
     if (derived.progress) {
       derived.progress.pre.textContent = toText(progressNote(S.rec, pickedDay("noteDay")), marks);
       derived.progress.copy.textContent = "コピー";

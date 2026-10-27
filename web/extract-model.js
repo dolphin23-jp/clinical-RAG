@@ -26,6 +26,9 @@ export const EXTRACT_ENTITIES = new Set(["context", "observation", "time", "acti
 export const JUDGMENT_IDS = new Set([
   "first", "ems_state", "re_change", "re_exam", "circ", "ems_glu", "fluid_resp", "analg_eff", "real_syncope", "hidden", "walk_spo2", "hi", "skew",
   "orth", "plr", "benzo", "second_tx", "bc", "epley_res", "antipyretic_tx", "trop2",
+  // the time the doctor decided where the patient goes: part of the decision (clinical-modules declares it as the decision's `at` since 2026-10-26),
+  // and a recorded time makes the decision "decided" there; a memo's time is not proposed for it
+  "t_dispo",
 ]);
 /** A question or an option that says in its own words that it is the doctor's judgment. */
 const JUDGMENT_WORDS = /判断|医師の/;

@@ -43,7 +43,7 @@ QUESTION_KEYS = ("id", "slot", "label", "type", "unit", "core", "required", "exc
 BRIDGE_SCALARS = ("ent", "cat", "at", "cond", "of", "phase", "status")
 # the values the bridge's scalars may take (what the Modules flows use today); anything else is refused, so prose cannot come across
 BRIDGE_ENUMS = {
-    "ent": {"observation", "context", "assessment", "action", "time", "condition", "reason", "none"},
+    "ent": {"observation", "context", "assessment", "action", "decision", "time", "condition", "reason", "none"},
     "status": {"performed", "planned"},
     "phase": {"trigger", "initial", "reassessment"},
 }
