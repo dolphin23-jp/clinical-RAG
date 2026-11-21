@@ -47,6 +47,21 @@ export interface AppDeps {
   access?: AccessVerifier;
   /** set when the Access settings are half there: every /api/ request is then refused (500) instead of running without the second lock */
   accessProblem?: string;
+  /**
+   * A second key that opens POST /api/search and nothing else (2026-11-21 の医師の決定。clinical-carte が書籍を参照元にするため).
+   * Unset or shorter than SEARCH_TOKEN_MIN = that key opens nothing. The app token still opens /api/search as before.
+   */
+  searchToken?: string;
+}
+
+/** The search-only key must be at least this long, or it opens nothing (a short value is a mistake, not a key). */
+export const SEARCH_TOKEN_MIN = 32;
+
+/** True only for POST /api/search carrying the search-only key (and only when that key is set and long enough). */
+function searchKeyOpens(req: Request, path: string, searchToken: string | undefined): boolean {
+  if (path !== "/api/search" || req.method !== "POST") return false;
+  if (!searchToken || searchToken.trim().length < SEARCH_TOKEN_MIN) return false;
+  return authorized(req, searchToken.trim());
 }
 
 /** Called by clinical-modules through a service binding, which carries no Access token (docs/enhancement-plan.md T1-2): the app token is its only lock. */
@@ -131,7 +146,7 @@ export async function handle(req: Request, deps: AppDeps): Promise<Response> {
   if (path === "/api/health") return json({ ok: true });
   if (!deps.appToken || deps.appToken.length < 16) return json({ error: "server misconfigured: APP_TOKEN must be set (>= 16 chars)" }, 500);
   if (deps.accessProblem) return json({ error: deps.accessProblem }, 500);
-  if (!authorized(req, deps.appToken)) return json({ error: "unauthorized" }, 401);
+  if (!searchKeyOpens(req, path, deps.searchToken) && !authorized(req, deps.appToken)) return json({ error: "unauthorized" }, 401);
   if (deps.access && !ACCESS_EXEMPT.has(path)) {
     const why = await deps.access.check(req);
     if (why) return json({ error: "unauthorized", code: "access", reason: why }, 401);

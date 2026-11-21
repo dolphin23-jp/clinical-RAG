@@ -192,3 +192,47 @@ test("the Access check keeps nothing and says nothing: no storage, no logging, n
   const src = readFileSync(new URL("../src/access.ts", import.meta.url), "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
   assert.doesNotMatch(src, /console\.|\.prepare\(|INSERT|UPDATE|localStorage|caches\.|KVNamespace|\.put\(/);
 });
+
+// ---------------------------------------------------------------- the search-only key (clinical-carte。2026-11-21 の医師の決定)
+const SEARCH_KEY = "carte-search-key-0123456789abcdef0123456789";
+const withKey = (key: string, init: RequestInit = {}): RequestInit => ({ ...init, headers: { authorization: `Bearer ${key}`, ...(init.headers as Record<string, string> | undefined) } });
+const searchBody = { method: "POST", body: JSON.stringify({ queries: ["ゼルニア値"] }) };
+
+test("API: the search-only key opens POST /api/search and nothing else; the app token still opens everything as before", async () => {
+  const ok = await handle(new Request("http://x/api/search", withKey(SEARCH_KEY, searchBody)), app({ searchToken: SEARCH_KEY }));
+  assert.equal(ok.status, 200);
+  assert.ok(Array.isArray(((await ok.json()) as any).results));
+  // every other path (reads, writes, the model) refuses it
+  for (const [path, method] of [["/api/books", "GET"], ["/api/ask", "POST"], ["/api/extract", "POST"], ["/api/sim", "POST"], ["/api/records", "GET"], ["/api/records", "POST"], ["/api/conversations", "GET"], ["/api/conversations", "POST"], ["/api/eval/questions", "GET"], ["/api/numeric/sample", "GET"], ["/api/search", "GET"]] as const) {
+    const init: RequestInit = method === "POST" ? { method, body: "{}" } : { method };
+    const r = await handle(new Request(`http://x${path}`, withKey(SEARCH_KEY, init)), app({ searchToken: SEARCH_KEY }));
+    assert.equal(r.status, 401, `${method} ${path}`);
+  }
+  // the app token is unchanged by the second key
+  assert.equal((await handle(new Request("http://x/api/search", authed(searchBody)), app({ searchToken: SEARCH_KEY }))).status, 200);
+  assert.equal((await handle(new Request("http://x/api/books", authed()), app({ searchToken: SEARCH_KEY }))).status, 200);
+});
+
+test("API: an unset, blank or short search-only key opens nothing (a wrong guess at it never works either)", async () => {
+  for (const searchToken of [undefined, "", "   ", "short-key-0123456789"]) {
+    const r = await handle(new Request("http://x/api/search", withKey(searchToken?.trim() || "x", searchBody)), app(searchToken === undefined ? {} : { searchToken }));
+    assert.equal(r.status, 401, String(searchToken));
+  }
+  const wrong = await handle(new Request("http://x/api/search", withKey(`${SEARCH_KEY}x`, searchBody)), app({ searchToken: SEARCH_KEY }));
+  assert.equal(wrong.status, 401);
+  const none = await handle(new Request("http://x/api/search", searchBody), app({ searchToken: SEARCH_KEY }));
+  assert.equal(none.status, 401);
+});
+
+test("API: with Access configured, the search-only key still opens /api/search (no Access token: a service binding) and still nothing else", async () => {
+  const k = await keyPair("k1");
+  const access = createAccessVerifier({ teamDomain: TEAM, aud: AUD, fetchImpl: certs(() => [k.jwk]).fetchImpl, now: () => NOW });
+  const good = await sign(k.priv, "k1", goodClaims());
+  assert.equal((await handle(new Request("http://x/api/search", withKey(SEARCH_KEY, searchBody)), app({ access, searchToken: SEARCH_KEY }))).status, 200);
+  // even with a valid Access token, the search-only key does not open other paths
+  const books = await handle(new Request("http://x/api/books", { headers: { authorization: `Bearer ${SEARCH_KEY}`, [ACCESS_HEADER]: good } }), app({ access, searchToken: SEARCH_KEY }));
+  assert.equal(books.status, 401);
+  // half-set Access settings still refuse everything, the search-only key included
+  const half = await handle(new Request("http://x/api/search", withKey(SEARCH_KEY, searchBody)), app({ accessProblem: "x", searchToken: SEARCH_KEY }));
+  assert.equal(half.status, 500);
+});

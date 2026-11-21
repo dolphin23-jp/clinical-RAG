@@ -125,6 +125,8 @@ npx wrangler secret put APP_TOKEN          # 16文字以上の長いランダム
 npx wrangler deploy
 ```
 
+**clinical-carte の書籍の参照（任意）**: Worker の Secret `CARTE_SEARCH_TOKEN`（32字以上。carte の画面で作る）を置くと、その鍵で `POST /api/search` **だけ**を呼べます（ほかの `/api/` は断ります。`docs/clinical-use.md` の 1i）。carte の Secret `RAG_TOKEN` に同じ値を置きます。置かなければ何も変わりません。
+
 `/api/ask` の1日の上限は `wrangler.jsonc` の `DAILY_ASK_LIMIT`（日本時間で数える。仮の値 100、`"0"` で上限なし）。回数は D1 の `usage_daily`（日付と整数だけ）に Worker が自分で作って数えます。同じ表に、回答の様子を日ごとに数える4つの整数（書籍を検索せずに回答／検索して1節も見つからない／書籍の引用がない／書籍に見つからない数値がある）も入ります（質問・回答の文字は入れません）。
 
 **Cloudflare Access の JWT の検証（任意）**: Access で守るなら、`ACCESS_TEAM_DOMAIN`（`<チーム名>.cloudflareaccess.com`）と `ACCESS_AUD`（アプリの Audience tag）を**両方**設定します（`wrangler secret put` か `vars`。値は Cloudflare の画面にあります）。設定すると、`/api/health` と `/api/search` 以外の `/api/` が、アプリのトークンに加えて Access の JWT を要求します（`/api/search` は、サービスバインディングで呼ぶ clinical-modules のため、アプリのトークンだけです）。片方だけの設定は、全部 500 で断ります。評価の道具（`eval/`）を Access の背後の Worker に向けるときは、Access のサービストークンを `CF_ACCESS_CLIENT_ID`・`CF_ACCESS_CLIENT_SECRET` の環境変数で渡します。設定しなければ、今までどおりアプリのトークンだけです。`/api/extract`（文章からの取り込み）も、同じ数に数えます。取り込みだけ別のモデルにしたいときは、`wrangler.jsonc` に `EXTRACT_MODEL` を足します（未設定なら `MODEL`）。

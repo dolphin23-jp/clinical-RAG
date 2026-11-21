@@ -23,6 +23,8 @@ export interface Env {
   /** Cloudflare Access: "<team>.cloudflareaccess.com" and the application's Audience tag.  Both set = every /api/ call (except /api/health and /api/search) must carry a valid Access token */
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  /** a second key that opens POST /api/search only (clinical-carte's book references). Unset or < 32 chars = opens nothing */
+  CARTE_SEARCH_TOKEN?: string;
 }
 
 let accessCache: { key: string; verifier: AccessVerifier } | null = null;
@@ -53,6 +55,7 @@ export default {
       dailyAskLimit: Math.max(0, Math.floor(Number(env.DAILY_ASK_LIMIT ?? 0))) || 0,
       counter: d1Counter(env.DB),
       ...accessFor(env),
+      searchToken: env.CARTE_SEARCH_TOKEN,
       rw: env.DB,
       conversationRetentionDays: Number.isFinite(Number(env.CONVERSATION_RETENTION_DAYS ?? 30)) ? Number(env.CONVERSATION_RETENTION_DAYS ?? 30) : 30,
       caseRecordRetentionDays: Number.isFinite(Number(env.CASE_RECORD_RETENTION_DAYS ?? 60)) ? Number(env.CASE_RECORD_RETENTION_DAYS ?? 60) : 60,
